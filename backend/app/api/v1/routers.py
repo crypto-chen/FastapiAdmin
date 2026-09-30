@@ -4,11 +4,26 @@ from fastapi import APIRouter
 
 from app.modules.ai.chat.controller import ChatRouter
 from app.modules.common.file.controller import FileRouter
+from app.modules.erp.jushuitan.controller import JushuitanRouter
+from app.modules.erp.kingdee.controller import KingdeeRouter
 from app.modules.generator.gencode.controller import GenRouter
+from app.modules.mapping.controller import SystemMappingRouter
+from app.modules.masterdata.controller import MasterMappingRouter, MasterOrgRouter, MasterPersonRouter, MasterSourceRouter
+from app.modules.metadata.controller import (
+    FieldMappingRouter,
+    SourceFieldRouter,
+    SourceObjectRouter,
+    SourceSystemRouter,
+    StandardEntityRouter,
+    StandardFieldRouter,
+    SyncJobRouter,
+)
+from app.modules.metric.controller import MetricRouter, MetricValueRouter
 from app.modules.monitor.cache.controller import CacheRouter
 from app.modules.monitor.health.controller import HealthRouter
 from app.modules.monitor.online.controller import OnlineRouter
 from app.modules.monitor.server.controller import ServerRouter
+from app.modules.openapi.controller import OpenApiLogRouter, OpenClientRouter
 from app.modules.system.auth.controller import AuthRouter
 from app.modules.system.dept.controller import DeptRouter
 from app.modules.system.dict.controller import DictRouter
@@ -60,6 +75,25 @@ DOMAIN_CONTROLLERS: dict[str, list[APIRouter]] = {
     ],
     "/ai": [ChatRouter],
     "/generator": [GenRouter],
+    "/erp": [KingdeeRouter, JushuitanRouter],
+    "/masterdata": [
+        MasterOrgRouter,
+        MasterPersonRouter,
+        MasterSourceRouter,
+        MasterMappingRouter,
+    ],
+    "/metadata": [
+        SourceSystemRouter,
+        SourceObjectRouter,
+        SourceFieldRouter,
+        FieldMappingRouter,
+        StandardEntityRouter,
+        StandardFieldRouter,
+        SyncJobRouter,
+    ],
+    "/metric": [MetricRouter, MetricValueRouter],
+    "/openapi": [OpenClientRouter, OpenApiLogRouter],
+    "/system-mapping": [SystemMappingRouter],
     "/common": [FileRouter],
 }
 

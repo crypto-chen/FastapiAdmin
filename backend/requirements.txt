@@ -26,6 +26,8 @@ pyjwt==2.13.0                          # OAuth2
 pymysql==1.2.0                         # MySQL 异步操作数据库
 python-multipart==0.0.32               # request.form() 对表单进行「解析」时安装
 redis==7.1.0                           # Redis 异步操作数据库
+requests==2.34.2                       # 金蝶官方 SDK 依赖
+./vendor/kingdee.cdp.webapi.sdk-8.2.0-py3-none-any.whl  # 金蝶云星空 WebAPI SDK（本地 wheel）
 rich==15.0.0                           # 终端打印美化
 sqlalchemy==2.0.51                     # 数据库ORM
 sqlglot[rs]==27.8.0                    # sql 解析

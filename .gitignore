@@ -51,6 +51,12 @@ backend/env/.env.dev
 backend/env/.env.prod
 backend/env/.env.test
 
+# 金蝶连接配置含真实账号/密钥，禁止入库（模板见 kindee_conf.example.ini）
+backend/env/kindee_conf.ini
+
+# 核算指标导出产物，属于业务数据，不入库
+exports/
+
 docker/.env
 docker/nginx/app/dist
 docker/nginx/docs/dist

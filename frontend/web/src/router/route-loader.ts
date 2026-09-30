@@ -11,6 +11,12 @@
 import type { Router } from "vue-router";
 import type { AppRouteRecord } from "@/types/router";
 import { h } from "vue";
+import ModuleMetadata from "@views/module_metadata/index.vue";
+import ModuleMetadataView from "@views/module_metadata_view/index.vue";
+import ModuleSystemMapping from "@views/module_system_mapping/index.vue";
+import ModuleManualBinding from "@views/module_manual_binding/index.vue";
+import ModuleSysDeptBinding from "@views/module_sys_dept_binding/index.vue";
+import ModuleMetricValue from "@views/module_metric/value/index.vue";
 import {
   IframeRouteManager,
   IframeView,
@@ -22,6 +28,16 @@ import {
 
 /** 页面组件映射表（eager 加载：src/views 及 layouts 下所有 .vue 文件） */
 const pageComponents = import.meta.glob("/src/{views,layouts}/**/*.vue", { eager: true });
+
+/** 新增页面静态兜底：避免 Vite 运行中新增文件未被 import.meta.glob 收录。 */
+const staticPageComponents: Record<string, unknown> = {
+  "module_metadata/index": ModuleMetadata,
+  "module_metadata_view/index": ModuleMetadataView,
+  "module_system_mapping/index": ModuleSystemMapping,
+  "module_manual_binding/index": ModuleManualBinding,
+  "module_sys_dept_binding/index": ModuleSysDeptBinding,
+  "module_metric/value/index": ModuleMetricValue,
+};
 
 /**
  * 组件加载器
@@ -37,6 +53,10 @@ export class ComponentLoader {
 
     // 标准化路径：移除开头的 /
     const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
+
+    if (staticPageComponents[normalizedPath]) {
+      return staticPageComponents[normalizedPath];
+    }
 
     const lookupPaths = [`/src/views/${normalizedPath}`, `/src/views/${normalizedPath}.vue`];
     for (const p of lookupPaths) {

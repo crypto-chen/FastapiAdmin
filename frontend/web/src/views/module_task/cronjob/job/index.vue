@@ -1,4 +1,4 @@
-<!-- 调度任务：主区调度器状态 + 任务卡片列表（getSchedulerJobs 全量、前端筛选）；抽屉内执行日志表用 useTable 分页 -->
+<!-- 调度任务：主区调度器状态 + 任务列表表格（getSchedulerJobs 全量、前端筛选）；抽屉内执行日志表用 useTable 分页 -->
 <template>
   <div class="fa-full-height job-page flex flex-col min-h-0">
     <FaSearchBar
@@ -130,130 +130,87 @@
         </template>
       </FaTableHeader>
 
-      <!-- 卡片骨架：初始加载时显示 -->
-      <ElSkeleton v-if="jobLoading && (!jobList || jobList.length === 0)" animated class="mt-3">
-        <template #template>
-          <div class="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
-            <div v-for="i in 12" :key="i" class="h-50">
-              <ElSkeletonItem
-                variant="rect"
-                style="width: 100%; height: 100%; border-radius: var(--custom-radius)"
-              />
+      <ElTable
+        v-loading="jobLoading"
+        :data="jobList"
+        border
+        stripe
+        class="mt-3 job-table"
+        max-height="calc(100vh - 300px)"
+      >
+        <ElTableColumn prop="name" label="任务名称" min-width="220" show-overflow-tooltip />
+        <ElTableColumn label="触发器" width="130">
+          <template #default="{ row }">
+            <span class="inline-flex items-center gap-1">
+              <FaSvgIcon :icon="getTriggerIcon(row.trigger)" />
+              {{ formatTrigger(row.trigger) }}
+            </span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn prop="next_run_time" label="下次执行" width="190" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.next_run_time || "暂无" }}</template>
+        </ElTableColumn>
+        <ElTableColumn label="状态" width="100">
+          <template #default="{ row }">
+            <ElTag :type="getJobStatusType(row.status)" size="small" effect="dark">
+              {{ getJobStatusLabel(row.status) }}
+            </ElTag>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="操作" width="320" fixed="right">
+          <template #default="{ row }">
+            <div class="inline-flex flex-wrap items-center justify-end gap-1">
+              <ElButton
+                v-hasPerm="['module_task:cronjob:job:task']"
+                :type="row.status === 1 ? 'primary' : 'warning'"
+                size="small"
+                plain
+                :icon="row.status === 1 ? VideoPlay : VideoPause"
+                :disabled="row.status !== 1 && row.status !== 0"
+                @click="row.status === 1 ? handleResumeJob(row.id) : handlePauseJob(row.id)"
+              >
+                {{ row.status === 1 ? "恢复" : "暂停" }}
+              </ElButton>
+              <ElButton
+                v-hasPerm="['module_task:cronjob:job:task']"
+                type="success"
+                size="small"
+                plain
+                :icon="CaretRight"
+                :disabled="row.status === 2 || row.status === 3"
+                @click="handleRunJobNow(row.id)"
+              >
+                调试
+              </ElButton>
+              <ElButton
+                v-hasPerm="['module_task:cronjob:job:task']"
+                type="primary"
+                size="small"
+                plain
+                :icon="Edit"
+                :disabled="row.status === 3"
+                @click="handleOpenModifyDialog(row)"
+              >
+                编辑
+              </ElButton>
+              <ElButton
+                v-hasPerm="['module_task:cronjob:job:task']"
+                type="danger"
+                size="small"
+                plain
+                :icon="Close"
+                :disabled="row.status === 3"
+                @click="handleRemoveJob(row.id, row.name)"
+              >
+                移除
+              </ElButton>
             </div>
-          </div>
+          </template>
+        </ElTableColumn>
+        <template #empty>
+          <ElEmpty :image-size="80" description="暂无数据" />
         </template>
-      </ElSkeleton>
-
-      <ElScrollbar v-else class="job-cards-container mt-3 min-h-0 flex-1">
-        <ElEmpty
-          v-if="!jobLoading && (!jobList || jobList.length === 0)"
-          :image-size="80"
-          description="暂无数据"
-        />
-        <ElRow v-else :gutter="16">
-          <ElCol
-            v-for="job in jobList"
-            :key="job.id"
-            :xs="24"
-            :sm="12"
-            :md="6"
-            :lg="4"
-            class="mb-4"
-          >
-            <ElCard
-              shadow="hover"
-              :class="`fa-card job-card job-card--${getJobStatusClass(job.status)}`"
-            >
-              <template #header>
-                <div class="job-card-title">
-                  <span
-                    class="job-card-dot"
-                    :class="`job-card-dot--${getJobStatusClass(job.status)}`"
-                  />
-                  <ElTooltip :content="job.name" placement="top">
-                    <span class="job-card-name">{{ job.name }}</span>
-                  </ElTooltip>
-                  <ElTag :type="getJobStatusType(job.status)" size="small" effect="dark">
-                    {{ getJobStatusLabel(job.status) }}
-                  </ElTag>
-                </div>
-              </template>
-
-              <div class="job-card-body cursor-pointer" @click="handleOpenExecutionLogDrawer(job)">
-                <div class="job-card-body-row">
-                  <FaSvgIcon :icon="getTriggerIcon(job.trigger)" class="job-card-meta-icon" />
-                  <span class="job-card-meta-text">{{ formatTrigger(job.trigger) }}</span>
-                </div>
-                <div class="job-card-body-row">
-                  <FaSvgIcon icon="ri:time-line" class="job-card-meta-icon" />
-                  <span class="job-card-meta-text">{{ job.next_run_time || "暂无" }}</span>
-                </div>
-              </div>
-
-              <template #footer>
-                <ElRow :gutter="8">
-                  <ElCol :span="6">
-                    <ElButton
-                      v-hasPerm="['module_task:cronjob:job:task']"
-                      :type="job.status === 1 ? 'primary' : 'warning'"
-                      size="small"
-                      plain
-                      class="w-full"
-                      :icon="job.status === 1 ? VideoPlay : VideoPause"
-                      :disabled="job.status !== 1 && job.status !== 0"
-                      @click="job.status === 1 ? handleResumeJob(job.id) : handlePauseJob(job.id)"
-                    >
-                      {{ job.status === 1 ? "恢复" : "暂停" }}
-                    </ElButton>
-                  </ElCol>
-                  <ElCol :span="6">
-                    <ElButton
-                      v-hasPerm="['module_task:cronjob:job:task']"
-                      type="success"
-                      size="small"
-                      plain
-                      class="w-full"
-                      :icon="CaretRight"
-                      :disabled="job.status === 2 || job.status === 3"
-                      @click="handleRunJobNow(job.id)"
-                    >
-                      调试
-                    </ElButton>
-                  </ElCol>
-                  <ElCol :span="6">
-                    <ElButton
-                      v-hasPerm="['module_task:cronjob:job:task']"
-                      type="primary"
-                      size="small"
-                      plain
-                      class="w-full"
-                      :icon="Edit"
-                      :disabled="job.status === 3"
-                      @click="handleOpenModifyDialog(job)"
-                    >
-                      编辑
-                    </ElButton>
-                  </ElCol>
-                  <ElCol :span="6">
-                    <ElButton
-                      v-hasPerm="['module_task:cronjob:job:task']"
-                      type="danger"
-                      size="small"
-                      plain
-                      class="w-full"
-                      :icon="Close"
-                      :disabled="job.status === 3"
-                      @click="handleRemoveJob(job.id, job.name)"
-                    >
-                      移除
-                    </ElButton>
-                  </ElCol>
-                </ElRow>
-              </template>
-            </ElCard>
-          </ElCol>
-        </ElRow>
-      </ElScrollbar>
+      </ElTable>
     </ElCard>
 
     <FaDialog v-model="consoleVisible" title="调度器控制台" width="900px">

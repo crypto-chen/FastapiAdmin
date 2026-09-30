@@ -201,6 +201,7 @@ dependencies = [
     { name = "greenlet" },
     { name = "httpx" },
     { name = "jinja2" },
+    { name = "kingdee-cdp-webapi-sdk" },
     { name = "loguru" },
     { name = "openai" },
     { name = "openpyxl" },
@@ -214,6 +215,7 @@ dependencies = [
     { name = "pymysql" },
     { name = "python-multipart" },
     { name = "redis" },
+    { name = "requests" },
     { name = "rich" },
     { name = "sqlalchemy" },
     { name = "sqlglot", extra = ["rs"] },
@@ -267,6 +269,7 @@ requires-dist = [
     { name = "greenlet", specifier = "==3.5.2" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "jinja2", specifier = "==3.1.6" },
+    { name = "kingdee-cdp-webapi-sdk", path = "vendor/kingdee.cdp.webapi.sdk-8.2.0-py3-none-any.whl" },
     { name = "loguru", specifier = "==0.7.3" },
     { name = "openai", specifier = "==2.46.0" },
     { name = "openpyxl", specifier = "==3.1.5" },
@@ -280,6 +283,7 @@ requires-dist = [
     { name = "pymysql", specifier = "==1.2.0" },
     { name = "python-multipart", specifier = "==0.0.32" },
     { name = "redis", specifier = "==7.1.0" },
+    { name = "requests", specifier = "==2.34.2" },
     { name = "rich", specifier = "==15.0.0" },
     { name = "sqlalchemy", specifier = "==2.0.51" },
     { name = "sqlglot", extras = ["rs"], specifier = "==27.8.0" },
@@ -1134,6 +1138,24 @@ source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
 sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/3c/56/3f325b1eef9791759784aa5046a8f6a1aff8f7c898a2e34506771d3b99d8/jmespath-0.10.0.tar.gz", hash = "sha256:b85d0567b8666149a93172712e68920734333c0ce7e89b78b3e987f71e5ed4f9", size = 21607, upload-time = "2020-05-12T22:03:47.267Z" }
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/07/cb/5f001272b6faeb23c1c9e0acc04d48eaaf5c862c17709d20e3469c6e0139/jmespath-0.10.0-py2.py3-none-any.whl", hash = "sha256:cdf6525904cc597730141d61b36f2e4b8ecc257c420fa2f4549bac2c2d0cb72f", size = 24489, upload-time = "2020-05-12T22:03:45.643Z" },
+]
+
+[[package]]
+name = "kingdee-cdp-webapi-sdk"
+version = "8.2.0"
+source = { path = "vendor/kingdee.cdp.webapi.sdk-8.2.0-py3-none-any.whl" }
+dependencies = [
+    { name = "requests" },
+    { name = "urllib3" },
+]
+wheels = [
+    { filename = "kingdee_cdp_webapi_sdk-8.2.0-py3-none-any.whl", hash = "sha256:15c6c13e097425e0fdff1de425a986ff6ae1d4e418a98ce720a61fe7bd54f8f2" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "requests" },
+    { name = "urllib3" },
 ]
 
 [[package]]

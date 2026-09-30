@@ -39,6 +39,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[Any, Any]:
     logger.info("✅ Redis数据字典 初始化完成")
     await SchedulerUtil.init_scheduler(redis=app.state.redis)
     logger.info("✅ 定时任务调度器 初始化完成")
+    from app.modules.metadata.sync import reconcile_meta_sync_jobs
+
+    await reconcile_meta_sync_jobs()
+    logger.info("✅ 元数据同步任务 初始化完成")
+    from app.modules.metric.schedule import reconcile_metric_calc_jobs
+
+    await reconcile_metric_calc_jobs()
+    logger.info("✅ 指标计算任务 初始化完成")
 
     console_start(
         host=settings.SERVER_HOST,
@@ -81,6 +89,10 @@ def register_exceptions(app: FastAPI) -> None:
 def register_routers(app: FastAPI) -> None:
     from app.api.v1.routers import api_v1
     app.include_router(api_v1)
+
+    # 对外开放接口：独立前缀 /open/v1，与管理端路由隔离
+    from app.api.open.v1.routers import open_v1
+    app.include_router(open_v1)
 
     from app.core.discover import dynamic_router
     dynamic_router.init_app(app)

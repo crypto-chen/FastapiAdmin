@@ -33,6 +33,10 @@ class Permission:
         if self.auth.user.is_superuser:
             return None
 
+        # 主数据等全局参考数据不做行级数据权限过滤，避免标准组织树被“本人数据”范围截断
+        if getattr(self.model, "__data_scope_exempt__", False):
+            return None
+
         return await self._filter_by_data_scope()
 
     async def _filter_by_data_scope(self) -> ColumnElement | None:
