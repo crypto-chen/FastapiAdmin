@@ -85,6 +85,10 @@ scheduler.configure(
     job_defaults={
         "coalesce": True,
         "max_instances": 5,
+        # 默认 1 秒的宽限太严：机器时钟抖动/事件循环卡顿会让唤醒晚到 2 秒左右，
+        # 任务被判为 misfire 直接跳过（且 coalesce 只合并、不补跑），日任务会静默停摆。
+        # 放宽到 1 小时：迟到的任务补跑一次，超过 1 小时（如隔夜停机）仍按过期跳过。
+        "misfire_grace_time": 3600,
     },
     timezone="Asia/Shanghai",
 )
@@ -205,6 +209,7 @@ class SchedulerUtil:
 
         - DB 记录（启用 + 配置了触发方式）在调度器中缺失 → 补注册（job id = 节点 id）；
         - 调度器中残留的正式任务（job id 为纯数字）在 DB 已停用/删除/取消计划 → 移除；
+        - 已存在任务的 misfire_grace_time 与当前默认值不一致（老版本注册、宽限 1 秒）→ 重注册刷新；
         - 已过去的一次性 date 计划不补注册（单次任务执行完成后即完成使命）；
         - 手动执行产生的临时 job 不受影响；被 job 页暂停的 job 保留其暂停状态。
 
@@ -228,7 +233,8 @@ class SchedulerUtil:
             return
 
         try:
-            existing = {job.id for job in cls.get_jobs()}
+            existing_jobs = {job.id: job for job in cls.get_jobs()}
+            existing = set(existing_jobs)
             tz = ZoneInfo("Asia/Shanghai")
             want_ids: set[str] = set()
             for node in nodes:
@@ -252,12 +258,23 @@ class SchedulerUtil:
                     except Exception:
                         pass
 
+            wanted_grace = scheduler._job_defaults.get("misfire_grace_time")
             for node in nodes:
-                if str(node.id) not in want_ids or str(node.id) in existing:
+                node_id = str(node.id)
+                if node_id not in want_ids:
+                    continue
+                current = existing_jobs.get(node_id)
+                # next_run_time 为 None 是页面「暂停任务」留下的状态，不能被自愈误恢复
+                if (
+                    current is not None
+                    and current.next_run_time is not None
+                    and getattr(current, "misfire_grace_time", None) == wanted_grace
+                ):
                     continue
                 try:
                     register_node_job(node)
-                    logger.info(f"节点任务自愈: 已恢复节点 {node.id} 的定时任务")
+                    action = "已恢复" if current is None else "已按新宽限值刷新"
+                    logger.info(f"节点任务自愈: {action}节点 {node.id} 的定时任务")
                 except Exception as e:
                     logger.error(f"节点任务自愈: 恢复节点 {node.id} 失败: {e!s}", exc_info=True)
         except Exception as e:

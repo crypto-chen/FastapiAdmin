@@ -239,19 +239,32 @@ class StandardFieldQueryParam(BaseQueryParam, UserByQueryParam):
     status: int | None = Field(None, ge=0, le=1, description="状态", json_schema_extra={"q": "eq"})
 
 
-class MetaSyncJobCreateSchema(BaseModel):
+class MetaSyncJobBaseSchema(BaseModel):
+    """同步任务公共字段。
+
+    输出模型复用本类：写入侧强制 Cron 非空，但读侧必须容忍历史空值
+    （``meta_sync_job.cron_expr`` 是 nullable=False 且无默认值，历史数据里
+    存在空字符串，曾导致 ``GET /metadata/sync-job/page`` 直接 400）。
+    """
+
     name: str = Field(..., min_length=1, max_length=128, description="任务名称")
     source_system_id: int = Field(..., ge=1, description="来源系统ID")
     source_object_id: int = Field(..., ge=1, description="来源对象ID")
     standard_entity_id: int | None = Field(default=None, ge=1, description="标准实体ID")
     org_code: str | None = Field(default=None, max_length=64, description="组织编码")
-    cron_expr: str = Field(..., min_length=1, max_length=64, description="Cron表达式")
+    cron_expr: str = Field(default="", max_length=64, description="Cron表达式（空表示未配置，任务不会被调度）")
     request_params: dict | None = Field(default=None, description="请求参数/Model")
     variables: list[MetaVariableSchema] | None = Field(default=None, description="任务级变量定义")
     sync_mode: str = Field(default="full", min_length=1, max_length=16, description="同步模式")
     watermark_field: str | None = Field(default=None, max_length=128, description="增量水位字段")
     status: int = Field(default=0, ge=0, le=1, description="状态(0:启用 1:停用)")
     description: str | None = Field(default=None, max_length=500, description="备注")
+
+
+class MetaSyncJobCreateSchema(MetaSyncJobBaseSchema):
+    """新增同步任务：Cron 必填且非空（空 Cron 的任务不会被注册进调度器）。"""
+
+    cron_expr: str = Field(..., min_length=1, max_length=64, description="Cron表达式")
 
     @field_validator("name", "cron_expr")
     @classmethod
@@ -266,7 +279,7 @@ class MetaSyncJobUpdateSchema(MetaSyncJobCreateSchema):
     pass
 
 
-class MetaSyncJobOutSchema(MetaSyncJobCreateSchema, BaseSchema, UserBySchema):
+class MetaSyncJobOutSchema(MetaSyncJobBaseSchema, BaseSchema, UserBySchema):
     model_config = ConfigDict(from_attributes=True)
 
     system_code: str | None = Field(default=None, description="来源系统编码")
