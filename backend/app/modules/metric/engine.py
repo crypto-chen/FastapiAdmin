@@ -187,7 +187,12 @@ def _payload_rows(payload: dict | None) -> list | None:
         return rows
     # CRM 明细接口（orderAnalyze / orderShipments）业务数据直接放在 ``data`` 数组里
     data = payload.get("data")
-    return data if isinstance(data, list) else None
+    if isinstance(data, list):
+        return data
+    # 部分 CRM 接口把明细再包一层：``{"data": {"data": [...]}}``（如 getReturnOrderDetail）
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        return data["data"]
+    return None
 
 
 def _cell(row: Any, fields: list[str], key: str) -> Any:

@@ -71,6 +71,15 @@ ORDER_PATH = "/hs/order/orderAnalyze"
 SHIPMENT_PATH = "/hs/order/orderShipments"
 CUSTOMER_PATH = "/hs/customer/getCusotmerList"
 QUOTE_PATH = "/hs/quote/getQuoteList"
+RETURN_DETAIL_PATH = "/hs/getReturnOrderDetail"
+
+# 整月闭区间（dateRange 写法，供按订单创建时间过滤的接口使用）
+MONTH_DATE_RANGE: dict = {
+    "dateRange": [
+        "{{ now.replace(day=1).strftime('%Y-%m-%d') }}",
+        "{{ ((now.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).strftime('%Y-%m-%d') }}",
+    ]
+}
 
 # 客户列表是「当前全量快照」（无时间参数、每次约 2.5 万行），按周同步即可；
 # 指标计算遇到该期间没有批次时会自动按期间回补一次。
@@ -89,6 +98,15 @@ SOURCE_OBJECTS = [
         "cron": CUSTOMER_CRON,
     },
     {"code": QUOTE_PATH, "name": "CRM 报价单明细（业务员报价）"},
+    {
+        "code": RETURN_DETAIL_PATH,
+        "name": "CRM 退款订单明细（业务员退货退款）",
+        "with_month": False,
+        "request": MONTH_DATE_RANGE,  # 该接口用 dateRange，不认 month
+        # 生产环境该路由尚未发布（2026-10-09 实测 /hs/getReturnOrderDetail 返回 404），
+        # 先把同步任务建好但停用，避免每天 02:00 无意义失败；CRM 发布后把 status 改成 0 即可。
+        "status": 1,
+    },
 ]
 
 # 有效订单过滤：status_field/status_allow 由引擎解释，剔除作废单 522
@@ -563,6 +581,40 @@ METRICS = [
             ],
         },
     },
+    {
+        "code": "marketing_person_return_refund_untaxed",
+        "name": "营销中心业务员退货退款",
+        "excel_code": "STF-16",
+        "rule": "退货退款（元，**负数口径**）= Σ退款订单金额，按业务员（退款单 create_id）分组；"
+        "数据源为 CRM 订单明细 `/hs/order/orderAnalyze`：取订单状态 status=522（退款订单）的记录、"
+        "按订单创建月 createtime 落当期，与 `/hs/getReturnOrder`（公司合计）口径一致；"
+        "内贸取 remove_taxes_freight（= receivable − taxes，去税）、外贸取 receivable_CNY（人民币应收）；"
+        "实测 2026-09 内贸 status=522 明细合计 5,658.99 与公司口径 /hs/getReturnOrder 完全一致。"
+        "与公司口径「营销中心退货/退款（负数）」一致按负数入账，"
+        "便于对外出货净额 = 出货未税 + 设计服务收入 + 退货退款（负数）。"
+        "（CRM 发布 /hs/getReturnOrderDetail 后可切到该明细接口，内贸口径等价。）",
+        "measures": {
+            "kind": "crm_person_amount",
+            "group_by": "person",
+            "person_field": "create_id",
+            "unit": "元",
+            # 退款订单：status=522（与出货/接单的 384 不同），负数入账
+            "status_field": "status",
+            "status_allow": ["522"],
+            "components": [
+                {
+                    "label": "内贸退款",
+                    "source_object_code": f"{ORDER_PATH}?type=1",
+                    "amount_terms": [{"field": "remove_taxes_freight", "sign": -1}],
+                },
+                {
+                    "label": "外贸退款",
+                    "source_object_code": f"{ORDER_PATH}?type=2",
+                    "amount_terms": [{"field": "receivable_CNY", "sign": -1}],
+                },
+            ],
+        },
+    },
 ]
 
 
@@ -616,8 +668,9 @@ async def main() -> None:
 
         for spec in SOURCE_OBJECTS:
             code = spec["code"]
-            # 多数明细接口按 month 取整月；客户列表这类无时间参数的接口传空模板
-            request_template = dict(MONTH_PARAMS) if spec.get("with_month", True) else {}
+            # 多数明细接口按 month 取整月；客户列表这类无时间参数的接口传空模板；
+            # 退款明细这类用 dateRange 的接口由 spec["request"] 直接给定模板
+            request_template = dict(spec.get("request") or (MONTH_PARAMS if spec.get("with_month", True) else {}))
             source_object = await get_or_create(
                 db,
                 SourceObjectModel,
@@ -645,8 +698,13 @@ async def main() -> None:
             job.cron_expr = str(spec.get("cron") or args.cron)
             job.request_params = request_template
             job.sync_mode = "full"
-            job.status = 0
+            job.status = int(spec.get("status", 0))
             job.description = f"CRM 接口 {code}，按 month 取整月明细（未分页，单月约 1.3k 行）"
+            if int(spec.get("status", 0)) == 1:
+                job.description = (
+                    f"CRM 接口 {code}，按 dateRange 取整月明细；"
+                    "生产环境路由未发布前保持停用（启用后需 backfill 回补）"
+                )
             await db.flush()
             job_ids.append(job.id)
 

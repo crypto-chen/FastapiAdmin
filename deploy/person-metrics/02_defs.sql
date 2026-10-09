@@ -1,8 +1,8 @@
 -- ==========================================================================
 -- 业务员指标 - 元数据 / 来源对象 / 同步任务 / 指标定义（幂等，可重复执行）
--- 生成时间：2026-10-09 15:26
+-- 生成时间：2026-10-09 17:37
 -- 由 backend/scripts/export_person_metrics_sql.py 生成，请勿手工修改
--- 指标 19 个，来源对象 6 个，同步任务 6 个
+-- 指标 20 个，来源对象 7 个，同步任务 7 个
 -- 执行顺序：先 01_schema.sql，再本文件
 -- 所有 INSERT 均按业务唯一键判重：连接按 name、来源系统/对象/指标按 code、同步任务按 name
 -- ==========================================================================
@@ -70,6 +70,13 @@ VALUES ('d9871b27-14de-472b-985c-10da0b6752da', (SELECT id FROM meta_source_syst
 ON DUPLICATE KEY UPDATE name = VALUES(name), query_type = VALUES(query_type),
   request_template = VALUES(request_template), status = VALUES(status);
 
+-- 来源对象 /hs/getReturnOrderDetail
+INSERT INTO meta_source_object
+  (uuid, system_id, code, name, query_type, request_template, variables, watermark_field, status, is_deleted, created_time, updated_time)
+VALUES ('9047209b-ea6a-45d7-8c2e-e112cfb29117', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), '/hs/getReturnOrderDetail', 'CRM 退款订单明细（业务员退货退款）', 'api', '{"dateRange":["{{ now.replace(day=1).strftime(''%Y-%m-%d'') }}","{{ ((now.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).strftime(''%Y-%m-%d'') }}"]}', NULL, NULL, 0, 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), query_type = VALUES(query_type),
+  request_template = VALUES(request_template), status = VALUES(status);
+
 -- 4) 同步任务（cron 与 seed 脚本一致：明细每天 02:00，客户列表每周一 02:00）
 
 -- 同步任务 CRM业务员指标-CRM 订单明细（内贸）（cron 0 0 2 * * ?）
@@ -119,6 +126,14 @@ INSERT INTO meta_sync_job
 SELECT '682fb51e-107d-46cf-8b6d-c3a098ab3f5e', 'CRM业务员指标-CRM 报价单明细（业务员报价）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/quote/getQuoteList' LIMIT 1), NULL, NULL, '0 0 2 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/quote/getQuoteList，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 报价单明细（业务员报价）');
+
+-- 同步任务 CRM业务员指标-CRM 退款订单明细（业务员退货退款）（cron 0 0 2 * * ?）
+INSERT INTO meta_sync_job
+  (uuid, name, source_system_id, source_object_id, standard_entity_id, org_code, cron_expr,
+   request_params, variables, sync_mode, watermark_field, status, description, is_deleted, created_time, updated_time)
+SELECT '7f2e14e1-d17b-4ab6-bc7d-67f419441710', 'CRM业务员指标-CRM 退款订单明细（业务员退货退款）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/getReturnOrderDetail' LIMIT 1), NULL, NULL, '0 0 2 * * ?', '{"dateRange":["{{ now.replace(day=1).strftime(''%Y-%m-%d'') }}","{{ ((now.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).strftime(''%Y-%m-%d'') }}"]}', NULL, 'full', NULL, 1, 'CRM 接口 /hs/getReturnOrderDetail，按 dateRange 取整月明细；生产环境路由未发布前保持停用（启用后需 backfill 回补）', 0, NOW(), NOW()
+FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 退款订单明细（业务员退货退款）');
 
 -- 5) 指标定义（16 个业务员指标，含 Excel 科目编码与取数配置）
 
@@ -187,6 +202,16 @@ INSERT INTO metric_def
   (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
    source_entity_id, version, status, description, is_deleted, created_time, updated_time)
 VALUES ('e3d84700-85d1-4578-93e8-1438da29cd4d', 'marketing_person_design_service_income', '营销中心业务员设计服务收入', '营销中心-业务员', 'STF-15', 'month', 0, '设计服务收入（元）= Σ(内贸 design_remove_taxes_freight + 外贸 design_cost)，只统计有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组；当月无设计服务收入的业务员不输出行（按 0 处理）。', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_person_amount","unit":"元","group_by":"person","components":[{"label":"内贸","amount_terms":[{"sign":1,"field":"design_remove_taxes_freight"}],"source_object_code":"/hs/order/orderAnalyze?type=1"},{"label":"外贸","amount_terms":[{"sign":1,"field":"design_cost"}],"source_object_code":"/hs/order/orderAnalyze?type=2"}],"person_field":"create_id","status_allow":["384"],"status_field":"status"}', NULL, 1, 0, '设计服务收入（元）= Σ(内贸 design_remove_taxes_freight + 外贸 design_cost)，只统计有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组；当月无设计服务收入的业务员不输出行（按 0 处理）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
+  period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
+  dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
+  description = VALUES(description), version = VALUES(version);
+
+-- 指标 STF-16 marketing_person_return_refund_untaxed
+INSERT INTO metric_def
+  (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
+   source_entity_id, version, status, description, is_deleted, created_time, updated_time)
+VALUES ('a6a7cc0d-0914-43f1-bc3e-4ded022c9d8c', 'marketing_person_return_refund_untaxed', '营销中心业务员退货退款', '营销中心-业务员', 'STF-16', 'month', 0, '退货退款（元，**负数口径**）= Σ退款订单金额，按业务员（退款单 create_id）分组；数据源为 CRM 订单明细 `/hs/order/orderAnalyze`：取订单状态 status=522（退款订单）的记录、按订单创建月 createtime 落当期，与 `/hs/getReturnOrder`（公司合计）口径一致；内贸取 remove_taxes_freight（= receivable − taxes，去税）、外贸取 receivable_CNY（人民币应收）；实测 2026-09 内贸 status=522 明细合计 5,658.99 与公司口径 /hs/getReturnOrder 完全一致。与公司口径「营销中心退货/退款（负数）」一致按负数入账，便于对外出货净额 = 出货未税 + 设计服务收入 + 退货退款（负数）。（CRM 发布 /hs/getReturnOrderDetail 后可切到该明细接口，内贸口径等价。）', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_person_amount","unit":"元","group_by":"person","components":[{"label":"内贸退款","amount_terms":[{"sign":-1,"field":"remove_taxes_freight"}],"source_object_code":"/hs/order/orderAnalyze?type=1"},{"label":"外贸退款","amount_terms":[{"sign":-1,"field":"receivable_CNY"}],"source_object_code":"/hs/order/orderAnalyze?type=2"}],"person_field":"create_id","status_allow":["522"],"status_field":"status"}', NULL, 1, 0, '退货退款（元，**负数口径**）= Σ退款订单金额，按业务员（退款单 create_id）分组；数据源为 CRM 订单明细 `/hs/order/orderAnalyze`：取订单状态 status=522（退款订单）的记录、按订单创建月 createtime 落当期，与 `/hs/getReturnOrder`（公司合计）口径一致；内贸取 remove_taxes_freight（= receivable − taxes，去税）、外贸取 receivable_CNY（人民币应收）；实测 2026-09 内贸 status=522 明细合计 5,658.99 与公司口径 /hs/getReturnOrder 完全一致。与公司口径「营销中心退货/退款（负数）」一致按负数入账，便于对外出货净额 = 出货未税 + 设计服务收入 + 退货退款（负数）。（CRM 发布 /hs/getReturnOrderDetail 后可切到该明细接口，内贸口径等价。） 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
   period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
   dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),

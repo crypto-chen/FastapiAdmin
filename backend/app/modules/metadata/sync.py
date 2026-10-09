@@ -401,7 +401,13 @@ async def fetch_crm_amount_payload(connection_id: int, path: str, params: dict) 
     # 明细接口（orderAnalyze / orderShipments）``data`` 是数组，行数按数组长度登记；
     # 单值接口（金额/比率）仍按 1 行登记，保持原有语义。
     data = result.get("data")
-    result["data_count"] = len(data) if isinstance(data, list) else 1
+    if isinstance(data, list):
+        result["data_count"] = len(data)
+    elif isinstance(data, dict) and isinstance(data.get("data"), list):
+        # {"data": {"data": [...]}}：明细在里层
+        result["data_count"] = len(data["data"])
+    else:
+        result["data_count"] = 1
     return result
 
 
@@ -447,6 +453,9 @@ def extract_payload_rows(payload: dict) -> list:
     data = payload.get("data")
     if isinstance(data, list):
         return data
+    # 部分接口再包一层：``{"data": {"data": [...]}}``（如 getReturnOrderDetail）
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        return data["data"]
     return []
 
 
