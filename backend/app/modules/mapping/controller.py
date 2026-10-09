@@ -193,6 +193,26 @@ async def source_types(
     return SuccessResponse(data=result, msg="查询来源类型成功")
 
 
+@SystemMappingRouter.post("/sync/crm-org", summary="手动同步 CRM 人员架构", response_model=ResponseSchema[dict[str, int]])
+async def sync_crm_org(
+    auth: Annotated[AuthSchema, Security(AuthPermission(["module_mapping:sync:org"]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+) -> JSONResponse:
+    """手动任务（无定时）：拉取 CRM 组织/部门树写入来源组织与来源部门。"""
+    result = await MappingService(auth, db).sync_crm_org()
+    return SuccessResponse(data=result, msg="同步 CRM 人员架构完成")
+
+
+@SystemMappingRouter.post("/sync/crm-person", summary="手动同步 CRM 人员", response_model=ResponseSchema[dict[str, int]])
+async def sync_crm_person(
+    auth: Annotated[AuthSchema, Security(AuthPermission(["module_mapping:sync:person"]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+) -> JSONResponse:
+    """手动任务（无定时）：拉取 CRM 人员写入来源人员表。"""
+    result = await MappingService(auth, db).sync_crm_person()
+    return SuccessResponse(data=result, msg="同步 CRM 人员完成")
+
+
 @SystemMappingRouter.get("/sys-dept/bindings", response_model=ResponseSchema[list[SysDeptBusinessMappingOutSchema]])
 async def sys_dept_bindings(
     auth: Annotated[AuthSchema, Security(AuthPermission(["module_mapping:bind:query"]))],

@@ -13,6 +13,8 @@
           <ElOption v-for="opt in sourceTypes" :key="opt.value" :label="opt.label" :value="opt.value" />
         </ElSelect>
         <ElButton type="primary" :loading="loading" @click="loadCurrent">刷新</ElButton>
+        <ElButton :loading="syncingOrg" @click="syncCrmOrg">同步CRM架构</ElButton>
+        <ElButton :loading="syncingPerson" @click="syncCrmPerson">同步CRM人员</ElButton>
       </div>
 
       <ElTable v-loading="loading" :data="rows" border stripe row-key="id" max-height="calc(100vh - 300px)">
@@ -87,11 +89,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { ManualBindingAPI, type MappingItem } from "@/api/module_system_mapping";
 
 const activeKey = ref("org");
 const loading = ref(false);
+const syncingOrg = ref(false);
+const syncingPerson = ref(false);
 const rows = ref<MappingItem[]>([]);
 const orgOptions = ref<{ value: number; label: string }[]>([]);
 const personOptions = ref<{ value: number; label: string }[]>([]);
@@ -179,6 +183,50 @@ async function loadCurrent() {
     }
   } finally {
     loading.value = false;
+  }
+}
+
+/** 手动任务：同步 CRM 人员架构（组织 + 部门），无定时执行 */
+async function syncCrmOrg() {
+  await ElMessageBox.confirm(
+    "将拉取 CRM 组织架构并写入来源组织/来源部门（按来源编码更新，不影响已绑定关系），是否继续？",
+    "同步 CRM 人员架构",
+    { type: "info", confirmButtonText: "开始同步", cancelButtonText: "取消" }
+  );
+  syncingOrg.value = true;
+  try {
+    const res = await ManualBindingAPI.syncCrmOrg();
+    const r = (res.data?.data ?? {}) as Record<string, number>;
+    ElMessage.success(
+      `同步完成：来源组织 新增 ${r.orgs_created ?? 0} / 更新 ${r.orgs_updated ?? 0}，` +
+        `来源部门 新增 ${r.depts_created ?? 0} / 更新 ${r.depts_updated ?? 0}（共 ${r.dept_total ?? 0}）`
+    );
+    await loadOptions();
+    await loadCurrent();
+  } finally {
+    syncingOrg.value = false;
+  }
+}
+
+/** 手动任务：同步 CRM 人员，无定时执行 */
+async function syncCrmPerson() {
+  await ElMessageBox.confirm(
+    "将拉取 CRM 人员明细并写入来源人员表（按来源编码更新，不影响已绑定关系），是否继续？",
+    "同步 CRM 人员",
+    { type: "info", confirmButtonText: "开始同步", cancelButtonText: "取消" }
+  );
+  syncingPerson.value = true;
+  try {
+    const res = await ManualBindingAPI.syncCrmPerson();
+    const r = (res.data?.data ?? {}) as Record<string, number>;
+    ElMessage.success(
+      `同步完成：来源人员 新增 ${r.persons_created ?? 0} / 更新 ${r.persons_updated ?? 0}，` +
+        `共 ${r.person_total ?? 0} 人（在职 ${r.person_active ?? 0}）`
+    );
+    await loadOptions();
+    await loadCurrent();
+  } finally {
+    syncingPerson.value = false;
   }
 }
 

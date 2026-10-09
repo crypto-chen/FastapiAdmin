@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.base_schema import AuthSchema, PageResultSchema
 from app.core.exceptions import CustomException
+from app.modules.crm.personnel_sync import sync_crm_org_structure, sync_crm_personnel
 from app.modules.masterdata.model import (
     MasterDeptMappingModel,
     MasterDeptModel,
@@ -205,6 +206,18 @@ class MappingService:
             rows = (await self.db.execute(select(model.source_type).distinct())).scalars().all()
             types.update(str(row) for row in rows if row)
         return [{"value": item, "label": item} for item in sorted(types)]
+
+    # ── 手动同步任务（无 Cron） ──────────────────────────────────
+
+    async def sync_crm_org(self) -> dict[str, int]:
+        """手动任务：同步 CRM 人员架构（来源组织 + 来源部门）。"""
+        result = await sync_crm_org_structure(self.db)
+        return result.as_dict()
+
+    async def sync_crm_person(self) -> dict[str, int]:
+        """手动任务：同步 CRM 人员（来源人员）。"""
+        result = await sync_crm_personnel(self.db)
+        return result.as_dict()
 
     # ── 权限部门(sys_dept) ↔ 业务标准部门(master_dept) ──────────────
 

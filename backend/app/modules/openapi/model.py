@@ -25,6 +25,9 @@ class OpenClientModel(ModelMixin, UserMixin):
     allow_dept_detail: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, comment="是否允许查询核算维度明细(默认仅组织合计)"
     )
+    allow_person_detail: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="是否允许查询业务员明细(默认不开放)"
+    )
     allow_run_calc: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, comment="是否允许触发指标重算"
     )

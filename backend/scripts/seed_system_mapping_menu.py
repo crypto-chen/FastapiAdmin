@@ -1,5 +1,8 @@
 """初始化系统映射管理菜单。
 
+包含「映射配置 / 人工绑定 / 权限部门绑定 / 系统标准人员」四个页面与按钮权限，
+并把菜单授予 SUPER_ADMIN、ADMIN 角色。
+
 用法：
     python scripts/seed_system_mapping_menu.py
 """
@@ -89,6 +92,21 @@ async def main() -> None:
             title="权限部门绑定",
             scope="web",
         )
+        # 内部标准人员（master_person）维护页：权限走 masterdata 模块
+        person_child = await get_or_create(
+            db,
+            name="系统标准人员",
+            type=2,
+            order=4,
+            permission="module_masterdata:person:query",
+            route_name="SystemMappingPerson",
+            route_path="standard-person",
+            component_path="module_masterdata/person/index",
+            parent_id=parent.id,
+            status=0,
+            title="系统标准人员",
+            scope="web",
+        )
 
         permissions = [
             ("新增", "module_mapping:dept:create", 1),
@@ -99,8 +117,11 @@ async def main() -> None:
             ("任岗绑定", "module_mapping:person:create", 6),
             ("来源类型", "module_mapping:source:query", 7),
             ("权限绑定", "module_mapping:bind:create", 8),
+            # 手动同步任务按钮（无 Cron）：人员架构 / 人员
+            ("同步CRM架构", "module_mapping:sync:org", 9),
+            ("同步CRM人员", "module_mapping:sync:person", 10),
         ]
-        menu_ids = sorted({parent.id, child.id, bind_child.id, sys_dept_child.id})
+        menu_ids = sorted({parent.id, child.id, bind_child.id, sys_dept_child.id, person_child.id})
         for name, permission, order in permissions:
             button = await get_or_create(
                 db,
@@ -109,6 +130,25 @@ async def main() -> None:
                 order=order,
                 permission=permission,
                 parent_id=child.id,
+                status=0,
+                scope="web",
+            )
+            menu_ids.append(button.id)
+
+        # 「系统标准人员」页按钮权限
+        person_permissions = [
+            ("新增", "module_masterdata:person:create", 1),
+            ("编辑", "module_masterdata:person:update", 2),
+            ("删除", "module_masterdata:person:delete", 3),
+        ]
+        for name, permission, order in person_permissions:
+            button = await get_or_create(
+                db,
+                name=name,
+                type=3,
+                order=order,
+                permission=permission,
+                parent_id=person_child.id,
                 status=0,
                 scope="web",
             )

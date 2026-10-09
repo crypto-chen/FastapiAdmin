@@ -54,11 +54,12 @@ from sqlalchemy import delete, func, select
 
 from app.core.database import async_db_session
 from app.core.logger import logger
+from app.modules.crm.org_person import CRM_SOURCE_TYPE
 from app.modules.erp.jushuitan.aggregate import summarize as summarize_outbound_amount
 from app.modules.erp.kingdee.client import KingdeeBillQueryRequest
 from app.modules.erp.kingdee.model import KingdeeConnectionModel
 from app.modules.erp.kingdee.service import KingdeeService
-from app.modules.masterdata.model import MasterDeptModel, MasterOrgModel
+from app.modules.masterdata.model import MasterDeptModel, MasterOrgModel, MasterPersonModel, SourcePersonModel
 from app.modules.metadata.model import (
     MetaSyncJobModel,
     MetaSyncRunModel,
@@ -83,6 +84,9 @@ METRIC_SCALE_KIND = "metric_scale"
 # 指标比率：自身不取数，值为「分子指标当期值之和 ÷ 分母指标当期值之和 × ratio_scale」
 # （如下推率 = 下推金额 ÷ 接单金额；分母为 0 时取 0，避免除零）
 METRIC_RATIO_KIND = "metric_ratio"
+# 业务员比率：分子 / 分母都是**业务员维度**指标，按业务员分别相除
+# （如复购率 = 本月下单老客户数 ÷ 总客户数、客单价 = 接单未税 ÷ 订单数）
+METRIC_RATIO_PERSON_KIND = "metric_ratio_person"
 # 指标期初期末平均：自身不取数，值为「上期组成指标合计 × begin_weight + 当期组成指标合计 × end_weight」
 # （如平均库存 =（期初 + 期末）÷ 2；期初取上一期该指标的结果，上期无结果按 0 计入）
 METRIC_BALANCE_AVG_KIND = "metric_balance_avg"
@@ -98,6 +102,21 @@ AR_AGING_KIND = "ar_aging_provision"
 INVENTORY_LEDGER_KIND = "inventory_ledger_balance"
 # 单据金额：金蝶单据查询（ExecuteBillQuery）按行过滤后汇总金额；支持多来源对象组成一个合计指标
 BILL_AMOUNT_KIND = "bill_amount_filter"
+# 业务员明细：CRM 订单明细（orderAnalyze）按业务员（下单人 create_id）分组汇总金额
+CRM_PERSON_AMOUNT_KIND = "crm_person_amount"
+# 业务员明细：CRM 发货明细（orderShipments）关联订单明细取业务员与未税单价，按业务员汇总出货未税金额
+CRM_SHIPMENT_PERSON_AMOUNT_KIND = "crm_shipment_person_amount"
+# 业务员明细：CRM 订单明细按「ERP 下推时间」落在当期过滤，按业务员汇总下推金额 / 平均下推周期
+CRM_ORDER_PUSH_PERSON_KIND = "crm_order_push_person"
+# 业务员明细：CRM 报价单明细按业务员汇总报价次数 / 报价成功率 / 报价毛利率
+CRM_QUOTE_PERSON_KIND = "crm_quote_person"
+# 业务员维度的取数类型（结果行带 person_code，含公司合计行）
+CRM_PERSON_KINDS = (
+    CRM_PERSON_AMOUNT_KIND,
+    CRM_SHIPMENT_PERSON_AMOUNT_KIND,
+    CRM_ORDER_PUSH_PERSON_KIND,
+    CRM_QUOTE_PERSON_KIND,
+)
 METRIC_SUM_KIND = "metric_sum"
 SUPPORTED_KINDS = {
     ACCOUNT_BALANCE_KIND,
@@ -112,6 +131,11 @@ SUPPORTED_KINDS = {
     METRIC_RATIO_KIND,
     METRIC_DIFF_KIND,
     METRIC_BALANCE_AVG_KIND,
+    METRIC_RATIO_PERSON_KIND,
+    CRM_PERSON_AMOUNT_KIND,
+    CRM_SHIPMENT_PERSON_AMOUNT_KIND,
+    CRM_ORDER_PUSH_PERSON_KIND,
+    CRM_QUOTE_PERSON_KIND,
 }
 # 计算时实时取数、不依赖同步批次的取数类型
 LIVE_KINDS = {AR_AGING_KIND}
@@ -155,11 +179,15 @@ def _field_order(request_params: dict | None) -> list[str]:
 
 
 def _payload_rows(payload: dict | None) -> list | None:
-    """兼容金蝶 ``Rows``（报表/单据查询）与聚水潭 ``datas`` 两种返回结构；缺失返回 ``None``。"""
+    """兼容金蝶 ``Rows``、聚水潭 ``datas`` 与 CRM ``data``（明细数组）三种返回结构；缺失返回 ``None``。"""
     if not isinstance(payload, dict):
         return None
     rows = payload.get("Rows") if isinstance(payload.get("Rows"), list) else payload.get("datas")
-    return rows if isinstance(rows, list) else None
+    if isinstance(rows, list):
+        return rows
+    # CRM 明细接口（orderAnalyze / orderShipments）业务数据直接放在 ``data`` 数组里
+    data = payload.get("data")
+    return data if isinstance(data, list) else None
 
 
 def _cell(row: Any, fields: list[str], key: str) -> Any:
@@ -189,6 +217,10 @@ METRIC_DEPENDENCY_FIELDS: dict[str, tuple[str, ...]] = {
         "numerator_subtrahend_metric_codes",
         "denominator_metric_codes",
         "denominator_subtrahend_metric_codes",
+    ),
+    METRIC_RATIO_PERSON_KIND: (
+        "numerator_metric_codes",
+        "denominator_metric_codes",
     ),
     METRIC_DIFF_KIND: ("addend_metric_codes", "subtrahend_metric_codes"),
 }
@@ -584,6 +616,322 @@ def _text(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def _amount_terms(config: dict) -> list[tuple[str, float]]:
+    """金额取值项：``amount_terms`` 优先（多字段加权，如未税 = 应收 − 税金），退回 ``amount_field``。"""
+    terms: list[tuple[str, float]] = []
+    raw_terms = config.get("amount_terms")
+    if isinstance(raw_terms, list):
+        for term in raw_terms:
+            if isinstance(term, dict) and term.get("field"):
+                terms.append((str(term["field"]), float(term.get("sign", 1))))
+    if not terms:
+        amount_field = str(config.get("amount_field") or "")
+        if amount_field:
+            terms = [(amount_field, 1.0)]
+    return terms
+
+
+def _row_status_allowed(row: Any, fields: list[str], config: dict) -> bool:
+    """按 ``status_field`` / ``status_allow`` 过滤行（``status_allow`` 为空 = 不过滤）。"""
+    raw_allow = config.get("status_allow", ["384"])
+    if raw_allow is None:
+        return True
+    allowed = {_text(item) for item in (raw_allow if isinstance(raw_allow, list) else [raw_allow]) if _text(item)}
+    if not allowed:
+        return True
+    status_field = str(config.get("status_field") or "status")
+    return _text(_cell(row, fields, status_field)) in allowed
+
+
+# --------------------------------------------------------------------------- #
+# 业务员维度取数执行器（CRM 订单 / 发货明细）
+# --------------------------------------------------------------------------- #
+def extract_person_amount(rows: list, fields: list[str], config: dict) -> dict:
+    """把 CRM 订单明细按业务员（下单人）分组汇总金额。
+
+    配置项（``measures`` 或 component）:
+    - ``person_field``：业务员字段，默认 ``create_id``（订单下单人）。
+    - ``amount_terms`` / ``amount_field``：金额取值项。
+    - ``value_mode``：``amount``（默认，金额合计）/ ``count_orders``（订单数）/ ``count_customers``
+      （``customer_field`` 指定的客户去重数，默认 ``customer``）。
+    - ``exclude_empty_person``：为真时丢弃没有业务员（``person_field`` 为空）的行，
+      如客户表中「未分配业务员」的客户不计入任何业务员。
+    - ``status_field`` / ``status_allow``：有效状态过滤，默认 ``status`` ∈ ``["384"]``（剔除作废 522）。
+    - ``row_filters``：行过滤条件（``[{field, op, value|values}]``，见 :func:`_row_matches_filters`），
+      用于订单类型（``order_type=1/2``）或新老客户（``is_new=1/2``）等口径拆分。
+    - ``omit_zero_persons``：为真（默认）时丢弃合计为 0 的业务员，只保留有业绩的人。
+
+    返回 ``{"persons": {业务员ID: {"value": 金额, "rows": 行数}}, "total": 合计, "matched_rows": 命中行数}``。
+    """
+    person_field = str(config.get("person_field") or "create_id")
+    terms = _amount_terms(config)
+    value_mode = str(config.get("value_mode") or "amount")
+    customer_field = str(config.get("customer_field") or "customer")
+    exclude_empty_person = bool(config.get("exclude_empty_person"))
+    omit_zero = bool(config.get("omit_zero_persons", True))
+    persons: dict[str, dict] = {}
+    matched_rows = 0
+    for row in rows:
+        if not _row_status_allowed(row, fields, config):
+            continue
+        if not _row_matches_filters(row, fields, config.get("row_filters")):
+            continue
+        person = _text(_cell(row, fields, person_field))
+        if exclude_empty_person and not person:
+            continue
+        matched_rows += 1
+        amount = sum(sign * _parse_amount(_cell(row, fields, field)) for field, sign in terms)
+        bucket = persons.setdefault(person, {"value": 0.0, "rows": 0})
+        bucket["value"] = round(float(bucket["value"]) + amount, 4)
+        bucket["rows"] = int(bucket["rows"]) + 1
+        if value_mode == "count_customers":
+            # 客户去重：内贸/外贸可能同一客户重复下单，按客户ID去重后再计数
+            customer = _text(_cell(row, fields, customer_field))
+            bucket.setdefault("customers", set()).add(customer or f"__row_{matched_rows}")
+    if value_mode == "count_orders":
+        persons = {
+            key: {"value": float(bucket["rows"]), "rows": bucket["rows"]}
+            for key, bucket in persons.items()
+        }
+    elif value_mode == "count_customers":
+        persons = {
+            key: {"value": float(len(bucket.get("customers") or ())), "rows": bucket["rows"],
+                  "customers": bucket.get("customers") or set()}
+            for key, bucket in persons.items()
+        }
+    if omit_zero:
+        persons = {key: bucket for key, bucket in persons.items() if round(float(bucket["value"]), 4) != 0}
+    total = round(sum(float(bucket["value"]) for bucket in persons.values()), 4)
+    return {"persons": persons, "total": total, "matched_rows": matched_rows}
+
+
+def build_order_amount_index(rows: list, fields: list[str], config: dict) -> dict[str, dict]:
+    """把订单明细整理成 ``{订单号: {person, unit_price, amount, qty}}``，供发货明细关联。
+
+    未税单价 = 订单未税金额 ÷ 订单数量（数量为 0 时按 0 处理），
+    这样发货明细可以用「发货数量 × 未税单价」直接结转未税收入。
+    """
+    number_field = str(config.get("order_number_field") or "number")
+    person_field = str(config.get("person_field") or "create_id")
+    qty_field = str(config.get("order_qty_field") or "qty")
+    terms = _amount_terms(config)
+    index: dict[str, dict] = {}
+    for row in rows:
+        if not _row_status_allowed(row, fields, config):
+            continue
+        if not _row_matches_filters(row, fields, config.get("row_filters")):
+            continue
+        number = _text(_cell(row, fields, number_field))
+        if not number or number in index:
+            continue
+        qty = _parse_amount(_cell(row, fields, qty_field))
+        amount = sum(sign * _parse_amount(_cell(row, fields, field)) for field, sign in terms)
+        index[number] = {
+            "person": _text(_cell(row, fields, person_field)),
+            "unit_price": (amount / qty) if qty else 0.0,
+            "amount": amount,
+            "qty": qty,
+        }
+    return index
+
+
+def extract_shipment_person_amount(
+    shipment_rows: list, order_index: dict[str, dict], config: dict
+) -> dict:
+    """按发货明细汇总「业务员 × 出货」。
+
+    发货接口只给「CRM单号 / 发货数量 / 订单单价 / 订单数量」，不含业务员与未税金额，
+    所以必须先按订单号关联订单明细（``order_index``）拿业务员与未税单价。
+    关联不到的订单号计入 ``missing_rows``（订单创建月早于回看窗口时会出现）。
+
+    ``value_mode`` 控制取值口径：
+    - ``amount``（默认）：金额 = Σ(发货数量 × 该订单未税单价)；
+    - ``qty``：数量 = Σ发货数量。
+    """
+    number_field = str(config.get("shipment_number_field") or "order_number")
+    qty_field = str(config.get("shipment_qty_field") or "send_qty")
+    value_mode = str(config.get("value_mode") or "amount")
+    omit_zero = bool(config.get("omit_zero_persons", True))
+    persons: dict[str, dict] = {}
+    matched_rows = 0
+    missing_rows = 0
+    missing_orders: set[str] = set()
+    for row in shipment_rows:
+        number = _text(_cell(row, [], number_field))
+        info = order_index.get(number)
+        if info is None:
+            missing_rows += 1
+            if number:
+                missing_orders.add(number)
+            continue
+        matched_rows += 1
+        qty = _parse_amount(_cell(row, [], qty_field))
+        if value_mode == "qty":
+            amount = round(qty, 4)
+        else:
+            amount = round(qty * float(info.get("unit_price") or 0), 4)
+        person = str(info.get("person") or "")
+        bucket = persons.setdefault(person, {"value": 0.0, "rows": 0})
+        bucket["value"] = round(float(bucket["value"]) + amount, 4)
+        bucket["rows"] = int(bucket["rows"]) + 1
+    if omit_zero:
+        persons = {key: bucket for key, bucket in persons.items() if round(float(bucket["value"]), 4) != 0}
+    return {
+        "persons": persons,
+        "total": round(sum(float(bucket["value"]) for bucket in persons.values()), 4),
+        "matched_rows": matched_rows,
+        "missing_rows": missing_rows,
+        "missing_orders": sorted(missing_orders)[:20],
+    }
+
+
+def extract_quote_person_stat(rows: list, fields: list[str], config: dict) -> dict:
+    """把 CRM 报价单明细按业务员汇总「次数 / 已转单数 / 报价未税 / 料工费」四个计数。
+
+    各统计口径由调用方（``stat``）决定怎么算，这里只负责按业务员累加原始计数：
+    - ``count``：报价次数（报价单条数，接口已按 status='E' 已审核 + 报价月过滤）；
+    - ``success_rate``：报价成功率 = 已转订单数 ÷ 报价次数 ×100%；
+    - ``gross_profit_rate``：报价毛利率 =（报价未税 − 料工费）÷ 报价未税 ×100%。
+
+    配置项（``measures`` 或 component）:
+    - ``person_field``：业务员字段，默认 ``create_id``。
+    - ``amount_field``：报价未税总价字段，默认 ``not_tax_all_quote_amount``。
+    - ``cost_field``：料工费字段，默认 ``material_labor_cost``。
+    - ``transformation_field`` / ``transformation_allow``：是否转订单标识，默认
+      ``transformation`` ∈ ``["1"]``（已转订单）。
+    """
+    person_field = str(config.get("person_field") or "create_id")
+    amount_field = str(config.get("amount_field") or "not_tax_all_quote_amount")
+    cost_field = str(config.get("cost_field") or "material_labor_cost")
+    transformation_field = str(config.get("transformation_field") or "transformation")
+    raw_allow = config.get("transformation_allow", ["1"])
+    transformed_values = {
+        _text(item) for item in (raw_allow if isinstance(raw_allow, list) else [raw_allow]) if _text(item)
+    }
+    persons: dict[str, dict] = {}
+    for row in rows:
+        person = _text(_cell(row, fields, person_field))
+        if not person:
+            continue
+        bucket = persons.setdefault(person, {"count": 0.0, "transformed": 0.0, "amount": 0.0, "cost": 0.0})
+        bucket["count"] += 1
+        if _text(_cell(row, fields, transformation_field)) in transformed_values:
+            bucket["transformed"] += 1
+        bucket["amount"] = round(bucket["amount"] + _parse_amount(_cell(row, fields, amount_field)), 4)
+        bucket["cost"] = round(bucket["cost"] + _parse_amount(_cell(row, fields, cost_field)), 4)
+    return {"persons": persons, "matched_rows": int(sum(item["count"] for item in persons.values()))}
+
+
+def _quote_person_value(stat: str, bucket: dict) -> float:
+    """按 ``stat`` 把报价计数换算成指标值。"""
+    count = float(bucket.get("count") or 0)
+    if stat == "success_rate":
+        return round(float(bucket.get("transformed") or 0) / count * 100, 4) if count else 0.0
+    if stat == "gross_profit_rate":
+        amount = float(bucket.get("amount") or 0)
+        return round((amount - float(bucket.get("cost") or 0)) / amount * 100, 4) if amount else 0.0
+    return round(count, 4)
+
+
+def _parse_datetime_value(value: Any) -> datetime | None:
+    """解析 CRM 时间字段：``2026-09-08 09:46:53`` / ISO 串 / Unix 秒时间戳（``createtime``）。"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        try:
+            return datetime.fromtimestamp(int(text))
+        except (OverflowError, OSError, ValueError):
+            return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _datetime_in_period(moment: datetime | None, period_type: str, period: str) -> bool:
+    """时间点是否落在期间内（月 ``2026-09`` / 日 ``2026-09-28`` / 年 ``2026``）。"""
+    if moment is None:
+        return False
+    if period_type == "day":
+        return moment.strftime("%Y-%m-%d") == period
+    if period_type == "year":
+        return moment.strftime("%Y") == period
+    return moment.strftime("%Y-%m") == period
+
+
+def extract_push_person_stat(
+    rows: list, fields: list[str], config: dict, period_type: str, period: str
+) -> dict:
+    """按「ERP 下推时间」落在当期过滤订单，按业务员汇总下推金额或平均下推周期。
+
+    配置项（``measures`` 或 component）:
+    - ``push_status_field`` / ``push_status_allow``：下推状态，默认 ``erp_push_status`` ∈ ``["1"]``（已下推）。
+    - ``push_date_field``：下推时间字段，默认 ``erp_push_date``。
+    - ``cycle_start_field``：建单时间字段，默认 ``createtime``（Unix 秒）。
+    - ``amount_terms`` / ``amount_field``：下推金额取值项。
+    - ``stat``：``amount`` = 下推金额合计；``period_days`` = 下推周期（天）
+      = Σ(下推时间 − 建单时间) ÷ 下推订单数（按订单数加权，非按金额）。
+
+    返回 ``persons`` 为 ``{业务员ID: {"value": 指标值, "orders": 下推订单数, "days": 天数合计}}``。
+    """
+    push_status_field = str(config.get("push_status_field") or "erp_push_status")
+    raw_allow = config.get("push_status_allow", ["1"])
+    allowed = {_text(item) for item in (raw_allow if isinstance(raw_allow, list) else [raw_allow]) if _text(item)}
+    push_date_field = str(config.get("push_date_field") or "erp_push_date")
+    cycle_start_field = str(config.get("cycle_start_field") or "createtime")
+    person_field = str(config.get("person_field") or "create_id")
+    stat = str(config.get("stat") or "amount")
+    terms = _amount_terms(config)
+    persons: dict[str, dict] = {}
+    matched_rows = 0
+    cycle_rows = 0
+    for row in rows:
+        if not _row_status_allowed(row, fields, config):
+            continue
+        if not _row_matches_filters(row, fields, config.get("row_filters")):
+            continue
+        if allowed and _text(_cell(row, fields, push_status_field)) not in allowed:
+            continue
+        push_at = _parse_datetime_value(_cell(row, fields, push_date_field))
+        if not _datetime_in_period(push_at, period_type, period):
+            continue
+        matched_rows += 1
+        amount = sum(sign * _parse_amount(_cell(row, fields, field)) for field, sign in terms)
+        started = _parse_datetime_value(_cell(row, fields, cycle_start_field))
+        days = 0.0
+        if started is not None and push_at is not None:
+            days = max((push_at - started).total_seconds() / 86400.0, 0.0)
+            cycle_rows += 1
+        person = _text(_cell(row, fields, person_field))
+        bucket = persons.setdefault(person, {"amount": 0.0, "days": 0.0, "orders": 0})
+        bucket["amount"] = round(float(bucket["amount"]) + amount, 4)
+        bucket["days"] = round(float(bucket["days"]) + days, 4)
+        bucket["orders"] = int(bucket["orders"]) + 1
+    result: dict[str, dict] = {}
+    for person, bucket in persons.items():
+        if stat == "period_days":
+            orders = int(bucket["orders"])
+            value = round(float(bucket["days"]) / orders, 4) if orders else 0.0
+        else:
+            value = round(float(bucket["amount"]), 4)
+        if config.get("omit_zero_persons", True) and value == 0:
+            continue
+        result[person] = {"value": value, "orders": int(bucket["orders"]), "days": round(float(bucket["days"]), 4)}
+    return {
+        "persons": result,
+        "total": round(sum(float(bucket["value"]) for bucket in result.values()), 4),
+        "matched_rows": matched_rows,
+        "cycle_rows": cycle_rows,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # 应收款账龄计提（金蝶《应收款账龄分析表》）取数执行器
 # --------------------------------------------------------------------------- #
@@ -974,6 +1322,43 @@ async def _resolve_dept_id(db, org_id: int | None, dept_code: str) -> int | None
     ).scalars().first()
 
 
+async def _load_person_index(db) -> dict[str, dict]:
+    """CRM 业务员ID（订单 ``create_id``）→ 标准人员信息。
+
+    解析链：``create_id`` → ``source_person``（``source_type='crm'``，取 ``raw_json.id`` 命中）
+    → 工号（``raw_json.number``）→ ``master_person.code`` 得到标准人员；
+    标准人员匹配不到时只保留 CRM 侧的编码/姓名，业务员行照旧输出、不丢数。
+    """
+    masters = {
+        _text(code): (int(pid), _text(name))
+        for pid, code, name in (
+            await db.execute(select(MasterPersonModel.id, MasterPersonModel.code, MasterPersonModel.name))
+        ).all()
+    }
+    rows = (
+        await db.execute(
+            select(
+                SourcePersonModel.source_code,
+                SourcePersonModel.source_name,
+                SourcePersonModel.raw_json,
+            ).where(SourcePersonModel.source_type == CRM_SOURCE_TYPE)
+        )
+    ).all()
+    index: dict[str, dict] = {}
+    for source_code, source_name, raw in rows:
+        raw = raw if isinstance(raw, dict) else {}
+        crm_id = raw.get("id")
+        if crm_id is None:
+            continue
+        person_id, master_name = masters.get(_text(raw.get("number")), (None, ""))
+        index[str(crm_id)] = {
+            "person_id": person_id,
+            "person_code": _text(source_code) or f"CRM{crm_id}",
+            "person_name": _text(source_name) or master_name or f"CRM{crm_id}",
+        }
+    return index
+
+
 async def _latest_success_run(db, job_id: int, period_value: str | None = None) -> MetaSyncRunModel | None:
     """取该任务在指定期间最近一次成功的同步批次（期间为空则取最近一次）。
 
@@ -1028,10 +1413,11 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
             METRIC_SUM_KIND,
             METRIC_SCALE_KIND,
             METRIC_RATIO_KIND,
+            METRIC_RATIO_PERSON_KIND,
             METRIC_DIFF_KIND,
             METRIC_BALANCE_AVG_KIND,
         ):
-            if kind == METRIC_RATIO_KIND:
+            if kind in (METRIC_RATIO_KIND, METRIC_RATIO_PERSON_KIND):
                 # 比率指标：分子与分母各是一组指标，分别求和后再相除；
                 # 分子/分母还可各带一组减项（加项之和 − 减项之和），如安全边际率的分子是「总收益 − 盈亏平衡点销售额」
                 numerator_codes = _normalize_metric_codes(config.get("numerator_metric_codes"))
@@ -1072,7 +1458,7 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
                 if id_by_code[code] == metric.id:
                     raise ValueError(f"汇总指标不能把自己列为组成指标: {code}")
                 component_metrics.append((id_by_code[code], code))
-            if kind == METRIC_RATIO_KIND:
+            if kind in (METRIC_RATIO_KIND, METRIC_RATIO_PERSON_KIND):
                 numerator_metrics = [(id_by_code[code], code) for code in numerator_codes]
                 denominator_metrics = [(id_by_code[code], code) for code in denominator_codes]
                 numerator_subtrahend_metrics = [
@@ -1129,6 +1515,55 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
                 )
             if not has_component:
                 logger.warning(f"单据金额指标 {metric.code} 的组成来源都没有启用的同步任务")
+        elif kind in CRM_PERSON_KINDS:
+            # 业务员明细指标：``components`` 每项一个口径分支（内贸 / 外贸），
+            # 分支里以 ``*_source_object_code`` 声明来源对象（订单明细、发货明细），
+            # 计算时按各自来源的同步任务取该期间的原始明细，再按业务员分组。
+            raw_components = config.get("components")
+            if not isinstance(raw_components, list) or not raw_components:
+                raise ValueError(f"业务员明细指标缺少 components 配置: {metric.code}")
+            for comp in raw_components:
+                if not isinstance(comp, dict):
+                    raise ValueError(f"业务员明细指标 components 配置项必须是对象: {metric.code}")
+                jobs_by_key: dict[str, list] = {}
+                for key, value in comp.items():
+                    # 兼容 ``source_object_code`` 与 ``order_source_object_code`` 这类带前缀的键
+                    if "source_object_code" not in str(key):
+                        continue
+                    comp_code = _text(value)
+                    if not comp_code:
+                        continue
+                    comp_object = (
+                        await db.execute(select(SourceObjectModel.id).where(SourceObjectModel.code == comp_code))
+                    ).scalars().first()
+                    if comp_object is None:
+                        raise ValueError(f"来源对象不存在: {comp_code}")
+                    comp_rows = (
+                        await db.execute(
+                            select(
+                                MetaSyncJobModel.id,
+                                MetaSyncJobModel.org_code,
+                                MetaSyncJobModel.request_params,
+                                MetaSyncJobModel.variables,
+                            )
+                            .where(
+                                MetaSyncJobModel.source_object_id == comp_object,
+                                MetaSyncJobModel.status == 0,
+                            )
+                            .order_by(MetaSyncJobModel.org_code.asc(), MetaSyncJobModel.id.asc())
+                        )
+                    ).all()
+                    jobs_by_key[str(key)] = [
+                        (int(row[0]), str(row[1] or ""), dict(row[2] or {}), list(row[3] or []))
+                        for row in comp_rows
+                    ]
+                    # 一并登记到 job_rows：让 ``_ensure_period_batches`` 能补当期缺的同步批次
+                    job_rows.extend(comp_rows)
+                # 指标级配置（value_mode / stat / lookback_periods 等）+ 分支级配置合并，
+                # 分支同名键优先；这样取数执行器既能读分支口径，也能读到指标级开关
+                component_jobs.append({"config": {**config, **comp}, "jobs_by_key": jobs_by_key})
+            if not any(comp["jobs_by_key"].values() for comp in component_jobs):
+                logger.warning(f"业务员明细指标 {metric.code} 的组成来源都没有启用的同步任务")
         else:
             source_object_code = str(config.get("source_object_code") or "")
             source_object = (
@@ -1360,6 +1795,278 @@ async def _sum_component_values_by_org(
     return {org_id: round(value, 4) for org_id, value in totals.items()}, row_count
 
 
+async def _load_run_payload(job_id: int, period_value: str) -> dict | None:
+    """读取某同步任务在指定期间最近一次成功批次的原始返回（无批次返回 ``None``）。"""
+    async with async_db_session() as db:
+        run = await _latest_success_run(db, job_id, period_value)
+        return dict(run.rows_json or {}) if run is not None else None
+
+
+async def _aggregate_crm_person_amount(context: dict) -> dict:
+    """业务员明细指标取数：按口径分支读同步批次明细，汇总成「业务员 → 指标值」。
+
+    - ``crm_person_amount``：直接按订单明细的 ``create_id`` 分组（按建单月取当期批次）。
+    - ``crm_shipment_person_amount``：先按订单明细建「订单号 → 业务员 / 未税单价」索引，
+      再按发货明细结转（``value_mode`` = ``amount`` 金额 / ``qty`` 数量）；订单明细按
+      ``lookback_periods`` 个期间回看（部分订单在发货月之前创建），缺失期间按需回补取数。
+    - ``crm_order_push_person``：按订单的 **ERP 下推时间** 落在当期过滤（下单月与下推月
+      通常不同月，同样按 ``lookback_periods`` 回看）；``stat`` = ``amount`` 输出下推金额，
+      ``period_days`` 输出下推周期 = Σ(下推时间 − 建单时间) ÷ 下推订单数 —— 平均值不能逐单
+      相加，因此业务员与公司合计都按「天数和 ÷ 订单数和」加权。
+    """
+    config = context["config"]
+    kind = str(config.get("kind") or "")
+    period = context["period"]
+    period_type = context["period_type"]
+    lookback = max(int(config.get("lookback_periods") or 1), 1)
+    backfill_lookback = bool(config.get("backfill_lookback", True))
+    is_push_kind = kind == CRM_ORDER_PUSH_PERSON_KIND
+    is_quote_kind = kind == CRM_QUOTE_PERSON_KIND
+    is_avg_mode = is_push_kind and str(config.get("stat") or "amount") == "period_days"
+    quote_stat = str(config.get("stat") or "count")
+    value_mode = str(config.get("value_mode") or "amount")
+    is_customer_count = kind == CRM_PERSON_AMOUNT_KIND and value_mode == "count_customers"
+    is_order_count = kind == CRM_PERSON_AMOUNT_KIND and value_mode == "count_orders"
+    omit_zero = bool(config.get("omit_zero_persons", True))
+    # 累加器：普通口径累加 value；平均口径累加 days / orders（orders 兼作行数）
+    buckets: dict[str, dict] = {}
+    matched_rows = 0
+    missing_rows = 0
+    missing_orders: set[str] = set()
+    backfilled_periods: list[str] = []
+
+    def merge(person_buckets: dict[str, dict]) -> None:
+        for person, item in person_buckets.items():
+            bucket = buckets.setdefault(person, {})
+            for key, value in item.items():
+                if key == "customers":
+                    bucket.setdefault("customers", set()).update(value or ())
+                elif isinstance(value, (int, float)):
+                    bucket[key] = round(float(bucket.get(key) or 0) + float(value), 4)
+
+    async def load_rows(job_id: int, period_value: str, allow_backfill: bool) -> list:
+        """读某期批次明细；缺失且允许时按期间回补一次。"""
+        payload = await _load_run_payload(job_id, period_value)
+        if payload is None and allow_backfill and backfill_lookback:
+            await execute_meta_sync_job(job_id, period_value=period_value)
+            backfilled_periods.append(period_value)
+            payload = await _load_run_payload(job_id, period_value)
+        return (_payload_rows(payload) or []) if payload is not None else []
+
+    async with async_db_session() as db:
+        person_index = await _load_person_index(db)
+    for comp in context["component_jobs"]:
+        cfg = comp["config"]
+        jobs_by_key = comp["jobs_by_key"]
+        if kind == CRM_PERSON_AMOUNT_KIND:
+            for job_id, _org_code, params, _variables in jobs_by_key.get("source_object_code") or []:
+                rows = await load_rows(job_id, period, False)
+                if not rows:
+                    continue
+                extracted = extract_person_amount(rows, _field_order(params), cfg)
+                matched_rows += int(extracted["matched_rows"])
+                merge(extracted["persons"])
+            continue
+        if is_push_kind:
+            # 下推指标：订单按「下推时间落在当期」过滤，需要回看建单月（通常早于下推月）
+            order_jobs = jobs_by_key.get("source_object_code") or []
+            for offset in range(lookback):
+                lookback_period = shift_period(period_type, period, -offset) if offset else period
+                for job_id, _org_code, params, _variables in order_jobs:
+                    rows = await load_rows(job_id, lookback_period, offset > 0)
+                    if not rows:
+                        continue
+                    extracted = extract_push_person_stat(
+                        rows, _field_order(params), cfg, period_type, period
+                    )
+                    matched_rows += int(extracted["matched_rows"])
+                    merge(extracted["persons"])
+            continue
+        if is_quote_kind:
+            # 报价指标：接口已按 status='E'（已审核）与报价月过滤，直接按业务员累加计数
+            for job_id, _org_code, params, _variables in jobs_by_key.get("source_object_code") or []:
+                rows = await load_rows(job_id, period, False)
+                if not rows:
+                    continue
+                extracted = extract_quote_person_stat(rows, _field_order(params), cfg)
+                matched_rows += int(extracted["matched_rows"])
+                merge(extracted["persons"])
+            continue
+        # 发货明细：先回看订单明细建索引，再按发货明细结转
+        order_index: dict[str, dict] = {}
+        order_jobs = jobs_by_key.get("order_source_object_code") or []
+        for offset in range(lookback):
+            lookback_period = shift_period(period_type, period, -offset) if offset else period
+            for job_id, _org_code, params, _variables in order_jobs:
+                rows = await load_rows(job_id, lookback_period, offset > 0)
+                if not rows:
+                    continue
+                for number, info in build_order_amount_index(rows, _field_order(params), cfg).items():
+                    order_index.setdefault(number, info)
+        for job_id, _org_code, params, _variables in jobs_by_key.get("shipment_source_object_code") or []:
+            rows = await load_rows(job_id, period, False)
+            if not rows:
+                continue
+            extracted = extract_shipment_person_amount(rows, order_index, cfg)
+            matched_rows += int(extracted["matched_rows"])
+            missing_rows += int(extracted["missing_rows"])
+            missing_orders.update(extracted["missing_orders"])
+            merge(extracted["persons"])
+    persons: dict[str, dict] = {}
+    for person, bucket in buckets.items():
+        orders = int(bucket.get("orders") or 0)
+        if is_customer_count:
+            # 客户数按业务员去重（内贸/外贸同一客户只算一次）
+            value = float(len(bucket.get("customers") or ()))
+            rows = int(bucket.get("rows") or 0)
+        elif is_order_count:
+            value = float(int(bucket.get("rows") or 0))
+            rows = int(bucket.get("rows") or 0)
+        elif is_quote_kind:
+            value = _quote_person_value(quote_stat, bucket)
+            rows = int(bucket.get("count") or 0)
+        elif is_avg_mode:
+            value = round(float(bucket["days"]) / orders, 4) if orders else 0.0
+            rows = orders
+        else:
+            value = round(float(bucket.get("value") or 0), 4)
+            rows = int(bucket.get("rows") or 0)
+        if omit_zero and value == 0:
+            continue
+        persons[person] = {"value": value, "rows": rows}
+    person_meta: dict[str, dict] = {}
+    for person_key in persons:
+        person_meta[person_key] = person_index.get(person_key) or {
+            "person_id": None,
+            "person_code": f"CRM{person_key}" if person_key else "未指定业务员",
+            "person_name": f"CRM{person_key}" if person_key else "未指定业务员",
+        }
+    total_orders = sum(int(bucket.get("orders") or 0) for bucket in buckets.values())
+    total_days = round(sum(float(bucket.get("days") or 0) for bucket in buckets.values()), 4)
+    if is_avg_mode:
+        # 公司口径平均下推周期 = Σ天数 ÷ Σ订单数（不是各业务员周期的平均）
+        total = round(total_days / total_orders, 4) if total_orders else 0.0
+    elif is_customer_count:
+        # 公司口径客户数 = 全部业务员客户并集（同一客户被多人跟过只算一次）
+        all_customers: set = set()
+        for bucket in buckets.values():
+            all_customers |= bucket.get("customers") or set()
+        total = float(len(all_customers))
+    elif is_quote_kind:
+        # 报价类：公司合计同样按 Σ分子 ÷ Σ分母（不能把各业务员的比率相加）
+        total_bucket: dict = {}
+        for bucket in buckets.values():
+            for key, value in bucket.items():
+                if isinstance(value, (int, float)):
+                    total_bucket[key] = float(total_bucket.get(key) or 0) + float(value)
+        total = _quote_person_value(quote_stat, total_bucket)
+    else:
+        total = round(sum(float(bucket["value"]) for bucket in persons.values()), 4)
+    return {
+        "persons": persons,
+        "person_meta": person_meta,
+        "total": total,
+        "matched_rows": matched_rows,
+        "missing_rows": missing_rows,
+        "missing_orders": sorted(missing_orders),
+        "backfilled_periods": sorted(set(backfilled_periods)),
+        "lookback_periods": lookback,
+        "person_count": len(persons),
+        "push_orders": total_orders if is_push_kind else 0,
+    }
+
+
+async def _load_person_metric_rows(
+    db, component_metrics: list[tuple[int, str]], period_type: str, period: str
+) -> dict[str, dict]:
+    """读取若干个业务员维度指标当期「最新版本」的业务员行，合并成 ``{业务员编码: 值+主数据}``。"""
+    merged: dict[str, dict] = {}
+    for component_id, _code in component_metrics:
+        latest = (
+            await db.execute(
+                select(func.max(MetricValueModel.calc_version)).where(
+                    MetricValueModel.metric_id == component_id,
+                    MetricValueModel.period_type == period_type,
+                    MetricValueModel.period_value == period,
+                )
+            )
+        ).scalars().first()
+        if latest is None:
+            continue
+        rows = (
+            await db.execute(
+                select(
+                    MetricValueModel.person_code,
+                    MetricValueModel.person_name,
+                    MetricValueModel.person_id,
+                    MetricValueModel.value,
+                ).where(
+                    MetricValueModel.metric_id == component_id,
+                    MetricValueModel.period_type == period_type,
+                    MetricValueModel.period_value == period,
+                    MetricValueModel.calc_version == int(latest),
+                    MetricValueModel.person_code.is_not(None),
+                )
+            )
+        ).all()
+        for person_code, person_name, person_id, value in rows:
+            key = _text(person_code)
+            item = merged.setdefault(
+                key, {"value": 0.0, "person_name": person_name, "person_id": person_id}
+            )
+            item["value"] = round(float(item["value"]) + float(value or 0), 4)
+    return merged
+
+
+async def _compute_person_ratio(
+    db, context: dict, period_type: str, period: str
+) -> dict:
+    """业务员比率：分子合计 ÷ 分母合计 × ratio_scale，**按业务员分别计算**。
+
+    分母为 0（或该业务员分母指标没有行）时跳过该业务员；公司合计 = Σ分子 ÷ Σ分母 × scale。
+    """
+    config = context["config"]
+    scale = float(config.get("ratio_scale") or 1)
+    numerators = await _load_person_metric_rows(db, context["numerator_metrics"], period_type, period)
+    denominators = await _load_person_metric_rows(db, context["denominator_metrics"], period_type, period)
+    person_meta: dict[str, dict] = {}
+    persons: dict[str, dict] = {}
+    total_num = 0.0
+    total_den = 0.0
+    for person, item in denominators.items():
+        denominator = float(item["value"] or 0)
+        if denominator == 0:
+            continue
+        numerator = float((numerators.get(person) or {}).get("value") or 0)
+        persons[person] = {
+            "value": round(numerator / denominator * scale, 4),
+            "rows": 1,
+            "numerator": round(numerator, 4),
+            "denominator": round(denominator, 4),
+        }
+        person_meta[person] = {
+            "person_id": item.get("person_id"),
+            "person_code": person or "未指定业务员",
+            "person_name": _text(item.get("person_name")) or person or "未指定业务员",
+        }
+        total_num += numerator
+        total_den += denominator
+    total = round(total_num / total_den * scale, 4) if total_den else 0.0
+    return {
+        "persons": persons,
+        "person_meta": person_meta,
+        "total": total,
+        "matched_rows": len(persons),
+        "missing_rows": 0,
+        "missing_orders": [],
+        "backfilled_periods": [],
+        "lookback_periods": 1,
+        "person_count": len(persons),
+        "total_numerator": round(total_num, 4),
+        "total_denominator": round(total_den, 4),
+    }
+
+
 async def refresh_period_batches(metric_id: int, period_value: str) -> list[str]:
     """强制重跑该指标所有同步任务在指定期间的取数批次。
 
@@ -1488,7 +2195,13 @@ async def _execute_metric_calc_inner(
         # 期初期末平均：期初取上一期组成指标结果，先补齐上一期
         balance_begin_period = shift_period(period_type, period, -1)
     backfilled_components: list[str] = []
-    if kind in (METRIC_SUM_KIND, METRIC_SCALE_KIND, METRIC_RATIO_KIND, METRIC_DIFF_KIND):
+    if kind in (
+        METRIC_SUM_KIND,
+        METRIC_SCALE_KIND,
+        METRIC_RATIO_KIND,
+        METRIC_RATIO_PERSON_KIND,
+        METRIC_DIFF_KIND,
+    ):
         # 当期组成指标必须是「今天算的」，否则派生值会滞后一天
         backfilled_components = await _ensure_component_values(context, require_fresh=True)
     elif kind == METRIC_BALANCE_AVG_KIND:
@@ -1522,6 +2235,19 @@ async def _execute_metric_calc_inner(
             logger.warning(
                 f"指标 {context['metric_code']} 期间 {period} 有 {missing_order_count} 张生产订单未取到订单信息"
             )
+    person_result: dict = {}
+    if kind in CRM_PERSON_KINDS:
+        # 业务员明细：写入事务前先完成全部取数/聚合，避免网络取数期间占用写事务
+        person_result = await _aggregate_crm_person_amount(context)
+        if person_result["missing_rows"]:
+            logger.warning(
+                f"指标 {context['metric_code']} 期间 {period} 有 {person_result['missing_rows']} 行发货明细"
+                f"关联不到订单（订单创建月早于 {person_result['lookback_periods']} 期回看窗口）"
+            )
+    if kind == METRIC_RATIO_PERSON_KIND:
+        # 业务员比率：读分子/分母指标当期的业务员行，按人相除（只读，用独立会话）
+        async with async_db_session() as ratio_db:
+            person_result = await _compute_person_ratio(ratio_db, context, period_type, period)
 
     async with async_db_session() as db, db.begin():
         metric_id = context["metric_id"]
@@ -1608,6 +2334,62 @@ async def _execute_metric_calc_inner(
                 "departments": 0,
                 "numerator": numerator,
                 "denominator": denominator,
+                "components": [code for _, code in context["component_metrics"]],
+            }
+        elif kind == METRIC_RATIO_PERSON_KIND:
+            # 业务员比率：按业务员分别相除（复购率 = 本月下单老客户数 ÷ 总客户数）
+            persons = person_result.get("persons") or {}
+            person_meta = person_result.get("person_meta") or {}
+            total = round(float(person_result.get("total") or 0), 4)
+            db.add(
+                MetricValueModel(
+                    metric_id=metric_id,
+                    run_id=run.id,
+                    period_type=period_type,
+                    period_value=period,
+                    org_id=None,
+                    value=total,
+                    version=context["metric_version"],
+                    calc_version=calc_version,
+                    batch_id=batch_id,
+                    filter_signature=signature,
+                    calc_time=datetime.now(UTC),
+                )
+            )
+            for person_key in sorted(persons):
+                bucket = persons[person_key]
+                meta = person_meta.get(person_key) or {}
+                person_code = _text(meta.get("person_code")) or person_key or "未指定业务员"
+                person_name = _text(meta.get("person_name")) or person_code
+                person_id = meta.get("person_id")
+                db.add(
+                    MetricValueModel(
+                        metric_id=metric_id,
+                        run_id=run.id,
+                        period_type=period_type,
+                        period_value=period,
+                        org_id=None,
+                        dept_id=person_id,
+                        dept_code=person_code,
+                        dept_name=person_name,
+                        person_id=person_id,
+                        person_code=person_code,
+                        person_name=person_name,
+                        value=bucket["value"],
+                        version=context["metric_version"],
+                        calc_version=calc_version,
+                        batch_id=batch_id,
+                        filter_signature=signature,
+                        calc_time=datetime.now(UTC),
+                    )
+                )
+            results[""] = {
+                "org_id": None,
+                "total": total,
+                "matched_rows": person_result.get("matched_rows", 0),
+                "numerator": person_result.get("total_numerator", 0),
+                "denominator": person_result.get("total_denominator", 0),
+                "persons": person_result.get("person_count", 0),
                 "components": [code for _, code in context["component_metrics"]],
             }
         elif kind == METRIC_DIFF_KIND:
@@ -1793,8 +2575,70 @@ async def _execute_metric_calc_inner(
                 "departments": 0,
                 "components": component_details,
             }
+        if kind in CRM_PERSON_KINDS:
+            # 业务员明细：写「公司合计行（dept_code 为空）+ 每业务员一行（dept_code = 业务员编码）」；
+            # 明细行带 person_code，开放接口按 level=person 取，组织/部门层查询会自动排除。
+            person_buckets = person_result.get("persons") or {}
+            person_meta = person_result.get("person_meta") or {}
+            # 合计取取数阶段算好的口径：普通指标 = Σ业务员值；下推周期 = Σ天数 ÷ Σ订单数
+            # （不能把各业务员的平均周期直接相加）
+            total = round(float(person_result.get("total") or 0), 4)
+            db.add(
+                MetricValueModel(
+                    metric_id=metric_id,
+                    run_id=run.id,
+                    period_type=period_type,
+                    period_value=period,
+                    org_id=None,
+                    value=total,
+                    version=context["metric_version"],
+                    calc_version=calc_version,
+                    batch_id=batch_id,
+                    filter_signature=signature,
+                    calc_time=datetime.now(UTC),
+                )
+            )
+            for person_key in sorted(person_buckets):
+                bucket = person_buckets[person_key]
+                meta = person_meta.get(person_key) or {}
+                person_code = _text(meta.get("person_code")) or f"CRM{person_key}"
+                person_name = _text(meta.get("person_name")) or person_code
+                person_id = meta.get("person_id")
+                db.add(
+                    MetricValueModel(
+                        metric_id=metric_id,
+                        run_id=run.id,
+                        period_type=period_type,
+                        period_value=period,
+                        org_id=None,
+                        dept_id=person_id,
+                        dept_code=person_code,
+                        dept_name=person_name,
+                        person_id=person_id,
+                        person_code=person_code,
+                        person_name=person_name,
+                        value=bucket["value"],
+                        version=context["metric_version"],
+                        calc_version=calc_version,
+                        batch_id=batch_id,
+                        filter_signature=signature,
+                        calc_time=datetime.now(UTC),
+                    )
+                )
+            results[""] = {
+                "org_id": None,
+                "total": total,
+                "matched_rows": person_result.get("matched_rows", 0),
+                "missing_rows": person_result.get("missing_rows", 0),
+                "missing_orders": person_result.get("missing_orders", []),
+                "persons": person_result.get("person_count", 0),
+                "lookback_periods": person_result.get("lookback_periods", 1),
+                "backfilled_periods": person_result.get("backfilled_periods", []),
+            }
         for job_id, org_code, request_params, _variables in (
-            [] if kind == BILL_AMOUNT_KIND else context["jobs"]
+            []
+            if kind == BILL_AMOUNT_KIND or kind in CRM_PERSON_KINDS
+            else context["jobs"]
         ):
             if job_id in prefetched_payloads:
                 payload = prefetched_payloads[job_id]

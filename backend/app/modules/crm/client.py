@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date, datetime, timedelta
 from typing import Any
+from urllib.parse import parse_qsl
 
 import httpx
 from pydantic import BaseModel
@@ -82,8 +83,14 @@ class CrmClient:
         路径里的查询串。
         """
         params: list[tuple[str, str]] = []
+        # ``path`` 允许自带查询串（如 ``/hs/push/getPush?type=2``，用于同一接口按参数
+        # 拆成多个来源对象）。注意 httpx 只要收到 ``params`` 就会**整体替换** URL 上的
+        # 查询串，所以必须先把路径里的查询串并入 params，否则 type 之类的参数会被静默丢弃。
+        if "?" in path:
+            path, _, path_query = path.partition("?")
+            params.extend(parse_qsl(path_query, keep_blank_values=True))
         if date_range:
-            params = [("dateRange[]", str(item)) for item in date_range if item]
+            params.extend(("dateRange[]", str(item)) for item in date_range if item)
         for key, value in (extra_params or {}).items():
             if value is None or value == "":
                 continue

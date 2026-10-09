@@ -81,6 +81,14 @@ export const ManualBindingAPI = {
   sourceTypes() {
     return request<ApiResponse<{ value: string; label: string }[]>>({ url: "/system-mapping/source-types", method: "get" });
   },
+  /** 手动任务：同步 CRM 人员架构（来源组织 + 来源部门），无定时执行 */
+  syncCrmOrg() {
+    return request<ApiResponse<Record<string, number>>>({ url: "/system-mapping/sync/crm-org", method: "post" });
+  },
+  /** 手动任务：同步 CRM 人员（来源人员），无定时执行 */
+  syncCrmPerson() {
+    return request<ApiResponse<Record<string, number>>>({ url: "/system-mapping/sync/crm-person", method: "post" });
+  },
   bindOrg(body: Record<string, unknown>) {
     return request<ApiResponse>({ url: "/system-mapping/bind/org", method: "post", data: body });
   },

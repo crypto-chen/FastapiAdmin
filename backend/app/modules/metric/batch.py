@@ -205,6 +205,7 @@ async def run_metric_batch(
         "failed": failures,
         "elapsed_seconds": round(time.time() - started, 1),
         "totals": {item["metric_code"]: item["total"] for item in results},
+        "results": results,
     }
     if refreshed is not None:
         summary["refreshed"] = refreshed

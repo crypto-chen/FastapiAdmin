@@ -1,6 +1,7 @@
 import re
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 from pydantic import AfterValidator, PlainSerializer, WithJsonSchema
 
@@ -16,6 +17,33 @@ DateTimeStr = Annotated[
     AfterValidator(lambda x: datetime_validator(x)),
     PlainSerializer(
         lambda x: x.strftime(DATETIME_DISPLAY_FMT) if isinstance(x, datetime) else str(x),
+        return_type=str,
+        when_used="json",
+    ),
+    WithJsonSchema({"type": "string"}, mode="serialization"),
+]
+
+# 北京时间（业务时区，与调度器/期间切分一致）
+CN_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _utc_to_cn(value: datetime) -> datetime:
+    """库内 UTC → 北京时间（naive 值按 UTC 解释，带时区的按自身时区换算）。
+
+    数据库统一以 UTC 落库（见 ``core/base_model.py`` 的 ``datetime.now(UTC)``），
+    而页面是原样展示字符串，不做时区换算。需要展示北京时间(UTC+8)的字段用本函数转换。
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(CN_TZ).replace(tzinfo=None)
+
+
+# 自定义「北京时间」显示类型：序列化时把库内 UTC 时间转成 UTC+8 字符串
+DateTimeCNStr = Annotated[
+    datetime,
+    AfterValidator(lambda x: datetime_validator(x)),
+    PlainSerializer(
+        lambda x: _utc_to_cn(x).strftime(DATETIME_DISPLAY_FMT) if isinstance(x, datetime) else str(x),
         return_type=str,
         when_used="json",
     ),

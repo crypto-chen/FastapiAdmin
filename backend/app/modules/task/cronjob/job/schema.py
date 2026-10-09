@@ -6,6 +6,7 @@ from pydantic import (
 )
 
 from app.core.base_schema import BaseQueryParam, BaseSchema, UserByQueryParam, UserBySchema
+from app.core.validator import DateTimeCNStr
 
 
 class SchedulerStatusSchema(BaseModel):
@@ -85,6 +86,10 @@ class JobOutSchema(JobCreateSchema, BaseSchema, UserBySchema):
     """执行日志响应模型"""
 
     model_config = ConfigDict(from_attributes=True)
+
+    # 库内为 UTC，执行日志页需要北京时间(UTC+8)，覆盖 BaseSchema 的原样输出字段
+    created_time: DateTimeCNStr | None = Field(default=None, description="执行时间(北京时间)")
+    updated_time: DateTimeCNStr | None = Field(default=None, description="更新时间(北京时间)")
 
 
 class JobQueryParam(BaseQueryParam, UserByQueryParam):

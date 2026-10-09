@@ -16,6 +16,7 @@ import ModuleMetadataView from "@views/module_metadata_view/index.vue";
 import ModuleSystemMapping from "@views/module_system_mapping/index.vue";
 import ModuleManualBinding from "@views/module_manual_binding/index.vue";
 import ModuleSysDeptBinding from "@views/module_sys_dept_binding/index.vue";
+import ModuleMasterDataPerson from "@views/module_masterdata/person/index.vue";
 import ModuleMetricValue from "@views/module_metric/value/index.vue";
 import {
   IframeRouteManager,
@@ -36,6 +37,7 @@ const staticPageComponents: Record<string, unknown> = {
   "module_system_mapping/index": ModuleSystemMapping,
   "module_manual_binding/index": ModuleManualBinding,
   "module_sys_dept_binding/index": ModuleSysDeptBinding,
+  "module_masterdata/person/index": ModuleMasterDataPerson,
   "module_metric/value/index": ModuleMetricValue,
 };
 

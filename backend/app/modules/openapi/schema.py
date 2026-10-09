@@ -16,6 +16,7 @@ class OpenClientCreateSchema(BaseModel):
     token_ttl_seconds: int = Field(default=7200, ge=300, le=604800, description="令牌有效期(秒)")
     rate_limit: int = Field(default=600, ge=1, le=100000, description="每分钟最大请求数")
     allow_dept_detail: bool = Field(default=False, description="是否允许查询核算维度明细")
+    allow_person_detail: bool = Field(default=False, description="是否允许查询业务员明细")
     allow_run_calc: bool = Field(default=False, description="是否允许触发指标重算")
     org_scope: list[str] | None = Field(default=None, description="允许的组织编码，空=全部启用组织")
     expire_time: datetime | None = Field(default=None, description="凭证到期时间，空=长期有效")
@@ -40,6 +41,7 @@ class OpenClientUpdateSchema(BaseModel):
     token_ttl_seconds: int | None = Field(default=None, ge=300, le=604800, description="令牌有效期(秒)")
     rate_limit: int | None = Field(default=None, ge=1, le=100000, description="每分钟最大请求数")
     allow_dept_detail: bool | None = Field(default=None, description="是否允许查询核算维度明细")
+    allow_person_detail: bool | None = Field(default=None, description="是否允许查询业务员明细")
     allow_run_calc: bool | None = Field(default=None, description="是否允许触发指标重算")
     org_scope: list[str] | None = Field(default=None, description="允许的组织编码，空=全部启用组织")
     expire_time: datetime | None = Field(default=None, description="凭证到期时间，空=长期有效")
@@ -57,6 +59,7 @@ class OpenClientOutSchema(BaseSchema, UserBySchema):
     token_ttl_seconds: int = Field(default=7200, description="令牌有效期(秒)")
     rate_limit: int = Field(default=600, description="每分钟最大请求数")
     allow_dept_detail: bool = Field(default=False, description="是否允许查询核算维度明细")
+    allow_person_detail: bool = Field(default=False, description="是否允许查询业务员明细")
     allow_run_calc: bool = Field(default=False, description="是否允许触发指标重算")
     org_scope: list[str] | None = Field(default=None, description="允许的组织编码")
     expire_time: datetime | None = Field(default=None, description="凭证到期时间")
@@ -137,7 +140,15 @@ class OpenMetricQuerySchema(BaseModel):
     period_start: str | None = Field(default=None, max_length=32, description="起始期间(含)")
     period_end: str | None = Field(default=None, max_length=32, description="结束期间(含)")
     org_codes: list[str] | None = Field(default=None, max_length=200, description="组织编码，空=授权范围内全部")
-    level: Literal["org", "dept", "all"] = Field(default="org", description="展示层级，默认仅组织合计")
+    person_codes: list[str] | None = Field(
+        default=None, max_length=200, description="业务员编码（如 CRM 用户名），空=全部业务员；level=person 时生效"
+    )
+    person_ids: list[int] | None = Field(
+        default=None, max_length=200, description="业务员主ID（内部标准人员ID），空=全部；level=person 时生效"
+    )
+    level: Literal["org", "dept", "person", "all"] = Field(
+        default="org", description="展示层级：org=组织合计 / dept=核算维度明细 / person=业务员明细 / all=全部"
+    )
     format: Literal["long", "wide"] = Field(default="long", description="返回结构：long=长表 / wide=宽表")
     total_only: bool = Field(
         default=False, description="只返回合计：按「指标 × 期间」汇总，items 为空、结果在 totals 中"
@@ -154,6 +165,9 @@ class OpenMetricValueItemSchema(BaseModel):
     org_name: str | None = Field(default=None, description="组织名称")
     dept_code: str | None = Field(default=None, description="核算维度编码")
     dept_name: str | None = Field(default=None, description="核算维度名称")
+    person_code: str | None = Field(default=None, description="业务员编码（level=person 时返回）")
+    person_name: str | None = Field(default=None, description="业务员姓名（level=person 时返回）")
+    person_id: int | None = Field(default=None, description="业务员主ID（内部标准人员ID，level=person 时返回）")
     value: float = Field(default=0, description="指标值")
     calc_version: int = Field(default=1, description="计算版本")
     calc_time: datetime | None = Field(default=None, description="计算时间")

@@ -80,3 +80,6 @@ AGENTS.md
 .codebuddy
 .agent
 .workbuddy
+
+# 业务员指标结果快照（开发机导出，含本机主数据ID；服务器请用 backfill_person_metrics.py 重算）
+deploy/person-metrics/03_values.sql

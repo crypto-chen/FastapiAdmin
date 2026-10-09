@@ -10,12 +10,16 @@ from app.core.dependencies import AuthPermission, db_getter
 from app.core.router_class import OperationLogRoute
 
 from .schema import (
+    MetricBatchResultSchema,
+    MetricBatchRunRequestSchema,
     MetricCalcRequestSchema,
     MetricCalcResultSchema,
     MetricDefCreateSchema,
     MetricDefOutSchema,
     MetricDefQueryParam,
     MetricDefUpdateSchema,
+    MetricMatrixQueryParam,
+    MetricMatrixResultSchema,
     MetricValueOutSchema,
     MetricValueQueryParam,
 )
@@ -88,6 +92,16 @@ async def page_metric_value(
     return SuccessResponse(data=result, msg="查询指标结果成功")
 
 
+@MetricValueRouter.get("/matrix", response_model=ResponseSchema[MetricMatrixResultSchema])
+async def matrix_metric_value(
+    auth: Annotated[AuthSchema, Security(AuthPermission(["module_metric:value:query"]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    search: Annotated[MetricMatrixQueryParam, Query()],
+) -> JSONResponse:
+    result = await MetricService(auth, db).matrix(search)
+    return SuccessResponse(data=result, msg="查询指标表单成功")
+
+
 @MetricRouter.post("/run/{id}", response_model=ResponseSchema[MetricCalcResultSchema])
 async def run_metric_calc(
     auth: Annotated[AuthSchema, Security(AuthPermission(["module_metric:def:run"]))],
@@ -97,3 +111,13 @@ async def run_metric_calc(
 ) -> JSONResponse:
     result = await MetricService(auth, db).run_calc(id, data)
     return SuccessResponse(data=result, msg="指标计算完成")
+
+
+@MetricRouter.post("/run-batch", response_model=ResponseSchema[MetricBatchResultSchema])
+async def run_metric_batch_calc(
+    auth: Annotated[AuthSchema, Security(AuthPermission(["module_metric:def:run"]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    data: Annotated[MetricBatchRunRequestSchema, Body()],
+) -> JSONResponse:
+    result = await MetricService(auth, db).run_batch(data)
+    return SuccessResponse(data=result, msg="指标重算完成")

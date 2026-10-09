@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.base_schema import BaseQueryParam, BaseSchema, UserByQueryParam, UserBySchema
-from app.core.validator import DateTimeStr
+from app.core.validator import DateTimeCNStr
 
 
 class MetaVariableSchema(BaseModel):
@@ -302,8 +302,8 @@ class MetaSyncRunOutSchema(BaseSchema, UserBySchema):
     batch_id: str | None = Field(default=None, description="批次ID")
     status: str = Field(description="状态")
     row_count: int = Field(default=0, description="行数")
-    started_at: DateTimeStr | None = Field(default=None, description="开始时间")
-    finished_at: DateTimeStr | None = Field(default=None, description="结束时间")
+    started_at: DateTimeCNStr | None = Field(default=None, description="开始时间(北京时间)")
+    finished_at: DateTimeCNStr | None = Field(default=None, description="结束时间(北京时间)")
     error: str | None = Field(default=None, description="错误信息")
 
 

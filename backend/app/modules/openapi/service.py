@@ -344,9 +344,15 @@ class OpenApiService:
 
     # ── 批量取数 ────────────────────────────────────────────────────
     async def query_metrics(self, client: OpenClientModel, payload: OpenMetricQuerySchema) -> dict[str, Any]:
-        if payload.level != "org" and not client.allow_dept_detail:
+        if payload.level in ("dept", "all") and not client.allow_dept_detail:
             raise CustomException(
-                msg="该应用仅开放组织合计，level 只能为 org",
+                msg="该应用仅开放组织合计，level 不能为 dept/all",
+                code=CODE_METRIC_FORBIDDEN,
+                status_code=403,
+            )
+        if payload.level == "person" and not client.allow_person_detail:
+            raise CustomException(
+                msg="该应用未开放业务员明细，level 不能为 person",
                 code=CODE_METRIC_FORBIDDEN,
                 status_code=403,
             )
@@ -390,6 +396,9 @@ class OpenApiService:
             period_start=period_start,
             period_end=period_end,
             level=payload.level,
+            person_codes=payload.person_codes,
+            person_ids=payload.person_ids,
+            total_only=payload.total_only,
         )
         metric_name_by_code = {metric.code: metric.name for metric in metrics}
         if payload.include_meta:
@@ -412,7 +421,7 @@ class OpenApiService:
             # 只给合计：不返回组织明细，按「指标 × 期间」汇总，便于外部系统直接取一个数
             result["totals"] = self._to_totals(items)
             result["items"] = []
-            result["summary"] = self._summary(items, metrics, period_start, period_end)
+            result["summary"] = self._summary(items, metrics, period_start, period_end, payload.level)
         elif payload.format == "wide":
             result["columns"] = [
                 "period_value",
@@ -420,13 +429,16 @@ class OpenApiService:
                 "org_name",
                 "dept_code",
                 "dept_name",
+                "person_id",
+                "person_code",
+                "person_name",
                 *[metric.code for metric in metrics],
             ]
             result["rows"] = self._to_wide(items, metrics)
-            result["summary"] = self._summary(items, metrics, period_start, period_end)
+            result["summary"] = self._summary(items, metrics, period_start, period_end, payload.level)
         else:
             result["items"] = items
-            result["summary"] = self._summary(items, metrics, period_start, period_end)
+            result["summary"] = self._summary(items, metrics, period_start, period_end, payload.level)
         return result
 
     @staticmethod
@@ -478,6 +490,9 @@ class OpenApiService:
         period_start: str,
         period_end: str,
         level: str,
+        person_codes: list[str] | None = None,
+        person_ids: list[int] | None = None,
+        total_only: bool = False,
     ) -> list[dict[str, Any]]:
         """按「指标 × 期间 × 组织（× 维度）」取最新计算版本的结果行。"""
         metric_ids = [metric.id for metric in metrics]
@@ -489,9 +504,28 @@ class OpenApiService:
             MetricValueModel.is_deleted == False,  # noqa: E712
         ]
         if level == "org":
+            # 组织合计层：既没有核算维度、也没有业务员
             base_conditions.append(MetricValueModel.dept_code.is_(None))
+            base_conditions.append(MetricValueModel.person_code.is_(None))
         elif level == "dept":
             base_conditions.append(MetricValueModel.dept_code.is_not(None))
+            base_conditions.append(MetricValueModel.person_code.is_(None))
+        elif level == "person":
+            if total_only:
+                # 「只要合计」时取公司合计层：业务员行是明细，直接相加会把
+                # 平均值（下推周期）与去重计数（老客户数）算错
+                base_conditions.append(MetricValueModel.dept_code.is_(None))
+                base_conditions.append(MetricValueModel.person_code.is_(None))
+            else:
+                base_conditions.append(MetricValueModel.person_code.is_not(None))
+        if person_codes:
+            wanted = [str(code).strip() for code in person_codes if str(code).strip()]
+            if wanted:
+                base_conditions.append(MetricValueModel.person_code.in_(wanted))
+        if person_ids:
+            wanted_ids = [int(item) for item in person_ids if item]
+            if wanted_ids:
+                base_conditions.append(MetricValueModel.person_id.in_(wanted_ids))
 
         # 每个指标 + 期间的最新计算版本（全量重算递增版本，单组织重算沿用版本，
         # 因此同一版本内已包含全部组织，取版本的最大值即可）
@@ -551,6 +585,9 @@ class OpenApiService:
                     org_name=org_name_by_code.get(org_code) if org_code else None,
                     dept_code=row.dept_code,
                     dept_name=row.dept_name,
+                    person_id=row.person_id,
+                    person_code=row.person_code,
+                    person_name=row.person_name,
                     value=_to_float(row.value),
                     calc_version=row.calc_version,
                     calc_time=row.calc_time,
@@ -565,7 +602,14 @@ class OpenApiService:
         metrics: list[MetricDefModel],
         period_start: str,
         period_end: str,
+        level: str = "org",
     ) -> dict[str, Any]:
+        # 合计口径：优先取「组织合计层」行；按业务员取数时没有合计层，退化为业务员行求和
+        total_rows = [
+            item for item in items if not item.get("dept_code") and not item.get("person_code")
+        ]
+        if not total_rows and level == "person":
+            total_rows = items
         return {
             "metric_count": len(metrics),
             "item_count": len(items),
@@ -573,7 +617,8 @@ class OpenApiService:
             "period_end": period_end,
             "period_count": len({item["period_value"] for item in items}),
             "org_count": len({item["org_code"] for item in items if item["org_code"]}),
-            "total": _to_float(sum(item["value"] for item in items if not item["dept_code"])),
+            "person_count": len({item.get("person_code") for item in items if item.get("person_code")}),
+            "total": _to_float(sum(item["value"] for item in total_rows)),
         }
 
     @staticmethod
@@ -581,7 +626,13 @@ class OpenApiService:
         """宽表：一行一个「期间 × 组织（× 维度）」，指标编码变成列。"""
         rows: dict[tuple, dict[str, Any]] = {}
         for item in items:
-            key = (item["period_value"], item["org_code"], item["dept_code"])
+            key = (
+                item["period_value"],
+                item["org_code"],
+                item["dept_code"],
+                item.get("person_id"),
+                item.get("person_code"),
+            )
             row = rows.setdefault(
                 key,
                 {
@@ -590,6 +641,9 @@ class OpenApiService:
                     "org_name": item["org_name"],
                     "dept_code": item["dept_code"],
                     "dept_name": item["dept_name"],
+                    "person_id": item.get("person_id"),
+                    "person_code": item.get("person_code"),
+                    "person_name": item.get("person_name"),
                 },
             )
             row[item["metric_code"]] = item["value"]

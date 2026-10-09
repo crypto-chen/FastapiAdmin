@@ -15,6 +15,14 @@ class MetricDefModel(ModelMixin, UserMixin):
 
     code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True, comment="指标编码")
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="指标名称")
+    category: Mapped[str] = mapped_column(
+        String(64),
+        default="营销中心-主表",
+        server_default="营销中心-主表",
+        nullable=False,
+        index=True,
+        comment="指标分类",
+    )
     excel_code: Mapped[str | None] = mapped_column(
         String(64), default=None, nullable=True, index=True, comment="Excel 科目编码（财务口径对照编码）"
     )
@@ -86,6 +94,12 @@ class MetricValueModel(ModelMixin, UserMixin):
         String(255), default=None, nullable=True, comment="核算维度部门名称(原始)"
     )
     person_id: Mapped[int | None] = mapped_column(Integer, default=None, nullable=True, index=True, comment="人员ID")
+    person_code: Mapped[str | None] = mapped_column(
+        String(64), default=None, nullable=True, index=True, comment="业务员编码(来源原始，未映射也保留)"
+    )
+    person_name: Mapped[str | None] = mapped_column(
+        String(255), default=None, nullable=True, comment="业务员姓名(来源原始)"
+    )
     value: Mapped[float] = mapped_column(Numeric(20, 4), default=0, nullable=False, comment="指标值")
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment="指标版本")
     calc_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment="计算版本")

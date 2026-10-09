@@ -398,7 +398,10 @@ async def fetch_crm_amount_payload(connection_id: int, path: str, params: dict) 
     async with build_crm_client(connection) as client:
         payload = await client.call(path, date_range, extra_params)
     result = dict(payload) if isinstance(payload, dict) else {}
-    result["data_count"] = 1
+    # 明细接口（orderAnalyze / orderShipments）``data`` 是数组，行数按数组长度登记；
+    # 单值接口（金额/比率）仍按 1 行登记，保持原有语义。
+    data = result.get("data")
+    result["data_count"] = len(data) if isinstance(data, list) else 1
     return result
 
 
@@ -435,11 +438,15 @@ async def fetch_source_payload(source_system: SourceSystemModel, source_object: 
 
 
 def extract_payload_rows(payload: dict) -> list:
-    """兼容金蝶 ``Rows`` 与聚水潭 ``datas`` 两种返回结构。"""
+    """兼容金蝶 ``Rows``、聚水潭 ``datas`` 与 CRM ``data``（明细数组）三种返回结构。"""
     for key in ("Rows", "datas"):
         value = payload.get(key)
         if isinstance(value, list):
             return value
+    # CRM 明细接口（orderAnalyze / orderShipments）把明细数组放在 ``data`` 里
+    data = payload.get("data")
+    if isinstance(data, list):
+        return data
     return []
 
 

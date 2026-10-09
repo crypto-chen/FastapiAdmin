@@ -18,6 +18,7 @@ export interface MetricDefItem {
   id: number;
   code: string;
   name: string;
+  category?: string;
   period_type: string;
   status?: number;
   description?: string | null;
@@ -53,6 +54,63 @@ export interface MetricCalcResult {
   skipped_orgs: string[];
 }
 
+export interface MetricMatrixColumn {
+  metric_id: number;
+  code: string;
+  name: string;
+  period_type: string;
+  description?: string | null;
+}
+
+export interface MetricMatrixRow {
+  row_key: string;
+  period_value: string;
+  org_id?: number | null;
+  org_code?: string | null;
+  org_name?: string | null;
+  dept_id?: number | null;
+  dept_code?: string | null;
+  dept_name?: string | null;
+  person_id?: number | null;
+  person_code?: string | null;
+  person_name?: string | null;
+  values: Record<string, number>;
+  calc_versions: Record<string, number>;
+  calc_times: Record<string, string | null>;
+}
+
+export interface MetricMatrixResult {
+  columns: MetricMatrixColumn[];
+  items: MetricMatrixRow[];
+  page_no: number;
+  page_size: number;
+  total: number;
+  has_next: boolean;
+}
+
+export interface MetricMatrixQuery {
+  metric_ids: string;
+  period_type?: string;
+  period_value?: string;
+  org_id?: number;
+  level?: "org" | "dept" | "person" | "all";
+  page_no?: number;
+  page_size?: number;
+}
+
+export interface MetricBatchResult {
+  label: string;
+  period?: string | null;
+  metric_count: number;
+  layer_count: number;
+  success: number;
+  failed: string[];
+  problems: string[];
+  elapsed_seconds: number;
+  totals: Record<string, number>;
+  results: Record<string, unknown>[];
+}
+
 export const MetricAPI = {
   defPage(params: MetricPageQuery) {
     return request<ApiResponse<MetricPageResult<MetricDefItem>>>({
@@ -68,6 +126,14 @@ export const MetricAPI = {
       params,
     });
   },
+  /** 指标表单：一次查询多个指标，按组织/核算维度并排返回。 */
+  matrix(params: MetricMatrixQuery) {
+    return request<ApiResponse<MetricMatrixResult>>({
+      url: "/metric/value/matrix",
+      method: "get",
+      params,
+    });
+  },
   runCalc(metricId: number, body: { period_value?: string; org_codes?: string[] } = {}) {
     // 历史期间首次重算会先按期间回补取数（每个组织一次 ERP 同步），耗时可达数分钟，
     // 因此单独放宽超时（默认全局 15s）。
@@ -76,6 +142,15 @@ export const MetricAPI = {
       method: "post",
       data: body,
       timeout: 15 * 60 * 1000,
+    });
+  },
+  /** 批量重算：metric_ids 为空表示重算全部启用指标（按依赖分层执行）。 */
+  runBatch(body: { metric_ids?: number[]; codes?: string[]; period_value?: string } = {}) {
+    return request<ApiResponse<MetricBatchResult>>({
+      url: "/metric/def/run-batch",
+      method: "post",
+      data: body,
+      timeout: 30 * 60 * 1000,
     });
   },
 };
