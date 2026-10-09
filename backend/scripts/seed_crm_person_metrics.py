@@ -492,6 +492,40 @@ METRICS = [
             "components": [{"label": "报价单", "source_object_code": QUOTE_PATH}],
         },
     },
+    {
+        # 「接单量」= 当期有效订单条数（内贸 + 外贸），客单价的分母；
+        # 财务底稿编码待补：确定后填 excel_code 并重跑本脚本即可
+        "code": "marketing_person_order_count",
+        "name": "营销中心业务员接单量",
+        "excel_code": None,
+        "rule": "接单量（单）= 当期有效订单条数（status=384，剔除作废），"
+        "内贸 + 外贸订单明细按订单创建月 createtime 落当期，按业务员（下单人 create_id）分组；"
+        "不按订单类型/是否出货过滤，也不看金额。",
+        "measures": {
+            "kind": "crm_person_amount",
+            "group_by": "person",
+            "person_field": "create_id",
+            "value_mode": "count_orders",
+            "unit": "单",
+            **VALID_ORDER,
+            "components": intake_components(),
+        },
+    },
+    {
+        "code": "marketing_person_order_price",
+        "name": "营销中心业务员客单价",
+        "excel_code": "STF-50",
+        "rule": "客单价（元/单）= 接单未税（STF-13）÷ 接单量（当期有效订单条数），**按业务员分别相除**；"
+        "分子取「营销中心业务员接单未税」，分母取「营销中心业务员接单量」，同为当月、同一业务员；"
+        "公司合计 = Σ接单未税 ÷ Σ接单量；接单量为 0 的业务员不输出行。",
+        "measures": {
+            "kind": "metric_ratio_person",
+            "numerator_metric_codes": ["marketing_person_order_intake_untaxed"],
+            "denominator_metric_codes": ["marketing_person_order_count"],
+            "ratio_scale": 1,
+            "unit": "元/单",
+        },
+    },
 ]
 
 

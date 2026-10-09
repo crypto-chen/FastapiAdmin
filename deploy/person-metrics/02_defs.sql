@@ -1,8 +1,8 @@
 -- ==========================================================================
 -- 业务员指标 - 元数据 / 来源对象 / 同步任务 / 指标定义（幂等，可重复执行）
--- 生成时间：2026-10-09 14:08
+-- 生成时间：2026-10-09 15:17
 -- 由 backend/scripts/export_person_metrics_sql.py 生成，请勿手工修改
--- 指标 16 个，来源对象 6 个，同步任务 6 个
+-- 指标 18 个，来源对象 6 个，同步任务 6 个
 -- 执行顺序：先 01_schema.sql，再本文件
 -- 所有 INSERT 均按业务唯一键判重：连接按 name、来源系统/对象/指标按 code、同步任务按 name
 -- ==========================================================================
@@ -121,6 +121,16 @@ FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 报价单明细（业务员报价）');
 
 -- 5) 指标定义（16 个业务员指标，含 Excel 科目编码与取数配置）
+
+-- 指标 - marketing_person_order_count
+INSERT INTO metric_def
+  (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
+   source_entity_id, version, status, description, is_deleted, created_time, updated_time)
+VALUES ('8696a1e9-94a2-4f32-800a-717d53313ad2', 'marketing_person_order_count', '营销中心业务员接单量', '营销中心-业务员', NULL, 'month', 0, '接单量（单）= 当期有效订单条数（status=384，剔除作废），内贸 + 外贸订单明细按订单创建月 createtime 落当期，按业务员（下单人 create_id）分组；不按订单类型/是否出货过滤，也不看金额。', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_person_amount","unit":"单","group_by":"person","components":[{"label":"内贸","amount_terms":[{"sign":1,"field":"remove_taxes_freight"}],"source_object_code":"/hs/order/orderAnalyze?type=1"},{"label":"外贸","amount_terms":[{"sign":1,"field":"receivable_CNY"}],"source_object_code":"/hs/order/orderAnalyze?type=2"}],"value_mode":"count_orders","person_field":"create_id","status_allow":["384"],"status_field":"status"}', NULL, 1, 0, '接单量（单）= 当期有效订单条数（status=384，剔除作废），内贸 + 外贸订单明细按订单创建月 createtime 落当期，按业务员（下单人 create_id）分组；不按订单类型/是否出货过滤，也不看金额。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
+  period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
+  dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
+  description = VALUES(description), version = VALUES(version);
 
 -- 指标 STF-10 marketing_person_quote_count
 INSERT INTO metric_def
@@ -267,6 +277,16 @@ INSERT INTO metric_def
   (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
    source_entity_id, version, status, description, is_deleted, created_time, updated_time)
 VALUES ('30496544-74ec-4308-b212-1186a8dc2a17', 'marketing_person_repurchase_rate', '营销中心业务员复购率', '营销中心-业务员', 'STF-49', 'month', 0, '复购率（%）= 本月下单老客户数量 ÷ 总客户数量 × 100%，**按业务员分别计算**（分子为「营销中心业务员本月下单老客户数量」STF-48，分母为「营销中心业务员总客户数量」STF-47，同为当月、同一业务员）；分母为 0 的业务员不输出行；公司合计 = Σ分子 ÷ Σ分母 × 100。', '{"org":false,"dept":true,"person":true}', '{"kind":"metric_ratio_person","unit":"%","ratio_scale":100,"numerator_metric_codes":["marketing_person_old_customer_order_count"],"denominator_metric_codes":["marketing_person_total_customer_count"]}', NULL, 1, 0, '复购率（%）= 本月下单老客户数量 ÷ 总客户数量 × 100%，**按业务员分别计算**（分子为「营销中心业务员本月下单老客户数量」STF-48，分母为「营销中心业务员总客户数量」STF-47，同为当月、同一业务员）；分母为 0 的业务员不输出行；公司合计 = Σ分子 ÷ Σ分母 × 100。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
+  period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
+  dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
+  description = VALUES(description), version = VALUES(version);
+
+-- 指标 STF-50 marketing_person_order_price
+INSERT INTO metric_def
+  (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
+   source_entity_id, version, status, description, is_deleted, created_time, updated_time)
+VALUES ('fbb2be7a-6c99-4569-8d2f-07b4c7af41cc', 'marketing_person_order_price', '营销中心业务员客单价', '营销中心-业务员', 'STF-50', 'month', 0, '客单价（元/单）= 接单未税（STF-13）÷ 接单量（当期有效订单条数），**按业务员分别相除**；分子取「营销中心业务员接单未税」，分母取「营销中心业务员接单量」，同为当月、同一业务员；公司合计 = Σ接单未税 ÷ Σ接单量；接单量为 0 的业务员不输出行。', '{"org":false,"dept":true,"person":true}', '{"kind":"metric_ratio_person","unit":"元/单","ratio_scale":1,"numerator_metric_codes":["marketing_person_order_intake_untaxed"],"denominator_metric_codes":["marketing_person_order_count"]}', NULL, 1, 0, '客单价（元/单）= 接单未税（STF-13）÷ 接单量（当期有效订单条数），**按业务员分别相除**；分子取「营销中心业务员接单未税」，分母取「营销中心业务员接单量」，同为当月、同一业务员；公司合计 = Σ接单未税 ÷ Σ接单量；接单量为 0 的业务员不输出行。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
   period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
   dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
