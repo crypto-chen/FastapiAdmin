@@ -613,6 +613,24 @@ METRICS = [
             ],
         },
     },
+    {
+        "code": "marketing_person_external_shipment_net_untaxed",
+        "name": "营销中心业务员对外出货净额",
+        "excel_code": "STF-17",
+        "rule": "对外出货净额（元）= 货物出货未税（STF-14）+ 设计服务收入（STF-15）+ 退货退款（STF-16，负数），"
+        "**按业务员分别相加**（kind=metric_sum_person，逐个业务员取三个组成指标的当期结果相加）；"
+        "公司合计 = Σ各业务员；某个业务员当月没有某个组成指标的行时按 0 计入；"
+        "三项口径同源（都按业务员维度算好后相加），与公司口径「营销中心对外出货未税销售额（净额）」一致。",
+        "measures": {
+            "kind": "metric_sum_person",
+            "component_metric_codes": [
+                "marketing_person_goods_shipment_untaxed",
+                "marketing_person_design_service_income",
+                "marketing_person_return_refund_untaxed",
+            ],
+            "unit": "元",
+        },
+    },
 ]
 
 

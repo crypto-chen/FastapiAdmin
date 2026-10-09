@@ -87,6 +87,9 @@ METRIC_RATIO_KIND = "metric_ratio"
 # 业务员比率：分子 / 分母都是**业务员维度**指标，按业务员分别相除
 # （如复购率 = 本月下单老客户数 ÷ 总客户数、客单价 = 接单未税 ÷ 订单数）
 METRIC_RATIO_PERSON_KIND = "metric_ratio_person"
+# 业务员汇总：若干**业务员维度**指标的当期结果按业务员相加
+# （如对外出货净额 = 货物出货未税 + 设计服务收入 + 退货退款（负数））
+METRIC_SUM_PERSON_KIND = "metric_sum_person"
 # 指标期初期末平均：自身不取数，值为「上期组成指标合计 × begin_weight + 当期组成指标合计 × end_weight」
 # （如平均库存 =（期初 + 期末）÷ 2；期初取上一期该指标的结果，上期无结果按 0 计入）
 METRIC_BALANCE_AVG_KIND = "metric_balance_avg"
@@ -132,6 +135,7 @@ SUPPORTED_KINDS = {
     METRIC_DIFF_KIND,
     METRIC_BALANCE_AVG_KIND,
     METRIC_RATIO_PERSON_KIND,
+    METRIC_SUM_PERSON_KIND,
     CRM_PERSON_AMOUNT_KIND,
     CRM_SHIPMENT_PERSON_AMOUNT_KIND,
     CRM_ORDER_PUSH_PERSON_KIND,
@@ -227,6 +231,7 @@ METRIC_DEPENDENCY_FIELDS: dict[str, tuple[str, ...]] = {
         "numerator_metric_codes",
         "denominator_metric_codes",
     ),
+    METRIC_SUM_PERSON_KIND: ("component_metric_codes",),
     METRIC_DIFF_KIND: ("addend_metric_codes", "subtrahend_metric_codes"),
 }
 
@@ -1423,6 +1428,7 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
             METRIC_SCALE_KIND,
             METRIC_RATIO_KIND,
             METRIC_RATIO_PERSON_KIND,
+            METRIC_SUM_PERSON_KIND,
             METRIC_DIFF_KIND,
             METRIC_BALANCE_AVG_KIND,
         ):
@@ -1451,10 +1457,14 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
                         f"差额指标缺少 addend_metric_codes / subtrahend_metric_codes 配置: {metric.code}"
                     )
                 codes = metric_dependency_codes(config)
-            else:
+            elif kind in (METRIC_SUM_KIND, METRIC_SCALE_KIND):
                 codes = metric_dependency_codes(config)
                 if not codes:
                     raise ValueError(f"汇总/折算指标缺少 component_metric_codes 配置: {metric.code}")
+            else:
+                codes = metric_dependency_codes(config)
+                if not codes:
+                    raise ValueError(f"业务员汇总指标缺少 component_metric_codes 配置: {metric.code}")
             rows = (
                 await db.execute(
                     select(MetricDefModel.id, MetricDefModel.code).where(MetricDefModel.code.in_(codes))
@@ -2083,6 +2093,43 @@ async def _compute_person_ratio(
     }
 
 
+async def _compute_person_sum(db, context: dict, period_type: str, period: str) -> dict:
+    """业务员汇总：若干业务员维度指标当期结果**按业务员相加**（缺失的组成指标按 0 计入）。
+
+    与 ``metric_sum`` 的区别：后者只汇总「公司合计行」，这里读的是每个业务员的明细行，
+    逐人相加后写回业务员行，公司合计 = Σ 各业务员。
+    """
+    config = context["config"]
+    omit_zero = bool(config.get("omit_zero_persons", True))
+    merged = await _load_person_metric_rows(db, context["component_metrics"], period_type, period)
+    persons: dict[str, dict] = {}
+    person_meta: dict[str, dict] = {}
+    total = 0.0
+    for person, item in merged.items():
+        value = round(float(item.get("value") or 0), 4)
+        if omit_zero and value == 0:
+            continue
+        persons[person] = {"value": value, "rows": 1}
+        person_meta[person] = {
+            "person_id": item.get("person_id"),
+            "person_code": person or "未指定业务员",
+            "person_name": _text(item.get("person_name")) or person or "未指定业务员",
+        }
+        total += value
+    return {
+        "persons": persons,
+        "person_meta": person_meta,
+        "total": round(total, 4),
+        "matched_rows": len(persons),
+        "missing_rows": 0,
+        "missing_orders": [],
+        "backfilled_periods": [],
+        "lookback_periods": 1,
+        "person_count": len(persons),
+        "components": [code for _, code in context["component_metrics"]],
+    }
+
+
 async def refresh_period_batches(metric_id: int, period_value: str) -> list[str]:
     """强制重跑该指标所有同步任务在指定期间的取数批次。
 
@@ -2216,6 +2263,7 @@ async def _execute_metric_calc_inner(
         METRIC_SCALE_KIND,
         METRIC_RATIO_KIND,
         METRIC_RATIO_PERSON_KIND,
+        METRIC_SUM_PERSON_KIND,
         METRIC_DIFF_KIND,
     ):
         # 当期组成指标必须是「今天算的」，否则派生值会滞后一天
@@ -2264,6 +2312,10 @@ async def _execute_metric_calc_inner(
         # 业务员比率：读分子/分母指标当期的业务员行，按人相除（只读，用独立会话）
         async with async_db_session() as ratio_db:
             person_result = await _compute_person_ratio(ratio_db, context, period_type, period)
+    if kind == METRIC_SUM_PERSON_KIND:
+        # 业务员汇总：读各组成指标当期的业务员行，按人相加
+        async with async_db_session() as sum_db:
+            person_result = await _compute_person_sum(sum_db, context, period_type, period)
 
     async with async_db_session() as db, db.begin():
         metric_id = context["metric_id"]
@@ -2352,8 +2404,9 @@ async def _execute_metric_calc_inner(
                 "denominator": denominator,
                 "components": [code for _, code in context["component_metrics"]],
             }
-        elif kind == METRIC_RATIO_PERSON_KIND:
-            # 业务员比率：按业务员分别相除（复购率 = 本月下单老客户数 ÷ 总客户数）
+        elif kind in (METRIC_RATIO_PERSON_KIND, METRIC_SUM_PERSON_KIND):
+            # 业务员比率 / 业务员汇总：按业务员分别相除或相加
+            # （复购率 = 本月下单老客户数 ÷ 总客户数；对外出货净额 = 出货未税 + 设计服务收入 + 退货退款）
             persons = person_result.get("persons") or {}
             person_meta = person_result.get("person_meta") or {}
             total = round(float(person_result.get("total") or 0), 4)
@@ -2403,8 +2456,14 @@ async def _execute_metric_calc_inner(
                 "org_id": None,
                 "total": total,
                 "matched_rows": person_result.get("matched_rows", 0),
-                "numerator": person_result.get("total_numerator", 0),
-                "denominator": person_result.get("total_denominator", 0),
+                **(
+                    {
+                        "numerator": person_result.get("total_numerator", 0),
+                        "denominator": person_result.get("total_denominator", 0),
+                    }
+                    if kind == METRIC_RATIO_PERSON_KIND
+                    else {}
+                ),
                 "persons": person_result.get("person_count", 0),
                 "components": [code for _, code in context["component_metrics"]],
             }
