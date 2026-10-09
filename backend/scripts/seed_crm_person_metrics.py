@@ -526,6 +526,43 @@ METRICS = [
             "unit": "元/单",
         },
     },
+    {
+        "code": "marketing_person_unship_order_inventory",
+        "name": "营销中心业务员库存（未出货订单）",
+        "excel_code": "STF-25",
+        "rule": "库存（元）= 业务员名下**未出货订单**（orderAnalyze 的 chuhuo ≠ 1）的有效订单"
+        "（status=384）未税金额合计（内贸 remove_taxes_freight + 外贸 receivable_CNY），"
+        "按业务员（下单人 create_id）分组；订单明细按 24 期回看（未出货订单可能很久以前建单），"
+        "同一订单只在其建单月的批次里出现，不会重复计算。"
+        "**注意**：订单明细表没有成本字段（material_cost/process_cost 实测全为 0/NULL），"
+        "因此暂以**未税金额**作为订单库存金额口径；与公司口径「营销中心外部订单库存（未税）」"
+        "（来源 /hs/getNoChuHuo，不限建单月）存在差异，业务员版受 24 期回看窗口限制、偏低。",
+        "measures": {
+            "kind": "crm_order_push_person",
+            "group_by": "person",
+            "person_field": "create_id",
+            "stat": "amount",
+            "period_filter": False,  # 存量口径：只看「未出货」，不按下推/其它时间过滤
+            "push_status_allow": [],  # 不按下推状态过滤
+            "lookback_periods": 24,
+            "backfill_lookback": True,
+            "unit": "元",
+            **VALID_ORDER,
+            "row_filters": [{"field": "chuhuo", "op": "not_equals", "value": "1"}],
+            "components": [
+                {
+                    "label": "内贸",
+                    "source_object_code": f"{ORDER_PATH}?type=1",
+                    "amount_terms": [{"field": "remove_taxes_freight", "sign": 1}],
+                },
+                {
+                    "label": "外贸",
+                    "source_object_code": f"{ORDER_PATH}?type=2",
+                    "amount_terms": [{"field": "receivable_CNY", "sign": 1}],
+                },
+            ],
+        },
+    },
 ]
 
 

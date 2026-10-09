@@ -872,8 +872,11 @@ def extract_push_person_stat(
     """按「ERP 下推时间」落在当期过滤订单，按业务员汇总下推金额或平均下推周期。
 
     配置项（``measures`` 或 component）:
-    - ``push_status_field`` / ``push_status_allow``：下推状态，默认 ``erp_push_status`` ∈ ``["1"]``（已下推）。
+    - ``push_status_field`` / ``push_status_allow``：下推状态，默认 ``erp_push_status`` ∈ ``["1"]``（已下推）；
+      传空数组表示不做该过滤（如「未出货订单库存」不按下推状态过滤）。
     - ``push_date_field``：下推时间字段，默认 ``erp_push_date``。
+    - ``period_filter``：是否按 ``push_date_field`` 落在当期过滤，默认 ``True``；传 ``False``
+      表示只看 ``row_filters``（存量类指标：未出货订单不看时间）。
     - ``cycle_start_field``：建单时间字段，默认 ``createtime``（Unix 秒）。
     - ``amount_terms`` / ``amount_field``：下推金额取值项。
     - ``stat``：``amount`` = 下推金额合计；``period_days`` = 下推周期（天）
@@ -888,6 +891,7 @@ def extract_push_person_stat(
     cycle_start_field = str(config.get("cycle_start_field") or "createtime")
     person_field = str(config.get("person_field") or "create_id")
     stat = str(config.get("stat") or "amount")
+    period_filter = bool(config.get("period_filter", True))
     terms = _amount_terms(config)
     persons: dict[str, dict] = {}
     matched_rows = 0
@@ -900,7 +904,7 @@ def extract_push_person_stat(
         if allowed and _text(_cell(row, fields, push_status_field)) not in allowed:
             continue
         push_at = _parse_datetime_value(_cell(row, fields, push_date_field))
-        if not _datetime_in_period(push_at, period_type, period):
+        if period_filter and not _datetime_in_period(push_at, period_type, period):
             continue
         matched_rows += 1
         amount = sum(sign * _parse_amount(_cell(row, fields, field)) for field, sign in terms)

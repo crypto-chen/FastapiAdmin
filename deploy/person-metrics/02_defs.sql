@@ -1,8 +1,8 @@
 -- ==========================================================================
 -- 业务员指标 - 元数据 / 来源对象 / 同步任务 / 指标定义（幂等，可重复执行）
--- 生成时间：2026-10-09 15:17
+-- 生成时间：2026-10-09 15:26
 -- 由 backend/scripts/export_person_metrics_sql.py 生成，请勿手工修改
--- 指标 18 个，来源对象 6 个，同步任务 6 个
+-- 指标 19 个，来源对象 6 个，同步任务 6 个
 -- 执行顺序：先 01_schema.sql，再本文件
 -- 所有 INSERT 均按业务唯一键判重：连接按 name、来源系统/对象/指标按 code、同步任务按 name
 -- ==========================================================================
@@ -207,6 +207,16 @@ INSERT INTO metric_def
   (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
    source_entity_id, version, status, description, is_deleted, created_time, updated_time)
 VALUES ('2458699f-86cb-4f66-93f2-f2d965a2e8d2', 'marketing_person_order_push_period', '营销中心业务员下推周期', '营销中心-业务员', 'STF-24', 'month', 0, '下推周期（天）= Σ(下推时间 erp_push_date − 建单时间 createtime) ÷ 下推订单数，按业务员分别计算（订单数加权，不是各订单周期的简单平均）：取已下推订单（erp_push_status=1）且下推时间落在当期、订单有效 status=384；公司合计同样按「天数和 ÷ 订单数和」加权。', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_order_push_person","stat":"period_days","unit":"天","group_by":"person","components":[{"label":"内贸","amount_terms":[{"sign":1,"field":"remove_taxes_freight"}],"source_object_code":"/hs/order/orderAnalyze?type=1"},{"label":"外贸","amount_terms":[{"sign":1,"field":"receivable_CNY"}],"source_object_code":"/hs/order/orderAnalyze?type=2"}],"person_field":"create_id","status_allow":["384"],"status_field":"status","push_date_field":"erp_push_date","lookback_periods":12,"backfill_lookback":true,"cycle_start_field":"createtime","push_status_allow":["1"],"push_status_field":"erp_push_status"}', NULL, 1, 0, '下推周期（天）= Σ(下推时间 erp_push_date − 建单时间 createtime) ÷ 下推订单数，按业务员分别计算（订单数加权，不是各订单周期的简单平均）：取已下推订单（erp_push_status=1）且下推时间落在当期、订单有效 status=384；公司合计同样按「天数和 ÷ 订单数和」加权。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
+  period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
+  dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
+  description = VALUES(description), version = VALUES(version);
+
+-- 指标 STF-25 marketing_person_unship_order_inventory
+INSERT INTO metric_def
+  (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
+   source_entity_id, version, status, description, is_deleted, created_time, updated_time)
+VALUES ('16c949b3-2868-4bbf-8c80-00a57dcbe62e', 'marketing_person_unship_order_inventory', '营销中心业务员库存（未出货订单）', '营销中心-业务员', 'STF-25', 'month', 0, '库存（元）= 业务员名下**未出货订单**（orderAnalyze 的 chuhuo ≠ 1）的有效订单（status=384）未税金额合计（内贸 remove_taxes_freight + 外贸 receivable_CNY），按业务员（下单人 create_id）分组；订单明细按 24 期回看（未出货订单可能很久以前建单），同一订单只在其建单月的批次里出现，不会重复计算。**注意**：订单明细表没有成本字段（material_cost/process_cost 实测全为 0/NULL），因此暂以**未税金额**作为订单库存金额口径；与公司口径「营销中心外部订单库存（未税）」（来源 /hs/getNoChuHuo，不限建单月）存在差异，业务员版受 24 期回看窗口限制、偏低。', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_order_push_person","stat":"amount","unit":"元","group_by":"person","components":[{"label":"内贸","amount_terms":[{"sign":1,"field":"remove_taxes_freight"}],"source_object_code":"/hs/order/orderAnalyze?type=1"},{"label":"外贸","amount_terms":[{"sign":1,"field":"receivable_CNY"}],"source_object_code":"/hs/order/orderAnalyze?type=2"}],"row_filters":[{"op":"not_equals","field":"chuhuo","value":"1"}],"person_field":"create_id","status_allow":["384"],"status_field":"status","period_filter":false,"lookback_periods":24,"backfill_lookback":true,"push_status_allow":[]}', NULL, 1, 0, '库存（元）= 业务员名下**未出货订单**（orderAnalyze 的 chuhuo ≠ 1）的有效订单（status=384）未税金额合计（内贸 remove_taxes_freight + 外贸 receivable_CNY），按业务员（下单人 create_id）分组；订单明细按 24 期回看（未出货订单可能很久以前建单），同一订单只在其建单月的批次里出现，不会重复计算。**注意**：订单明细表没有成本字段（material_cost/process_cost 实测全为 0/NULL），因此暂以**未税金额**作为订单库存金额口径；与公司口径「营销中心外部订单库存（未税）」（来源 /hs/getNoChuHuo，不限建单月）存在差异，业务员版受 24 期回看窗口限制、偏低。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
   period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
   dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
