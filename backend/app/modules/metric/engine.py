@@ -1859,6 +1859,13 @@ async def _aggregate_crm_person_amount(context: dict) -> dict:
 
     async with async_db_session() as db:
         person_index = await _load_person_index(db)
+    if not person_index:
+        # 没有 CRM 人员主数据时，业务员只能显示 CRM{ID}，提醒先同步人员
+        logger.warning(
+            f"指标 {context['metric_code']} 期间 {period} 未取到 CRM 人员主数据"
+            "（source_person 里没有 source_type='crm' 的记录），业务员名称将显示为 CRM{人员ID}；"
+            "请先执行 scripts/sync_crm_personnel.py --target all 同步 CRM 人员后重算本指标"
+        )
     for comp in context["component_jobs"]:
         cfg = comp["config"]
         jobs_by_key = comp["jobs_by_key"]
