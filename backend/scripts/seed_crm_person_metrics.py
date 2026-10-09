@@ -103,9 +103,8 @@ SOURCE_OBJECTS = [
         "name": "CRM 退款订单明细（业务员退货退款）",
         "with_month": False,
         "request": MONTH_DATE_RANGE,  # 该接口用 dateRange，不认 month
-        # 生产环境该路由尚未发布（2026-10-09 实测 /hs/getReturnOrderDetail 返回 404），
-        # 先把同步任务建好但停用，避免每天 02:00 无意义失败；CRM 发布后把 status 改成 0 即可。
-        "status": 1,
+        # 该路由曾一度 404（未发布），2026-10-09 已发布可用；status=0 正常参与每日同步
+        "status": 0,
     },
 ]
 
@@ -586,32 +585,31 @@ METRICS = [
         "name": "营销中心业务员退货退款",
         "excel_code": "STF-16",
         "rule": "退货退款（元，**负数口径**）= Σ退款订单金额，按业务员（退款单 create_id）分组；"
-        "数据源为 CRM 订单明细 `/hs/order/orderAnalyze`：取订单状态 status=522（退款订单）的记录、"
-        "按订单创建月 createtime 落当期，与 `/hs/getReturnOrder`（公司合计）口径一致；"
-        "内贸取 remove_taxes_freight（= receivable − taxes，去税）、外贸取 receivable_CNY（人民币应收）；"
-        "实测 2026-09 内贸 status=522 明细合计 5,658.99 与公司口径 /hs/getReturnOrder 完全一致。"
+        "数据源为 CRM《退款订单明细》`/hs/getReturnOrderDetail`（已按退款状态 status=522 + "
+        "订单创建月 createtime 过滤）；内贸取 account（= receivable − taxes，去税）、"
+        "外贸取 receivable_CNY（人民币应收）；实测 2026-09 明细 4 条合计 5,658.99，"
+        "与公司口径 /hs/getReturnOrder 完全一致。"
         "与公司口径「营销中心退货/退款（负数）」一致按负数入账，"
-        "便于对外出货净额 = 出货未税 + 设计服务收入 + 退货退款（负数）。"
-        "（CRM 发布 /hs/getReturnOrderDetail 后可切到该明细接口，内贸口径等价。）",
+        "便于对外出货净额 = 出货未税 + 设计服务收入 + 退货退款（负数）。",
         "measures": {
             "kind": "crm_person_amount",
             "group_by": "person",
             "person_field": "create_id",
             "unit": "元",
-            # 退款订单：status=522（与出货/接单的 384 不同），负数入账
-            "status_field": "status",
-            "status_allow": ["522"],
+            # 接口自身已按 status=522 过滤，这里不再按订单状态过滤
+            "status_field": None,
+            "status_allow": [],
             "components": [
                 {
-                    "label": "内贸退款",
-                    "source_object_code": f"{ORDER_PATH}?type=1",
-                    "amount_terms": [{"field": "remove_taxes_freight", "sign": -1}],
-                },
-                {
-                    "label": "外贸退款",
-                    "source_object_code": f"{ORDER_PATH}?type=2",
-                    "amount_terms": [{"field": "receivable_CNY", "sign": -1}],
-                },
+                    "label": "退款订单明细",
+                    "source_object_code": RETURN_DETAIL_PATH,
+                    # 内贸 account / 外贸 receivable_CNY 两个字段都取 -1；
+                    # 缺的那个字段 _parse_amount(None)=0，不会重复计入
+                    "amount_terms": [
+                        {"field": "account", "sign": -1},
+                        {"field": "receivable_CNY", "sign": -1},
+                    ],
+                }
             ],
         },
     },
