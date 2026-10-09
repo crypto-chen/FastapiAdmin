@@ -23,6 +23,7 @@ export interface OpenClientItem {
   token_ttl_seconds: number;
   rate_limit: number;
   allow_dept_detail: boolean;
+  allow_person_detail: boolean;
   allow_run_calc: boolean;
   org_scope?: string[] | null;
   expire_time?: string | null;

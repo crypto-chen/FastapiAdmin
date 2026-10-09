@@ -54,6 +54,11 @@
             {{ row.allow_dept_detail ? "含明细" : "仅合计" }}
           </template>
         </ElTableColumn>
+        <ElTableColumn label="业务员明细" width="110" align="center">
+          <template #default="{ row }">
+            {{ row.allow_person_detail ? "开放" : "未开放" }}
+          </template>
+        </ElTableColumn>
         <ElTableColumn label="限流(次/分)" width="110" align="center">
           <template #default="{ row }">{{ row.rate_limit }}</template>
         </ElTableColumn>
@@ -141,6 +146,10 @@
           <ElSwitch v-model="form.allow_dept_detail" />
           <span class="form-tip">关闭时只返回组织合计；开启后对方可查部门/客户明细</span>
         </ElFormItem>
+        <ElFormItem label="业务员明细">
+          <ElSwitch v-model="form.allow_person_detail" />
+          <span class="form-tip">关闭时 level=person 会被拒绝（403）；开启后对方可按业务员取数</span>
+        </ElFormItem>
         <ElFormItem label="允许触发重算">
           <ElSwitch v-model="form.allow_run_calc" />
           <span class="form-tip">开启后对方可调重算接口（耗时较长，谨慎开放）</span>
@@ -220,6 +229,7 @@ const form = reactive({
   token_ttl_seconds: 7200,
   org_scope: [] as string[],
   allow_dept_detail: false,
+  allow_person_detail: false,
   allow_run_calc: false,
   ip_whitelist: "",
   expire_time: "" as string | null,
@@ -291,6 +301,7 @@ function resetForm() {
     token_ttl_seconds: 7200,
     org_scope: [],
     allow_dept_detail: false,
+    allow_person_detail: false,
     allow_run_calc: false,
     ip_whitelist: "",
     expire_time: "",
@@ -317,6 +328,7 @@ function openEdit(row: OpenClientItem) {
     token_ttl_seconds: row.token_ttl_seconds,
     org_scope: row.org_scope ?? [],
     allow_dept_detail: row.allow_dept_detail,
+    allow_person_detail: row.allow_person_detail,
     allow_run_calc: row.allow_run_calc,
     ip_whitelist: row.ip_whitelist ?? "",
     expire_time: row.expire_time ? row.expire_time.replace(" ", "T").slice(0, 19) : "",
@@ -334,6 +346,7 @@ function buildPayload() {
     token_ttl_seconds: form.token_ttl_seconds,
     org_scope: form.org_scope.length ? [...form.org_scope] : null,
     allow_dept_detail: form.allow_dept_detail,
+    allow_person_detail: form.allow_person_detail,
     allow_run_calc: form.allow_run_calc,
     ip_whitelist: form.ip_whitelist || null,
     expire_time: form.expire_time || null,
