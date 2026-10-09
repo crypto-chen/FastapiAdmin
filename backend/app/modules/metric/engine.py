@@ -2098,15 +2098,17 @@ async def _compute_person_sum(db, context: dict, period_type: str, period: str) 
 
     与 ``metric_sum`` 的区别：后者只汇总「公司合计行」，这里读的是每个业务员的明细行，
     逐人相加后写回业务员行，公司合计 = Σ 各业务员。
+    配置 ``scale``（默认 1）时先相加再按系数折算，如「营销结算收入10% = 对外出货净额 × 10%」。
     """
     config = context["config"]
     omit_zero = bool(config.get("omit_zero_persons", True))
+    scale = float(config.get("scale") or 1)
     merged = await _load_person_metric_rows(db, context["component_metrics"], period_type, period)
     persons: dict[str, dict] = {}
     person_meta: dict[str, dict] = {}
     total = 0.0
     for person, item in merged.items():
-        value = round(float(item.get("value") or 0), 4)
+        value = round(float(item.get("value") or 0) * scale, 4)
         if omit_zero and value == 0:
             continue
         persons[person] = {"value": value, "rows": 1}

@@ -631,6 +631,20 @@ METRICS = [
             "unit": "元",
         },
     },
+    {
+        "code": "marketing_person_settlement_income",
+        "name": "营销中心业务员营销结算收入10%",
+        "excel_code": "STF-18",
+        "rule": "营销结算收入10%（元）= 对外出货净额（STF-17）× 10%，**按业务员分别折算**"
+        "（kind=metric_sum_person + scale=0.1，逐个业务员取当期净额乘 10%）；公司合计 = Σ各业务员；"
+        "与公司口径「营销中心总收益（营销结算收入）」= 对外出货未税净额 × 10% 一致。",
+        "measures": {
+            "kind": "metric_sum_person",
+            "component_metric_codes": ["marketing_person_external_shipment_net_untaxed"],
+            "scale": 0.1,
+            "unit": "元",
+        },
+    },
 ]
 
 
