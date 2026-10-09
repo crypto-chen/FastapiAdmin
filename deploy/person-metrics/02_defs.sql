@@ -1,8 +1,8 @@
 -- ==========================================================================
 -- 业务员指标 - 元数据 / 来源对象 / 同步任务 / 指标定义（幂等，可重复执行）
--- 生成时间：2026-10-09 17:47
+-- 生成时间：2026-10-09 17:50
 -- 由 backend/scripts/export_person_metrics_sql.py 生成，请勿手工修改
--- 指标 22 个，来源对象 7 个，同步任务 7 个
+-- 指标 23 个，来源对象 7 个，同步任务 7 个
 -- 执行顺序：先 01_schema.sql，再本文件
 -- 所有 INSERT 均按业务唯一键判重：连接按 name、来源系统/对象/指标按 code、同步任务按 name
 -- ==========================================================================
@@ -262,6 +262,16 @@ INSERT INTO metric_def
   (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
    source_entity_id, version, status, description, is_deleted, created_time, updated_time)
 VALUES ('16c949b3-2868-4bbf-8c80-00a57dcbe62e', 'marketing_person_unship_order_inventory', '营销中心业务员库存（未出货订单）', '营销中心-业务员', 'STF-25', 'month', 0, '库存（元）= 业务员名下**未出货订单**（orderAnalyze 的 chuhuo ≠ 1）的有效订单（status=384）未税金额合计（内贸 remove_taxes_freight + 外贸 receivable_CNY），按业务员（下单人 create_id）分组；订单明细按 24 期回看（未出货订单可能很久以前建单），同一订单只在其建单月的批次里出现，不会重复计算。**注意**：订单明细表没有成本字段（material_cost/process_cost 实测全为 0/NULL），因此暂以**未税金额**作为订单库存金额口径；与公司口径「营销中心外部订单库存（未税）」（来源 /hs/getNoChuHuo，不限建单月）存在差异，业务员版受 24 期回看窗口限制、偏低。', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_order_push_person","stat":"amount","unit":"元","group_by":"person","components":[{"label":"内贸","amount_terms":[{"sign":1,"field":"remove_taxes_freight"}],"source_object_code":"/hs/order/orderAnalyze?type=1"},{"label":"外贸","amount_terms":[{"sign":1,"field":"receivable_CNY"}],"source_object_code":"/hs/order/orderAnalyze?type=2"}],"row_filters":[{"op":"not_equals","field":"chuhuo","value":"1"}],"person_field":"create_id","status_allow":["384"],"status_field":"status","period_filter":false,"lookback_periods":24,"backfill_lookback":true,"push_status_allow":[]}', NULL, 1, 0, '库存（元）= 业务员名下**未出货订单**（orderAnalyze 的 chuhuo ≠ 1）的有效订单（status=384）未税金额合计（内贸 remove_taxes_freight + 外贸 receivable_CNY），按业务员（下单人 create_id）分组；订单明细按 24 期回看（未出货订单可能很久以前建单），同一订单只在其建单月的批次里出现，不会重复计算。**注意**：订单明细表没有成本字段（material_cost/process_cost 实测全为 0/NULL），因此暂以**未税金额**作为订单库存金额口径；与公司口径「营销中心外部订单库存（未税）」（来源 /hs/getNoChuHuo，不限建单月）存在差异，业务员版受 24 期回看窗口限制、偏低。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
+  period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
+  dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
+  description = VALUES(description), version = VALUES(version);
+
+-- 指标 STF-26 marketing_person_variable_expense_allocation
+INSERT INTO metric_def
+  (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
+   source_entity_id, version, status, description, is_deleted, created_time, updated_time)
+VALUES ('1337fd89-509f-413d-8cca-10e53cf4fb5f', 'marketing_person_variable_expense_allocation', '营销中心业务员变动费用分摊', '营销中心-业务员', 'STF-26', 'month', 0, '变动费用分摊（元）= 业务员收入（STF-18 营销结算收入10%）÷ 总收入（ORD-01 营销中心接单金额·未税）× 变动费用合计（CM-01），按业务员分别计算（kind=metric_alloc_person）；分母与费用池都取公司口径指标的当期合计行；注意：分母用 ORD-01（接单金额）时各业务员分摊额合计只覆盖费用池的一部分；若改为「按各业务员收入占比分摊（合计=费用池）」，把 base_metric_codes 置空即可（用 Σ业务员基数作分母）。', '{"org":false,"dept":true,"person":true}', '{"kind":"metric_alloc_person","unit":"元","base_metric_codes":["marketing_order_intake_untaxed"],"pool_metric_codes":["marketing_variable_expense_total"],"share_metric_codes":["marketing_person_settlement_income"]}', NULL, 1, 0, '变动费用分摊（元）= 业务员收入（STF-18 营销结算收入10%）÷ 总收入（ORD-01 营销中心接单金额·未税）× 变动费用合计（CM-01），按业务员分别计算（kind=metric_alloc_person）；分母与费用池都取公司口径指标的当期合计行；注意：分母用 ORD-01（接单金额）时各业务员分摊额合计只覆盖费用池的一部分；若改为「按各业务员收入占比分摊（合计=费用池）」，把 base_metric_codes 置空即可（用 Σ业务员基数作分母）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
   period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
   dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),

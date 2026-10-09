@@ -645,6 +645,23 @@ METRICS = [
             "unit": "元",
         },
     },
+    {
+        "code": "marketing_person_variable_expense_allocation",
+        "name": "营销中心业务员变动费用分摊",
+        "excel_code": "STF-26",
+        "rule": "变动费用分摊（元）= 业务员收入（STF-18 营销结算收入10%）÷ 总收入（ORD-01 营销中心接单金额·未税）"
+        "× 变动费用合计（CM-01），按业务员分别计算（kind=metric_alloc_person）；"
+        "分母与费用池都取公司口径指标的当期合计行；"
+        "注意：分母用 ORD-01（接单金额）时各业务员分摊额合计只覆盖费用池的一部分；"
+        "若改为「按各业务员收入占比分摊（合计=费用池）」，把 base_metric_codes 置空即可（用 Σ业务员基数作分母）。",
+        "measures": {
+            "kind": "metric_alloc_person",
+            "share_metric_codes": ["marketing_person_settlement_income"],
+            "base_metric_codes": ["marketing_order_intake_untaxed"],
+            "pool_metric_codes": ["marketing_variable_expense_total"],
+            "unit": "元",
+        },
+    },
 ]
 
 
