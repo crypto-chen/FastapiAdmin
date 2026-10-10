@@ -28,6 +28,7 @@
 - **2026-10-09** 业务员指标扩充到 23 个：新增取数类型 `metric_alloc_person`（业务员基数 ÷ 分摊基数总额 × 待分摊费用池，`base_metric_codes` 留空则用 Σ业务员基数，即按占比全额分摊）与指标 `marketing_person_variable_expense_allocation`（STF-26 变动费用分摊 = STF-18 ÷ ORD-01 × CM-01；2026-09 = 27,421.31；**口径已确认保持以 ORD-01 为分母**，分摊合计小于费用池属预期）
 - **2026-10-10** 业务员指标扩充到 24 个：新增 `marketing_person_fixed_expense_allocation`（STF-28 固定费用分摊 = STF-18 ÷ ORD-01 × CM-04 固定费用合计；2026-09 = 17,866.54，口径与 STF-26 一致、业务员逐人校验 0 差异）
 - **2026-10-10** 业务员指标扩充到 25 个：新增取数类型 `metric_diff_person`（加项业务员指标 − 减项业务员指标，按业务员分别相减、缺失项按 0）与指标 `marketing_person_contribution_margin`（STF-27 边际贡献 = STF-18 营销结算收入10% − STF-26 变动费用分摊；2026-09 = 898,247.07，业务员逐人校验 0 差异）
+- **2026-10-10** 业务员指标扩充到 26 个：新增 `marketing_person_hq_allocation`（STF-29 总部分摊 = STF-17 对外出货净额 × 8%，`metric_sum_person` + `scale=0.08` 按业务员分别折算；2026-09 = 740,534.71，业务员逐人校验 0 差异）
 - **2026-10-09** 开放接口支持**业务员维度**：`POST /open/v1/metrics/query` 新增 `level=person` 与 `person_codes` / `person_ids` 过滤，返回行补 `person_id`（业务员主ID，内部标准人员）/ `person_code` / `person_name`（宽表同名列），接入应用新增权限开关 `open_client.allow_person_detail`
 - **2026-10-09** 指标结果页新增「业务员明细」视图：层级筛选增加 `person`（对应后端 `level=person`），表格在含业务员行时自动多显示一列「业务员」，合计行按「有组织合计行则用它、否则累加业务员行」取值（`frontend/web/src/views/module_metric/value/index.vue`）
 - **2026-10-09** CRM 人员同步改为两个**手动任务**（不注册定时任务）：「同步 CRM 人员架构」（来源组织+部门）与「同步 CRM 人员」（来源人员）。入口三处共用 `backend/app/modules/crm/personnel_sync.py`：人工绑定页两个按钮、接口 `POST /system-mapping/sync/crm-org` 与 `/sync/crm-person`（权限 `module_mapping:sync:org|person`）、脚本 `python scripts/sync_crm_personnel.py --target {org|person|all}`

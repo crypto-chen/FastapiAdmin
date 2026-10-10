@@ -693,6 +693,19 @@ METRICS = [
             "unit": "元",
         },
     },
+    {
+        "code": "marketing_person_hq_allocation",
+        "name": "营销中心业务员总部分摊",
+        "excel_code": "STF-29",
+        "rule": "总部分摊（元）= 对外出货净额（STF-17）× 8%，**按业务员分别折算**"
+        "（kind=metric_sum_person + scale=0.08，逐个业务员取当期净额乘 8%）；公司合计 = Σ各业务员。",
+        "measures": {
+            "kind": "metric_sum_person",
+            "component_metric_codes": ["marketing_person_external_shipment_net_untaxed"],
+            "scale": 0.08,
+            "unit": "元",
+        },
+    },
 ]
 
 
