@@ -47,6 +47,7 @@
 - **2026-10-10** 缓存读取抗抖动：`RedisCURD.mget` 失败后断开连接池重试一次，仍失败才记错误（日志带异常类型、key 数量与首个 key），避免空闲连接被回收时偶发 `'NoneType' object is not callable` 被放大成业务异常
 - **2026-10-10** 指标计算警告同步批次失败：该期间有成功批次但**最新一次同步失败**时，计算日志明确提示「正在复用较早的成功批次（数据可能不是最新）」并指向同步任务日志，避免来源同步失败（如聚水潭 IP 白名单、金蝶账号登录失败）被静默忽略
 - **2026-10-10** 新增排查脚本 `backend/scripts/check_sync_failures.py`：列出最近失败的元数据同步批次（任务名、期间、错误摘要）并按任务汇总次数
+- **2026-10-10** 同步回补增加冷却期：`measures.backfill_cooldown_minutes`（默认 30 分钟）内刚失败过的「任务 × 期间」不再被指标计算反复触发重试（来源挂掉时如聚水潭 IP 未加白名单，原先每次计算都会重新打一次外部接口并写失败日志）
 - **2026-10-09** 修复「元数据配置 → 指标定义」列表整体报错：`MetricDefOutSchema` 沿用了创建校验的 `description` 500 字上限，而库中该列是 Text、初始化脚本会直写长篇口径说明（`seed_crm_person_metrics.py` 实测 508 字），输出校验失败让整页分页 500，前端表现为「组件渲染异常」。输出不再校验长度，写入上限同步放宽到 4000 字（`backend/app/modules/metric/schema.py`），并补回归用例 `test_page_tolerates_description_over_create_limit`
 - **2026-10-09** 修复 CRM 客户端路径查询串被丢弃：`CrmClient.call` 传入 `params` 时 httpx 会整体替换 URL 上的查询串，导致 `/hs/order/orderAnalyze?type=2` 退化为默认内贸（外贸数据被静默写成内贸）；现在先把路径查询串并入 `params`，`/hs/push/getPush?type=2` 这类按参数拆分的来源对象同样受益
 - **2026-10-09** 元数据同步与指标引擎支持 CRM 明细数组：`extract_payload_rows` / `_payload_rows` 兼容 `data` 为数组的响应（订单 / 发货明细），同步日志行数按数组长度登记

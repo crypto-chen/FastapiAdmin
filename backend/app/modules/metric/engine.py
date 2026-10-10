@@ -1707,31 +1707,52 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
 async def _ensure_period_batches(context: dict) -> list[str]:
     """确保每个组织都有该期间的同步批次；缺失的用期间覆盖变量回补一次。
 
+    ``measures.backfill_cooldown_minutes``（默认 30）内的失败不再重试：外部来源挂掉时
+    （如聚水潭 IP 未加白名单、金蝶账号登录失败），每次指标计算都会重新触发一次同步，
+    既刷失败日志又拖慢计算；同一个「任务 × 期间」最近一次失败仍在冷却期内则跳过本轮回补。
+
     返回被回补的组织编码列表。
     """
     period = context["period"]
+    cooldown_minutes = int(context["config"].get("backfill_cooldown_minutes") or 30)
+    cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=max(cooldown_minutes, 0))
     missing: list[tuple[int, str]] = []
+    cooling: list[tuple[int, str]] = []
     async with async_db_session() as db:
         for job_id, org_code, _params, _variables in context["jobs"]:
-            if await _latest_success_run(db, job_id, period) is None:
-                missing.append((job_id, org_code))
-                continue
-            # 该期间有成功批次、但**最新一次运行是失败**时提示出来：
-            # 这种情况计算会静默复用旧批次（数据是旧的），此前只体现在同步日志里，容易漏看
-            latest_status = (
+            latest_status, latest_started = (
                 await db.execute(
-                    select(MetaSyncRunModel.status)
+                    select(MetaSyncRunModel.status, MetaSyncRunModel.started_at)
                     .where(MetaSyncRunModel.job_id == job_id, MetaSyncRunModel.period_value == period)
                     .order_by(MetaSyncRunModel.id.desc())
                     .limit(1)
                 )
-            ).scalars().first()
+            ).first() or (None, None)
+            if await _latest_success_run(db, job_id, period) is None:
+                if (
+                    cooldown_minutes > 0
+                    and latest_status == "failed"
+                    and latest_started is not None
+                    and _as_utc(latest_started) >= cooldown_cutoff
+                ):
+                    cooling.append((job_id, org_code))
+                    continue
+                missing.append((job_id, org_code))
+                continue
+            # 该期间有成功批次、但**最新一次运行是失败**时提示出来：
+            # 这种情况计算会静默复用旧批次（数据是旧的），此前只体现在同步日志里，容易漏看
             if latest_status == "failed":
                 logger.warning(
                     f"指标 {context['metric_code']} 期间 {period} 的同步任务 {job_id} 最新一次运行失败，"
                     "本次计算复用该期间较早的成功批次（数据可能不是最新）；"
                     "请查看「元数据管理 → 同步任务」的运行日志"
                 )
+    for job_id, org_code in cooling:
+        logger.warning(
+            f"指标 {context['metric_code']} 期间 {period} 缺同步批次，且同步任务 {job_id} "
+            f"{cooldown_minutes} 分钟内刚失败过，本轮不再重试（避免反复打外部接口）；"
+            "修复来源（如 IP 白名单 / 账号）后手动重算即可补齐"
+        )
     for job_id, org_code in missing:
         logger.info(f"指标 {context['metric_code']} 期间 {period} 缺少组织 {org_code} 的同步批次，按期间回补取数")
         await execute_meta_sync_job(job_id, period_value=period)
