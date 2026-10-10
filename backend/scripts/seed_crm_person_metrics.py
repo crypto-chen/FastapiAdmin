@@ -737,6 +737,19 @@ METRICS = [
             "unit": "元",
         },
     },
+    {
+        "code": "marketing_person_profit_per_capita",
+        "name": "营销中心业务员人均利润贡献",
+        "excel_code": "STF-37",
+        "rule": "人均利润贡献（元）= 结算收益（STF-30），按业务员分别取值"
+        "（kind=metric_sum_person，单一组成指标；业务员维度下即为该业务员的当期结算收益）。"
+        "如需按人数折算（如「结算收益合计 ÷ 业务员人数」），增配 scale 或再引入人数类指标即可。",
+        "measures": {
+            "kind": "metric_sum_person",
+            "component_metric_codes": ["marketing_person_settlement_profit"],
+            "unit": "元",
+        },
+    },
 ]
 
 

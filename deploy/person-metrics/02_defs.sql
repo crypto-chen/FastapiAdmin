@@ -1,8 +1,8 @@
 -- ==========================================================================
 -- 业务员指标 - 元数据 / 来源对象 / 同步任务 / 指标定义（幂等，可重复执行）
--- 生成时间：2026-10-10 10:26
+-- 生成时间：2026-10-10 10:28
 -- 由 backend/scripts/export_person_metrics_sql.py 生成，请勿手工修改
--- 指标 28 个，来源对象 7 个，同步任务 7 个
+-- 指标 29 个，来源对象 7 个，同步任务 7 个
 -- 执行顺序：先 01_schema.sql，再本文件
 -- 所有 INSERT 均按业务唯一键判重：连接按 name、来源系统/对象/指标按 code、同步任务按 name
 -- ==========================================================================
@@ -322,6 +322,16 @@ INSERT INTO metric_def
   (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
    source_entity_id, version, status, description, is_deleted, created_time, updated_time)
 VALUES ('f21e998b-a80f-4948-b38b-f796d288cdac', 'marketing_person_sales_per_capita', '营销中心业务员人均销售额', '营销中心-业务员', 'STF-36', 'month', 0, '人均销售额（元）= 对外出货净额（STF-17），按业务员分别取值（kind=metric_sum_person，单一组成指标；业务员维度下即为该业务员的当期销售额）。如需按人数折算（如「净额合计 ÷ 业务员人数」或「÷ 在职营销人员数」），增配 scale 或再引入人数类指标即可，口径请与业务确认。', '{"org":false,"dept":true,"person":true}', '{"kind":"metric_sum_person","unit":"元","component_metric_codes":["marketing_person_external_shipment_net_untaxed"]}', NULL, 1, 0, '人均销售额（元）= 对外出货净额（STF-17），按业务员分别取值（kind=metric_sum_person，单一组成指标；业务员维度下即为该业务员的当期销售额）。如需按人数折算（如「净额合计 ÷ 业务员人数」或「÷ 在职营销人员数」），增配 scale 或再引入人数类指标即可，口径请与业务确认。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
+  period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
+  dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
+  description = VALUES(description), version = VALUES(version);
+
+-- 指标 STF-37 marketing_person_profit_per_capita
+INSERT INTO metric_def
+  (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
+   source_entity_id, version, status, description, is_deleted, created_time, updated_time)
+VALUES ('d449db59-93fd-4d5a-a67b-eed4cc966957', 'marketing_person_profit_per_capita', '营销中心业务员人均利润贡献', '营销中心-业务员', 'STF-37', 'month', 0, '人均利润贡献（元）= 结算收益（STF-30），按业务员分别取值（kind=metric_sum_person，单一组成指标；业务员维度下即为该业务员的当期结算收益）。如需按人数折算（如「结算收益合计 ÷ 业务员人数」），增配 scale 或再引入人数类指标即可。', '{"org":false,"dept":true,"person":true}', '{"kind":"metric_sum_person","unit":"元","component_metric_codes":["marketing_person_settlement_profit"]}', NULL, 1, 0, '人均利润贡献（元）= 结算收益（STF-30），按业务员分别取值（kind=metric_sum_person，单一组成指标；业务员维度下即为该业务员的当期结算收益）。如需按人数折算（如「结算收益合计 ÷ 业务员人数」），增配 scale 或再引入人数类指标即可。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
   period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
   dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
