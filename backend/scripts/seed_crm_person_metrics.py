@@ -706,6 +706,23 @@ METRICS = [
             "unit": "元",
         },
     },
+    {
+        "code": "marketing_person_settlement_profit",
+        "name": "营销中心业务员结算收益",
+        "excel_code": "STF-30",
+        "rule": "结算收益（元）= 边际贡献（STF-27）− 固定费用分摊（STF-28）− 总部分摊（STF-29），"
+        "按业务员分别相减（kind=metric_diff_person，加项 1 个、减项 2 个，缺失项按 0）；"
+        "公司合计 = Σ各业务员。",
+        "measures": {
+            "kind": "metric_diff_person",
+            "addend_metric_codes": ["marketing_person_contribution_margin"],
+            "subtrahend_metric_codes": [
+                "marketing_person_fixed_expense_allocation",
+                "marketing_person_hq_allocation",
+            ],
+            "unit": "元",
+        },
+    },
 ]
 
 
