@@ -588,7 +588,8 @@ class CaptchaService:
     async def get_captcha(redis: Redis, request: Request) -> CaptchaOutSchema:
         """获取验证码（滑块模式：仅生成 key，无需算术图片）"""
         if not settings.CAPTCHA_ENABLE:
-            raise CustomException(msg="未开启验证码服务")
+            # 关闭时不报错，返回 enable=False，前端据此隐藏滑块（避免客户端弹错误提示）
+            return CaptchaOutSchema(enable=False, key=CaptchaKey(""), img_base=CaptchaBase64(""))
 
         captcha_key = get_random_character()
         # 存储滑块状态：pending（待验证）/ verified（已验证通过）

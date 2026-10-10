@@ -1,8 +1,8 @@
 -- ==========================================================================
 -- 业务员指标 - 元数据 / 来源对象 / 同步任务 / 指标定义（幂等，可重复执行）
--- 生成时间：2026-10-10 10:28
+-- 生成时间：2026-10-10 14:01
 -- 由 backend/scripts/export_person_metrics_sql.py 生成，请勿手工修改
--- 指标 29 个，来源对象 7 个，同步任务 7 个
+-- 指标 31 个，来源对象 8 个，同步任务 8 个
 -- 执行顺序：先 01_schema.sql，再本文件
 -- 所有 INSERT 均按业务唯一键判重：连接按 name、来源系统/对象/指标按 code、同步任务按 name
 -- ==========================================================================
@@ -77,6 +77,13 @@ VALUES ('9047209b-ea6a-45d7-8c2e-e112cfb29117', (SELECT id FROM meta_source_syst
 ON DUPLICATE KEY UPDATE name = VALUES(name), query_type = VALUES(query_type),
   request_template = VALUES(request_template), status = VALUES(status);
 
+-- 来源对象 /hs/clue/getClueList
+INSERT INTO meta_source_object
+  (uuid, system_id, code, name, query_type, request_template, variables, watermark_field, status, is_deleted, created_time, updated_time)
+VALUES ('5dacfe87-476e-452a-b087-8719815a9ae0', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), '/hs/clue/getClueList', 'CRM 线索列表（业务员线索）', 'api', '{"endTime":"{{ now.strftime(''%Y-%m-%d %H:%M:%S'') }}","startTime":"{{ (now - timedelta(days=30)).strftime(''%Y-%m-%d %H:%M:%S'') }}"}', NULL, NULL, 0, 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), query_type = VALUES(query_type),
+  request_template = VALUES(request_template), status = VALUES(status);
+
 -- 4) 同步任务（cron 与 seed 脚本一致：明细每天 02:00，客户列表每周一 02:00）
 
 -- 同步任务 CRM业务员指标-CRM 订单明细（内贸）（cron 0 0 2 * * ?）
@@ -134,6 +141,14 @@ INSERT INTO meta_sync_job
 SELECT '7f2e14e1-d17b-4ab6-bc7d-67f419441710', 'CRM业务员指标-CRM 退款订单明细（业务员退货退款）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/getReturnOrderDetail' LIMIT 1), NULL, NULL, '0 0 2 * * ?', '{"dateRange":["{{ now.replace(day=1).strftime(''%Y-%m-%d'') }}","{{ ((now.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).strftime(''%Y-%m-%d'') }}"]}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/getReturnOrderDetail，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 退款订单明细（业务员退货退款）');
+
+-- 同步任务 CRM业务员指标-CRM 线索列表（业务员线索）（cron 0 0 2 * * ?）
+INSERT INTO meta_sync_job
+  (uuid, name, source_system_id, source_object_id, standard_entity_id, org_code, cron_expr,
+   request_params, variables, sync_mode, watermark_field, status, description, is_deleted, created_time, updated_time)
+SELECT '37532feb-9930-460d-b415-edc1e99b756e', 'CRM业务员指标-CRM 线索列表（业务员线索）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/clue/getClueList' LIMIT 1), NULL, NULL, '0 0 2 * * ?', '{"endTime":"{{ now.strftime(''%Y-%m-%d %H:%M:%S'') }}","startTime":"{{ (now - timedelta(days=30)).strftime(''%Y-%m-%d %H:%M:%S'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/clue/getClueList，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
+FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 线索列表（业务员线索）');
 
 -- 5) 指标定义（16 个业务员指标，含 Excel 科目编码与取数配置）
 
@@ -372,6 +387,26 @@ INSERT INTO metric_def
   (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
    source_entity_id, version, status, description, is_deleted, created_time, updated_time)
 VALUES ('61931507-0222-4fef-b5ee-1b76700c3e00', 'marketing_person_old_customer_intake_untaxed', '营销中心业务员老客户业绩（未税）', '营销中心-业务员', 'STF-41', 'month', 0, '老客户业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取客户标识 is_new=2（老客户）、有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组。', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_person_amount","unit":"元","group_by":"person","components":[{"label":"内贸","row_filters":[{"op":"equals","field":"is_new","value":"2"}],"amount_terms":[{"sign":1,"field":"remove_taxes_freight"}],"source_object_code":"/hs/order/orderAnalyze?type=1"},{"label":"外贸","row_filters":[{"op":"equals","field":"is_new","value":"2"}],"amount_terms":[{"sign":1,"field":"receivable_CNY"}],"source_object_code":"/hs/order/orderAnalyze?type=2"}],"row_filters":[{"op":"equals","field":"is_new","value":"2"}],"person_field":"create_id","status_allow":["384"],"status_field":"status"}', NULL, 1, 0, '老客户业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取客户标识 is_new=2（老客户）、有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
+  period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
+  dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
+  description = VALUES(description), version = VALUES(version);
+
+-- 指标 STF-42 marketing_person_clue_count_30d
+INSERT INTO metric_def
+  (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
+   source_entity_id, version, status, description, is_deleted, created_time, updated_time)
+VALUES ('03ab6133-612c-4b9f-81e3-254be7f3ea09', 'marketing_person_clue_count_30d', '营销中心业务员近30天线索数量', '营销中心-业务员', 'STF-42', 'month', 0, '近30天线索数量（条）= Σ取数时点往前 30 天内创建的线索数（接口 /hs/clue/getClueList，按 startTime/endTime 滚动窗口），按线索负责人（principal_id）分组；未分配负责人的线索不计入；**当月每日重算即真正的「近30天」**；历史期间回补时取数时点 = 该期间 1 日，即「该期间起点的近30天」，如需改为「期间末月往前30天」请另行确认。', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_person_amount","unit":"条","group_by":"person","components":[{"label":"线索","source_object_code":"/hs/clue/getClueList"}],"value_mode":"count_orders","person_field":"principal_id","status_allow":[],"status_field":null,"exclude_empty_person":true}', NULL, 1, 0, '近30天线索数量（条）= Σ取数时点往前 30 天内创建的线索数（接口 /hs/clue/getClueList，按 startTime/endTime 滚动窗口），按线索负责人（principal_id）分组；未分配负责人的线索不计入；**当月每日重算即真正的「近30天」**；历史期间回补时取数时点 = 该期间 1 日，即「该期间起点的近30天」，如需改为「期间末月往前30天」请另行确认。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
+  period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
+  dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
+  description = VALUES(description), version = VALUES(version);
+
+-- 指标 STF-43 marketing_person_clue_deal_count_30d
+INSERT INTO metric_def
+  (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
+   source_entity_id, version, status, description, is_deleted, created_time, updated_time)
+VALUES ('52261547-9f91-4543-b90c-9c20e26cda46', 'marketing_person_clue_deal_count_30d', '营销中心业务员近30天成交线索数量', '营销中心-业务员', 'STF-43', 'month', 0, '近30天成交线索数量（条）= Σ取数时点往前 30 天内创建、且线索状态 status=1（已转换/成交）的线索数（接口 /hs/clue/getClueList），按线索负责人（principal_id）分组；未分配负责人的线索不计入；当月每日重算即真正的「近30天」，历史期间回补口径同 STF-42。', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_person_amount","unit":"条","group_by":"person","components":[{"label":"线索","source_object_code":"/hs/clue/getClueList"}],"value_mode":"count_orders","row_filters":[{"op":"equals","field":"status","value":"1"}],"person_field":"principal_id","status_allow":[],"status_field":null,"exclude_empty_person":true}', NULL, 1, 0, '近30天成交线索数量（条）= Σ取数时点往前 30 天内创建、且线索状态 status=1（已转换/成交）的线索数（接口 /hs/clue/getClueList），按线索负责人（principal_id）分组；未分配负责人的线索不计入；当月每日重算即真正的「近30天」，历史期间回补口径同 STF-42。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
   period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
   dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),

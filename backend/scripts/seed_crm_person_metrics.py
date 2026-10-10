@@ -72,6 +72,14 @@ SHIPMENT_PATH = "/hs/order/orderShipments"
 CUSTOMER_PATH = "/hs/customer/getCusotmerList"
 QUOTE_PATH = "/hs/quote/getQuoteList"
 RETURN_DETAIL_PATH = "/hs/getReturnOrderDetail"
+CLUE_PATH = "/hs/clue/getClueList"
+
+# 「近30天」滚动窗口：取数时点往前 30 天。当月每日重算 → 真正的近 30 天；
+# 历史期间回补时取数时点 = 该期间 1 日（即该期间起点的近 30 天），详见指标口径说明。
+CLUE_WINDOW: dict = {
+    "startTime": "{{ (now - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S') }}",
+    "endTime": "{{ now.strftime('%Y-%m-%d %H:%M:%S') }}",
+}
 
 # 整月闭区间（dateRange 写法，供按订单创建时间过滤的接口使用）
 MONTH_DATE_RANGE: dict = {
@@ -105,6 +113,12 @@ SOURCE_OBJECTS = [
         "request": MONTH_DATE_RANGE,  # 该接口用 dateRange，不认 month
         # 该路由曾一度 404（未发布），2026-10-09 已发布可用；status=0 正常参与每日同步
         "status": 0,
+    },
+    {
+        "code": CLUE_PATH,
+        "name": "CRM 线索列表（业务员线索）",
+        "with_month": False,
+        "request": CLUE_WINDOW,  # 该接口用 startTime/endTime，不认 month
     },
 ]
 
@@ -748,6 +762,48 @@ METRICS = [
             "kind": "metric_sum_person",
             "component_metric_codes": ["marketing_person_settlement_profit"],
             "unit": "元",
+        },
+    },
+    {
+        "code": "marketing_person_clue_count_30d",
+        "name": "营销中心业务员近30天线索数量",
+        "excel_code": "STF-42",
+        "rule": "近30天线索数量（条）= Σ取数时点往前 30 天内创建的线索数"
+        "（接口 /hs/clue/getClueList，按 startTime/endTime 滚动窗口），"
+        "按线索负责人（principal_id）分组；未分配负责人的线索不计入；"
+        "**当月每日重算即真正的「近30天」**；历史期间回补时取数时点 = 该期间 1 日，"
+        "即「该期间起点的近30天」，如需改为「期间末月往前30天」请另行确认。",
+        "measures": {
+            "kind": "crm_person_amount",
+            "group_by": "person",
+            "person_field": "principal_id",
+            "value_mode": "count_orders",
+            "exclude_empty_person": True,
+            "unit": "条",
+            # 线索表没有订单状态：不按订单 status 过滤（线索状态用 row_filters 单独控制）
+            "status_field": None,
+            "status_allow": [],
+            "components": [{"label": "线索", "source_object_code": CLUE_PATH}],
+        },
+    },
+    {
+        "code": "marketing_person_clue_deal_count_30d",
+        "name": "营销中心业务员近30天成交线索数量",
+        "excel_code": "STF-43",
+        "rule": "近30天成交线索数量（条）= Σ取数时点往前 30 天内创建、且线索状态 status=1（已转换/成交）"
+        "的线索数（接口 /hs/clue/getClueList），按线索负责人（principal_id）分组；"
+        "未分配负责人的线索不计入；当月每日重算即真正的「近30天」，历史期间回补口径同 STF-42。",
+        "measures": {
+            "kind": "crm_person_amount",
+            "group_by": "person",
+            "person_field": "principal_id",
+            "value_mode": "count_orders",
+            "exclude_empty_person": True,
+            "unit": "条",
+            "status_field": None,
+            "status_allow": [],
+            "row_filters": [{"field": "status", "op": "equals", "value": "1"}],
+            "components": [{"label": "线索", "source_object_code": CLUE_PATH}],
         },
     },
 ]

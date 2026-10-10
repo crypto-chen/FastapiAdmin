@@ -117,7 +117,7 @@ class Settings(BaseSettings):
     # ================================================= #
     # ******************** 验证码配置 ******************* #
     # ================================================= #
-    CAPTCHA_ENABLE: bool = True  # 是否启用验证码
+    CAPTCHA_ENABLE: bool = False  # 是否启用验证码（滑块；关闭后登录不再校验 captcha_key）
     CAPTCHA_EXPIRE_SECONDS: int = 60 * 1  # 验证码过期时间(秒) 1分钟
     CAPTCHA_MIN_VERIFY_SECONDS: float = 0.2
 

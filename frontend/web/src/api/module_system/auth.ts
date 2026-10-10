@@ -30,27 +30,11 @@ const AuthAPI = {
     });
   },
 
-  getCaptcha() {
-    return request<ApiResponse<CaptchaInfo>>({
-      url: `${API_PATH}/captcha/get`,
-      method: "get",
-    });
-  },
-
   logout(body: string) {
     return request<ApiResponse>({
       url: `${API_PATH}/logout`,
       method: "post",
       data: body,
-    });
-  },
-
-  /** 滑块验证完成后端标记 */
-  sliderComplete(captchaKey: string) {
-    return request<ApiResponse<{ captcha_key: string; verified: boolean }>>({
-      url: `${API_PATH}/captcha/slider/complete`,
-      method: "post",
-      data: { captcha_key: captchaKey },
     });
   },
 };
@@ -63,8 +47,6 @@ export default AuthAPI;
 export interface LoginFormData {
   username: string;
   password: string;
-  captcha_key?: string;
-  captcha?: string;
   remember?: boolean;
   login_type?: string;
 }
@@ -79,10 +61,3 @@ export interface JWTOut {
 
 /** 登录成功返回 */
 export type LoginResult = JWTOut;
-
-/** 验证码信息 */
-export interface CaptchaInfo {
-  enable: boolean;
-  key: string;
-  img_base: string;
-}

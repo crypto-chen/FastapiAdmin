@@ -46,21 +46,14 @@
                       <template v-if="loginFlowMode === 'account'">
                         <FaLoginAccountForm
                           ref="accountFormRef"
-                          v-model:is-passing="isPassing"
-                          v-model:is-click-pass="isClickPass"
                           v-model:login-form="loginForm"
                           :rules="rules"
-                          :captcha-state="captchaState"
-                          :code-loading="codeLoading"
                           :demo-account-key="demoAccountKey"
                           :accounts="accounts"
                           :form-key="formKey"
-                          :is-dark="isDark"
-                          :drag-verify-text-color="dragVerifyTextColor"
                           :loading="loading"
                           @submit="handleSubmit"
                           @setup-account="setupAccount"
-                          @get-captcha="getCaptcha"
                           @open-mobile="openMobileLogin"
                           @open-qr="openQrLogin"
                           @forget="setAuthPanel('forget')"
@@ -176,11 +169,7 @@
 
 <script setup lang="ts">
 import type { LocationQuery, RouteLocationRaw } from "vue-router";
-import AuthAPI, {
-  type CaptchaInfo,
-  type LoginFormData,
-  type OAuthProvider,
-} from "@/api/module_system/auth";
+import type { LoginFormData, OAuthProvider } from "@/api/module_system/auth";
 
 import UserAPI, { type ForgetPasswordForm, type RegisterForm } from "@/api/module_system/user";
 import { useConfigStore, useAppStore, useSettingsStore, useUserStore } from "@stores";
@@ -203,7 +192,6 @@ type LoginFlowMode = "account" | "mobile" | "qr";
 const configStore = useConfigStore();
 const settingStore = useSettingsStore();
 const appStore = useAppStore();
-const { isDark } = storeToRefs(settingStore);
 const { t, locale } = useI18n();
 
 const { panelAlign } = useLoginPanelAlign();
@@ -258,12 +246,6 @@ function openQrLogin() {
 
 function backToAccountLogin() {
   loginFlowMode.value = "account";
-  nextTick(() => {
-    getCaptcha();
-    accountFormRef.value?.resetDragVerify?.();
-    isPassing.value = false;
-    isClickPass.value = false;
-  });
 }
 
 function handleOAuthLogin(provider: OAuthProvider) {
@@ -312,22 +294,10 @@ async function tryConsumeOAuthCallback() {
   }
 }
 
-const dragVerifyTextColor = computed(() =>
-  isDark.value ? "rgba(255, 255, 255, 0.45)" : "var(--fa-gray-700)"
-);
 const formKey = ref(0);
 
 watch(locale, () => {
   formKey.value++;
-});
-
-watch(authPanel, (panel) => {
-  if (panel !== "login") return;
-  if (loginFlowMode.value !== "account") return;
-  getCaptcha();
-  accountFormRef.value?.resetDragVerify?.();
-  isPassing.value = false;
-  isClickPass.value = false;
 });
 
 const accounts = computed<Account[]>(() => [
@@ -358,8 +328,6 @@ const demoAccountKey = ref<AccountKey>("super");
 const userStore = useUserStore();
 const router = useRouter();
 const route = useRoute();
-const isPassing = ref(false);
-const isClickPass = ref(false);
 
 const accountFormRef = ref<InstanceType<typeof FaLoginAccountForm> | null>(null);
 const registerPanelRef = ref<InstanceType<typeof FaLoginRegisterPanel> | null>(null);
@@ -368,7 +336,6 @@ const forgetPanelRef = ref<InstanceType<typeof FaLoginForgetPanel> | null>(null)
 const loading = ref(false);
 const registerLoading = ref(false);
 const forgetLoading = ref(false);
-const codeLoading = ref(false);
 
 const registerAgreementRead = ref(false);
 
@@ -427,7 +394,6 @@ const forgetRules = computed<FormRules<ForgetPasswordForm>>(() => ({
 const loginForm = reactive<LoginFormData>({
   username: "",
   password: "",
-  captcha_key: "",
   remember: true,
   login_type: "PC端",
 });
@@ -438,12 +404,6 @@ const loginBgStyle = computed(() => {
   return bg
     ? { backgroundImage: `url(${bg})`, backgroundSize: "cover", backgroundPosition: "center" }
     : {};
-});
-
-const captchaState = reactive<CaptchaInfo>({
-  enable: false,
-  key: "",
-  img_base: "",
 });
 
 const rules = computed<FormRules>(() => {
@@ -477,41 +437,6 @@ function setupAccount(key: AccountKey) {
   loginForm.username = selected?.username ?? "";
   loginForm.password = selected?.password ?? "";
 }
-
-async function getCaptcha() {
-  try {
-    codeLoading.value = true;
-    const response = await AuthAPI.getCaptcha();
-    const data = response.data.data;
-    loginForm.captcha_key = data.key;
-    captchaState.img_base = data.img_base;
-    captchaState.enable = data.enable;
-    // 重置滑块状态
-    isPassing.value = false;
-    isClickPass.value = false;
-  } catch {
-    captchaState.enable = false;
-    loginForm.captcha_key = "";
-  } finally {
-    codeLoading.value = false;
-  }
-}
-
-/** 滑块验证完成后通知后端标记 */
-async function handleSliderPass(passed: boolean) {
-  if (!passed || !loginForm.captcha_key) return;
-  try {
-    await AuthAPI.sliderComplete(loginForm.captcha_key);
-  } catch {
-    isPassing.value = false;
-    await getCaptcha();
-  }
-}
-
-/** 监听滑块通过状态 */
-watch(isPassing, (val) => {
-  handleSliderPass(val);
-});
 
 function resolveRedirectTarget(query: LocationQuery): RouteLocationRaw {
   const defaultPath = "/";
@@ -555,13 +480,7 @@ onMounted(async () => {
     await router.replace(resolveRedirectTarget(route.query));
     return;
   }
-  getCaptcha();
   voteTimer = setTimeout(showVoteNotification, 500);
-});
-
-onActivated(() => {
-  if (authPanel.value !== "login" || loginFlowMode.value !== "account") return;
-  getCaptcha();
 });
 
 onBeforeUnmount(() => {
@@ -570,25 +489,12 @@ onBeforeUnmount(() => {
   notificationInstance = null;
 });
 
-watch(
-  () => route.fullPath,
-  () => {
-    if (authPanel.value !== "login" || loginFlowMode.value !== "account") return;
-    getCaptcha();
-  }
-);
-
 const handleSubmit = async () => {
   if (!accountFormRef.value) return;
 
   try {
     const valid = await accountFormRef.value.validate?.();
     if (!valid) return;
-
-    if (!isPassing.value) {
-      isClickPass.value = true;
-      return;
-    }
 
     loading.value = true;
 
@@ -599,9 +505,8 @@ const handleSubmit = async () => {
       appStore.showGuide(true);
     }
   } catch (error) {
-    // 自增 formKey 强制重新挂载表单（滑块自动重置为初始状态）
+    // 自增 formKey 强制重新挂载表单
     formKey.value++;
-    await getCaptcha();
     if (!(error instanceof HttpError)) {
       console.error("[Login] Unexpected error:", error);
       ElNotification({

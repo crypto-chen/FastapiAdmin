@@ -11,7 +11,7 @@ class CaptchaOutSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     enable: bool = Field(default=True, description="是否启用验证码")
-    key: str = Field(..., min_length=1, description="验证码唯一标识")
+    key: str = Field(default="", description="验证码唯一标识（验证码关闭时为空字符串）")
     img_base: str = Field(default="", description="Base64编码的验证码图片（滑块模式为空字符串）")
 
 

@@ -32,6 +32,7 @@
 - **2026-10-10** 业务员指标扩充到 27 个：新增 `marketing_person_settlement_profit`（STF-30 结算收益 = STF-27 边际贡献 − STF-28 固定费用分摊 − STF-29 总部分摊，`metric_diff_person` 加项 1 个/减项 2 个；2026-09 = 139,845.83，业务员逐人校验 0 差异）
 - **2026-10-10** 业务员指标扩充到 28 个：新增 `marketing_person_sales_per_capita`（STF-36 人均销售额；按业务给的公式其值 = STF-17 对外出货净额，`metric_sum_person` 单组成指标，数值与 STF-17 逐人一致）
 - **2026-10-10** 业务员指标扩充到 29 个：新增 `marketing_person_profit_per_capita`（STF-37 人均利润贡献；按业务给的公式其值 = STF-30 结算收益，`metric_sum_person` 单组成指标，数值与 STF-30 逐人一致）
+- **2026-10-10** 业务员指标扩充到 31 个：新增 CRM 线索列表数据源 `/hs/clue/getClueList`（`startTime`/`endTime` 滚动窗口 = 取数时点往前 30 天）与两个指标 `marketing_person_clue_count_30d`（STF-42 近30天线索数量）、`marketing_person_clue_deal_count_30d`（STF-43 近30天成交线索数量，线索状态 `status=1`）；按线索负责人 `principal_id` 分组、未分配负责人的线索不计入；2026-10 实测 818 条 / 82 条成交
 - **2026-10-09** 开放接口支持**业务员维度**：`POST /open/v1/metrics/query` 新增 `level=person` 与 `person_codes` / `person_ids` 过滤，返回行补 `person_id`（业务员主ID，内部标准人员）/ `person_code` / `person_name`（宽表同名列），接入应用新增权限开关 `open_client.allow_person_detail`
 - **2026-10-09** 指标结果页新增「业务员明细」视图：层级筛选增加 `person`（对应后端 `level=person`），表格在含业务员行时自动多显示一列「业务员」，合计行按「有组织合计行则用它、否则累加业务员行」取值（`frontend/web/src/views/module_metric/value/index.vue`）
 - **2026-10-09** CRM 人员同步改为两个**手动任务**（不注册定时任务）：「同步 CRM 人员架构」（来源组织+部门）与「同步 CRM 人员」（来源人员）。入口三处共用 `backend/app/modules/crm/personnel_sync.py`：人工绑定页两个按钮、接口 `POST /system-mapping/sync/crm-org` 与 `/sync/crm-person`（权限 `module_mapping:sync:org|person`）、脚本 `python scripts/sync_crm_personnel.py --target {org|person|all}`
