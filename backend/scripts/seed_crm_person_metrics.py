@@ -723,6 +723,20 @@ METRICS = [
             "unit": "元",
         },
     },
+    {
+        "code": "marketing_person_sales_per_capita",
+        "name": "营销中心业务员人均销售额",
+        "excel_code": "STF-36",
+        "rule": "人均销售额（元）= 对外出货净额（STF-17），按业务员分别取值"
+        "（kind=metric_sum_person，单一组成指标；业务员维度下即为该业务员的当期销售额）。"
+        "如需按人数折算（如「净额合计 ÷ 业务员人数」或「÷ 在职营销人员数」），"
+        "增配 scale 或再引入人数类指标即可，口径请与业务确认。",
+        "measures": {
+            "kind": "metric_sum_person",
+            "component_metric_codes": ["marketing_person_external_shipment_net_untaxed"],
+            "unit": "元",
+        },
+    },
 ]
 
 
