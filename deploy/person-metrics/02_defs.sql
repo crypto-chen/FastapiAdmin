@@ -1,6 +1,6 @@
 -- ==========================================================================
 -- 业务员指标 - 元数据 / 来源对象 / 同步任务 / 指标定义（幂等，可重复执行）
--- 生成时间：2026-10-09 17:50
+-- 生成时间：2026-10-10 10:15
 -- 由 backend/scripts/export_person_metrics_sql.py 生成，请勿手工修改
 -- 指标 23 个，来源对象 7 个，同步任务 7 个
 -- 执行顺序：先 01_schema.sql，再本文件
@@ -271,7 +271,7 @@ ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_
 INSERT INTO metric_def
   (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
    source_entity_id, version, status, description, is_deleted, created_time, updated_time)
-VALUES ('1337fd89-509f-413d-8cca-10e53cf4fb5f', 'marketing_person_variable_expense_allocation', '营销中心业务员变动费用分摊', '营销中心-业务员', 'STF-26', 'month', 0, '变动费用分摊（元）= 业务员收入（STF-18 营销结算收入10%）÷ 总收入（ORD-01 营销中心接单金额·未税）× 变动费用合计（CM-01），按业务员分别计算（kind=metric_alloc_person）；分母与费用池都取公司口径指标的当期合计行；注意：分母用 ORD-01（接单金额）时各业务员分摊额合计只覆盖费用池的一部分；若改为「按各业务员收入占比分摊（合计=费用池）」，把 base_metric_codes 置空即可（用 Σ业务员基数作分母）。', '{"org":false,"dept":true,"person":true}', '{"kind":"metric_alloc_person","unit":"元","base_metric_codes":["marketing_order_intake_untaxed"],"pool_metric_codes":["marketing_variable_expense_total"],"share_metric_codes":["marketing_person_settlement_income"]}', NULL, 1, 0, '变动费用分摊（元）= 业务员收入（STF-18 营销结算收入10%）÷ 总收入（ORD-01 营销中心接单金额·未税）× 变动费用合计（CM-01），按业务员分别计算（kind=metric_alloc_person）；分母与费用池都取公司口径指标的当期合计行；注意：分母用 ORD-01（接单金额）时各业务员分摊额合计只覆盖费用池的一部分；若改为「按各业务员收入占比分摊（合计=费用池）」，把 base_metric_codes 置空即可（用 Σ业务员基数作分母）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+VALUES ('1337fd89-509f-413d-8cca-10e53cf4fb5f', 'marketing_person_variable_expense_allocation', '营销中心业务员变动费用分摊', '营销中心-业务员', 'STF-26', 'month', 0, '变动费用分摊（元）= 业务员收入（STF-18 营销结算收入10%）÷ 总收入（ORD-01 营销中心接单金额·未税）× 变动费用合计（CM-01），按业务员分别计算（kind=metric_alloc_person）；分母与费用池都取公司口径指标的当期合计行；**口径已确认（业务确认保持 ORD-01 作分母）**：各业务员分摊额合计小于 CM-01 变动费用合计属预期，差额部分不参与业务员分摊；如需改成「按各业务员收入占比分摊（合计=费用池）」，把 base_metric_codes 置空即可（改用 Σ业务员基数作分母）。', '{"org":false,"dept":true,"person":true}', '{"kind":"metric_alloc_person","unit":"元","base_metric_codes":["marketing_order_intake_untaxed"],"pool_metric_codes":["marketing_variable_expense_total"],"share_metric_codes":["marketing_person_settlement_income"]}', NULL, 1, 0, '变动费用分摊（元）= 业务员收入（STF-18 营销结算收入10%）÷ 总收入（ORD-01 营销中心接单金额·未税）× 变动费用合计（CM-01），按业务员分别计算（kind=metric_alloc_person）；分母与费用池都取公司口径指标的当期合计行；**口径已确认（业务确认保持 ORD-01 作分母）**：各业务员分摊额合计小于 CM-01 变动费用合计属预期，差额部分不参与业务员分摊；如需改成「按各业务员收入占比分摊（合计=费用池）」，把 base_metric_codes 置空即可（改用 Σ业务员基数作分母）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
   period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
   dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
