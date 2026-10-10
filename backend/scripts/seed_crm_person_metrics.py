@@ -663,6 +663,22 @@ METRICS = [
             "unit": "元",
         },
     },
+    {
+        "code": "marketing_person_fixed_expense_allocation",
+        "name": "营销中心业务员固定费用分摊",
+        "excel_code": "STF-28",
+        "rule": "固定费用分摊（元）= 业务员收入（STF-18 营销结算收入10%）÷ 总收入（ORD-01 营销中心接单金额·未税）"
+        "× 固定费用合计（CM-04），按业务员分别计算（kind=metric_alloc_person）；"
+        "分母与费用池都取公司口径指标的当期合计行，口径与 STF-26 变动费用分摊保持一致"
+        "（**已确认以 ORD-01 作分母**：各业务员分摊额合计小于固定费用合计属预期，差额不参与业务员分摊）。",
+        "measures": {
+            "kind": "metric_alloc_person",
+            "share_metric_codes": ["marketing_person_settlement_income"],
+            "base_metric_codes": ["marketing_order_intake_untaxed"],
+            "pool_metric_codes": ["marketing_fixed_expense_total"],
+            "unit": "元",
+        },
+    },
 ]
 
 
