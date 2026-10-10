@@ -84,6 +84,7 @@ async def _load_metrics() -> list[dict[str, Any]]:
                         )
                     )
                 ).scalars().first()
+                # 同一期间多次重算会保留历史行，这里只统计**最新计算版本**，避免行数虚高
                 rows = (
                     await db.execute(
                         select(MetricValueModel.dept_code, MetricValueModel.value).where(
@@ -114,8 +115,38 @@ async def _load_metrics() -> list[dict[str, Any]]:
 
 
 async def _load_sample(metrics: list[dict[str, Any]], persons: int = 2, long_metrics: int = 3):
-    """取真实结果做样例：长表用前 N 个指标 × M 个业务员，宽表用全部指标 × M 个业务员。"""
-    period_value = next((m["latest_period"] for m in metrics if m["latest_period"]), None)
+    """取真实结果做样例：长表用前 N 个指标 × M 个业务员，宽表用全部指标 × M 个业务员。
+
+    样例期间取**指标覆盖最多**的期间（同一期间多次重算只取最新 calc_version），
+    这样宽表样例行不会出现大面积 null（线索类指标是滚动近 30 天、期间与自然月不同）。
+    """
+    # 每个指标各自的最新期间与最新版本，再挑出覆盖指标数最多的期间做样例
+    async with async_db_session() as db:
+        per_metric: dict[int, tuple[str, int]] = {}
+        for item in metrics:
+            latest_period = (
+                await db.execute(
+                    select(func.max(MetricValueModel.period_value)).where(
+                        MetricValueModel.metric_id == item["id"],
+                        MetricValueModel.person_code.is_not(None),
+                    )
+                )
+            ).scalars().first()
+            if not latest_period:
+                continue
+            calc_version = (
+                await db.execute(
+                    select(func.max(MetricValueModel.calc_version)).where(
+                        MetricValueModel.metric_id == item["id"],
+                        MetricValueModel.period_value == str(latest_period),
+                    )
+                )
+            ).scalars().first()
+            per_metric[int(item["id"])] = (str(latest_period), int(calc_version or 1))
+    coverage: dict[str, int] = {}
+    for _period, _version in per_metric.values():
+        coverage[_period] = coverage.get(_period, 0) + 1
+    period_value = max(coverage, key=lambda p: (coverage[p], p)) if coverage else None
     if not period_value:
         return {"period_value": None, "persons": [], "long_items": [], "wide_rows": []}
     metric_ids = [m["id"] for m in metrics]
@@ -166,7 +197,9 @@ async def _load_sample(metrics: list[dict[str, Any]], persons: int = 2, long_met
     sample_keys = [
         (row[2], row[3], row[4]) for row in ranking[:persons]
     ]
-    long_ids = [m["id"] for m in metrics[:long_metrics]]
+    # 长表样例优先用带 Excel 科目编码的指标（配套的「接单量」等无编码指标不作为示例列）
+    long_pool = [m for m in metrics if m.get("excel_code")] or metrics
+    long_ids = [m["id"] for m in long_pool[:long_metrics]]
     long_items = [
         {
             "metric_code": code_by_id[int(row[0])],
@@ -303,12 +336,15 @@ def _render(metrics: list[dict[str, Any]], sample: dict[str, Any], base_url: str
     add("## 5. 业务员指标清单")
     add("")
     if sample.get("period_value"):
-        add(f"下表「最新值」为 {period} 的公司合计，取自各指标最新计算版本；「业务员数」为该期间有结果的业务员个数。")
+        add(
+            "下表逐指标给出**最新期间**、该期间的公司合计（取该指标最新计算版本）与有结果的业务员个数；"
+            "线索类（STF-42/43/44）是**近 30 天滚动口径**，期间值与自然月不同，请以表中期间为准。"
+        )
     else:
         add("下表为公司口径汇总列（尚未算出业务员维度结果时不展示数值）。")
     add("")
-    add("| Excel 科目编码 | 指标编码（`metrics` 传这个） | 指标名称 | 单位 | 最新值 | 业务员数 | 口径 |")
-    add("| --- | --- | --- | --- | --- | --- | --- |")
+    add("| Excel 科目编码 | 指标编码（`metrics` 传这个） | 指标名称 | 单位 | 最新期间 | 该期合计 | 业务员数 | 口径 |")
+    add("| --- | --- | --- | --- | --- | --- | --- | --- |")
     for item in metrics:
         add(
             "| "
@@ -318,6 +354,7 @@ def _render(metrics: list[dict[str, Any]], sample: dict[str, Any], base_url: str
                     f"`{_cell(item['code'])}`",
                     _cell(item["name"]),
                     _cell(item["unit"]),
+                    _cell(item.get("latest_period")),
                     _cell(item["total"]),
                     _cell(item["person_count"]),
                     _cell(item["rule"]),
@@ -355,6 +392,15 @@ def _render(metrics: list[dict[str, Any]], sample: dict[str, Any], base_url: str
     add("### 6.2 宽表：`level=person` + `format=wide`")
     add("")
     add("一个业务员一行，全部业务员指标做列（未取数的指标为 `null`，请按 0 处理）：")
+    clue_period = next(
+        (m["latest_period"] for m in metrics if m["code"] == "marketing_person_clue_count_30d"), None
+    )
+    if clue_period and clue_period != period:
+        add("")
+        add(
+            f"> 线索类 STF-42/43/44 是**近 30 天滚动口径**，最新期间为 `{clue_period}`（与自然月不同），"
+            f"所以在本期（{period}）样例里为 `null`；要取线索数据请把 `period_start`/`period_end` 传 `{clue_period}`。"
+        )
     add("")
     add("```json")
     add(
@@ -425,9 +471,20 @@ def _render(metrics: list[dict[str, Any]], sample: dict[str, Any], base_url: str
     add("2. **期间口径**：接单类取订单创建月；出货类取发货单审核月；报价类取报价日期；")
     add("   下推类取 ERP 下推时间；客户列表为**当前快照**（历史期间取重算时点的客户归属）。")
     add("3. **业务员归属**：订单/报价类取**下单人 `create_id`**；总客户数取客户表**负责人 `principal_id`**。")
+    add("   线索类（STF-42/43/44）取线索表**负责人 `principal_id`**；总客户数与线索类未分配负责人的记录不计入。")
     add("4. **缺失即 0**：某业务员某月没有数据时不返回该行，请按 0 处理。")
     add("5. **数据刷新**：每日 02:00 同步来源明细、02:30 重算当月；次月 1 日重算上月并结转。")
     add("   月数据建议在次月 1 日 08:00 之后再取。")
+    add("6. **线索类为近 30 天滚动口径（STF-42/43/44）**：窗口 = 取数时点往前 30 天，**不按自然月**，")
+    add("   每天随重算滚动更新；调用时请把 `period_start`/`period_end` 传当期（`YYYY-MM`）即可，")
+    add("   跨月对比仅作参考（它是滚动值，不是月度累计）。")
+    add("7. **分摊类按业务员收入占比计算（STF-26/28 变动/固定费用分摊）**：")
+    add("   `业务员收入（STF-18）÷ 总收入（ORD-01） × 费用池（CM-01/CM-04）`；")
+    add("   由于分母是 ORD-01 接单金额，各业务员分摊额合计**小于**费用池合计数（差额不参与业务员分摊），属预期口径。")
+    add("8. **库存（STF-25）为未出货订单金额，不是成本**：订单明细没有成本字段，")
+    add("   暂以未出货订单（`chuhuo ≠ 1`）的**未税金额**计，并按 24 期回看；与公司口径「外部订单库存（未税）」存在窗口差异。")
+    add("9. **两个「人均」指标按业务口径其值等于对应指标（STF-36 = STF-17、STF-37 = STF-30）**：")
+    add("   业务员维度下即为该业务员自身的销售额 / 结算收益；如需按人数折算，请在调用侧另行除以人数。")
     add("")
     add("## 9. 错误码")
     add("")
