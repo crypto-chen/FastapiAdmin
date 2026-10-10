@@ -1,8 +1,8 @@
 -- ==========================================================================
 -- 业务员指标 - 元数据 / 来源对象 / 同步任务 / 指标定义（幂等，可重复执行）
--- 生成时间：2026-10-10 14:01
+-- 生成时间：2026-10-10 14:05
 -- 由 backend/scripts/export_person_metrics_sql.py 生成，请勿手工修改
--- 指标 31 个，来源对象 8 个，同步任务 8 个
+-- 指标 32 个，来源对象 8 个，同步任务 8 个
 -- 执行顺序：先 01_schema.sql，再本文件
 -- 所有 INSERT 均按业务唯一键判重：连接按 name、来源系统/对象/指标按 code、同步任务按 name
 -- ==========================================================================
@@ -407,6 +407,16 @@ INSERT INTO metric_def
   (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
    source_entity_id, version, status, description, is_deleted, created_time, updated_time)
 VALUES ('52261547-9f91-4543-b90c-9c20e26cda46', 'marketing_person_clue_deal_count_30d', '营销中心业务员近30天成交线索数量', '营销中心-业务员', 'STF-43', 'month', 0, '近30天成交线索数量（条）= Σ取数时点往前 30 天内创建、且线索状态 status=1（已转换/成交）的线索数（接口 /hs/clue/getClueList），按线索负责人（principal_id）分组；未分配负责人的线索不计入；当月每日重算即真正的「近30天」，历史期间回补口径同 STF-42。', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_person_amount","unit":"条","group_by":"person","components":[{"label":"线索","source_object_code":"/hs/clue/getClueList"}],"value_mode":"count_orders","row_filters":[{"op":"equals","field":"status","value":"1"}],"person_field":"principal_id","status_allow":[],"status_field":null,"exclude_empty_person":true}', NULL, 1, 0, '近30天成交线索数量（条）= Σ取数时点往前 30 天内创建、且线索状态 status=1（已转换/成交）的线索数（接口 /hs/clue/getClueList），按线索负责人（principal_id）分组；未分配负责人的线索不计入；当月每日重算即真正的「近30天」，历史期间回补口径同 STF-42。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
+  period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
+  dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
+  description = VALUES(description), version = VALUES(version);
+
+-- 指标 STF-44 marketing_person_clue_conversion_rate
+INSERT INTO metric_def
+  (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
+   source_entity_id, version, status, description, is_deleted, created_time, updated_time)
+VALUES ('b389692c-a193-4da8-8516-7d7320b26b04', 'marketing_person_clue_conversion_rate', '营销中心业务员线索转化率', '营销中心-业务员', 'STF-44', 'month', 0, '线索转化率（%）= 近30天成交线索数量（STF-43）÷ 近30天线索数量（STF-42）× 100%，**按业务员分别相除**（kind=metric_ratio_person）；公司合计 = Σ成交线索 ÷ Σ线索数 × 100；分母（线索数）为 0 的业务员不输出行；口径与 STF-42/STF-43 一致（取数时点往前 30 天滚动窗口）。', '{"org":false,"dept":true,"person":true}', '{"kind":"metric_ratio_person","unit":"%","ratio_scale":100,"numerator_metric_codes":["marketing_person_clue_deal_count_30d"],"denominator_metric_codes":["marketing_person_clue_count_30d"]}', NULL, 1, 0, '线索转化率（%）= 近30天成交线索数量（STF-43）÷ 近30天线索数量（STF-42）× 100%，**按业务员分别相除**（kind=metric_ratio_person）；公司合计 = Σ成交线索 ÷ Σ线索数 × 100；分母（线索数）为 0 的业务员不输出行；口径与 STF-42/STF-43 一致（取数时点往前 30 天滚动窗口）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
   period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
   dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),

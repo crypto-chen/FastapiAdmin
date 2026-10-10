@@ -806,6 +806,21 @@ METRICS = [
             "components": [{"label": "线索", "source_object_code": CLUE_PATH}],
         },
     },
+    {
+        "code": "marketing_person_clue_conversion_rate",
+        "name": "营销中心业务员线索转化率",
+        "excel_code": "STF-44",
+        "rule": "线索转化率（%）= 近30天成交线索数量（STF-43）÷ 近30天线索数量（STF-42）× 100%，"
+        "**按业务员分别相除**（kind=metric_ratio_person）；公司合计 = Σ成交线索 ÷ Σ线索数 × 100；"
+        "分母（线索数）为 0 的业务员不输出行；口径与 STF-42/STF-43 一致（取数时点往前 30 天滚动窗口）。",
+        "measures": {
+            "kind": "metric_ratio_person",
+            "numerator_metric_codes": ["marketing_person_clue_deal_count_30d"],
+            "denominator_metric_codes": ["marketing_person_clue_count_30d"],
+            "ratio_scale": 100,
+            "unit": "%",
+        },
+    },
 ]
 
 

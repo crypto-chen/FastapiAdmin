@@ -1,6 +1,6 @@
 -- ==========================================================================
 -- 业务员指标 - 表结构变更（可在数据库客户端直接执行，重复执行安全）
--- 生成时间：2026-10-10 14:01
+-- 生成时间：2026-10-10 14:05
 -- 由 backend/scripts/export_person_metrics_sql.py 生成，请勿手工修改
 -- 对应 alembic 迁移：203324073db9（metric_value 业务员列）、d81f6c2a7e35 / cd6a5655eba2（open_client 权限）
 -- 推荐先用后端自带迁移：docker compose exec backend python main.py upgrade --env=prod
