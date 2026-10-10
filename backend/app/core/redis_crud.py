@@ -59,13 +59,32 @@ class RedisCURD:
 
         返回:
         - list: 返回缓存值列表,如果获取失败则返回空列表
+
+        连接池里的连接可能已被 Redis 端回收（空闲超时/网络抖动），此时首次调用会抛
+        ``'NoneType' object is not callable`` 之类的底层错误；这里失败后重连再重试一次，
+        仍失败才记错误并返回空列表，避免偶发抖动被放大成业务异常。
         """
-        try:
-            data = await self.redis.mget(*[str(key) for key in keys])
-            return data
-        except Exception as e:
-            logger.error(f"批量获取缓存失败: {e!s}")
+        if not keys:
             return []
+        call_keys = [str(key) for key in keys]
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                return await self.redis.mget(*call_keys)
+            except Exception as e:  # noqa: BLE001 - 缓存失败不阻塞业务
+                last_error = e
+                if attempt == 0:
+                    # 连接可能已失效：断开连接池后重试一次
+                    try:
+                        await self.redis.connection_pool.disconnect()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+        logger.error(
+            f"批量获取缓存失败（已重试 1 次）: {type(last_error).__name__}: {last_error!s}"
+            f"；keys={len(call_keys)} 个，首个 key={call_keys[0][:80]}"
+        )
+        return []
 
     async def scan_keys(self, pattern: str = "*", count: int = 100) -> list:
         """SCAN 模式获取缓存键名（不阻塞 Redis，推荐替代 get_keys）

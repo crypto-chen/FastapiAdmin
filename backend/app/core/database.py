@@ -1,4 +1,7 @@
+from contextlib import asynccontextmanager
+
 from sqlalchemy import Engine, create_engine, event
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config.setting import settings
@@ -89,6 +92,43 @@ def create_async_engine_and_session(db_url: str = settings.ASYNC_DB_URI) -> tupl
 
 engine = create_sync_engine()
 async_engine, async_db_session = create_async_engine_and_session()
+
+
+@asynccontextmanager
+async def standalone_db_session(db_url: str = settings.ASYNC_DB_URI):
+    """独立事件循环里使用的数据库会话（用完即关，不复用全局连接池）。
+
+    线程池里的定时任务常见写法是 ``asyncio.run(某个异步函数())``：它在**新的事件循环**里执行，
+    而全局 ``async_engine`` 的连接池绑定在主应用的事件循环上，跨循环复用会抛
+    ``RuntimeError: got Future attached to a different loop``（例如内置的「日志清理」任务）。
+
+    本会话使用 ``NullPool`` 的一次性引擎：连接只在本循环内创建并回收，因此对
+    「``asyncio.run`` + 线程池调度」场景安全。常规请求/调度仍应使用全局 ``async_db_session``。
+
+    用法::
+
+        async with standalone_db_session() as session:
+            await session.execute(...)
+            await session.commit()
+    """
+    temp_engine = create_async_engine(
+        url=db_url,
+        echo=settings.DATABASE_ECHO,
+        poolclass=NullPool,
+        pool_pre_ping=settings.POOL_PRE_PING,
+    )
+    try:
+        factory = async_sessionmaker[AsyncSession](
+            bind=temp_engine,
+            autocommit=False,
+            autoflush=False,
+            expire_on_commit=False,
+            class_=AsyncSession,
+        )
+        async with factory() as session:
+            yield session
+    finally:
+        await temp_engine.dispose()
 
 async def create_tables() -> None:
     """创建数据库表（根据 ORM metadata）。

@@ -6,7 +6,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.base_schema import AuthSchema, PageResultSchema
-from app.core.database import async_db_session
+from app.core.database import async_db_session, standalone_db_session
 from app.core.exceptions import CustomException
 from app.core.logger import logger
 from app.utils.common_util import search_to_dict
@@ -144,7 +144,10 @@ async def cleanup_expired_logs(days: int = 90) -> dict:
         raise ValueError("日志保留天数必须大于 0")
 
     cutoff = datetime.now() - timedelta(days=days)
-    async with async_db_session() as session:
+    # 该函数既被请求侧调用，也被「定时任务节点」调用；节点在 ThreadPoolExecutor 里以
+    # asyncio.run(...) 执行，属于独立事件循环，必须用 standalone_db_session（NullPool），
+    # 否则复用全局连接池会报 "got Future attached to a different loop"。
+    async with standalone_db_session() as session:
         # DML 语句运行时返回 CursorResult（含 rowcount），静态类型是 Result，需 cast 收窄
         op_result = cast(CursorResult, await session.execute(delete(OperationLogModel).where(OperationLogModel.created_time < cutoff)))
         login_result = cast(CursorResult, await session.execute(delete(LoginLogModel).where(LoginLogModel.created_time < cutoff)))

@@ -1715,6 +1715,23 @@ async def _ensure_period_batches(context: dict) -> list[str]:
         for job_id, org_code, _params, _variables in context["jobs"]:
             if await _latest_success_run(db, job_id, period) is None:
                 missing.append((job_id, org_code))
+                continue
+            # 该期间有成功批次、但**最新一次运行是失败**时提示出来：
+            # 这种情况计算会静默复用旧批次（数据是旧的），此前只体现在同步日志里，容易漏看
+            latest_status = (
+                await db.execute(
+                    select(MetaSyncRunModel.status)
+                    .where(MetaSyncRunModel.job_id == job_id, MetaSyncRunModel.period_value == period)
+                    .order_by(MetaSyncRunModel.id.desc())
+                    .limit(1)
+                )
+            ).scalars().first()
+            if latest_status == "failed":
+                logger.warning(
+                    f"指标 {context['metric_code']} 期间 {period} 的同步任务 {job_id} 最新一次运行失败，"
+                    "本次计算复用该期间较早的成功批次（数据可能不是最新）；"
+                    "请查看「元数据管理 → 同步任务」的运行日志"
+                )
     for job_id, org_code in missing:
         logger.info(f"指标 {context['metric_code']} 期间 {period} 缺少组织 {org_code} 的同步批次，按期间回补取数")
         await execute_meta_sync_job(job_id, period_value=period)
