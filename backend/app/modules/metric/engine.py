@@ -93,6 +93,9 @@ METRIC_SUM_PERSON_KIND = "metric_sum_person"
 # 业务员分摊：业务员维度基数 ÷ 分摊基数总额 × 待分摊费用池
 # （如变动费用分摊 = 业务员收入 ÷ 总收入 × 变动费用合计）
 METRIC_ALLOC_PERSON_KIND = "metric_alloc_person"
+# 业务员差额：加项业务员指标之和 − 减项业务员指标之和
+# （如边际贡献 = 营销结算收入10% − 变动费用分摊）
+METRIC_DIFF_PERSON_KIND = "metric_diff_person"
 # 指标期初期末平均：自身不取数，值为「上期组成指标合计 × begin_weight + 当期组成指标合计 × end_weight」
 # （如平均库存 =（期初 + 期末）÷ 2；期初取上一期该指标的结果，上期无结果按 0 计入）
 METRIC_BALANCE_AVG_KIND = "metric_balance_avg"
@@ -140,6 +143,7 @@ SUPPORTED_KINDS = {
     METRIC_RATIO_PERSON_KIND,
     METRIC_SUM_PERSON_KIND,
     METRIC_ALLOC_PERSON_KIND,
+    METRIC_DIFF_PERSON_KIND,
     CRM_PERSON_AMOUNT_KIND,
     CRM_SHIPMENT_PERSON_AMOUNT_KIND,
     CRM_ORDER_PUSH_PERSON_KIND,
@@ -237,6 +241,7 @@ METRIC_DEPENDENCY_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     METRIC_SUM_PERSON_KIND: ("component_metric_codes",),
     METRIC_ALLOC_PERSON_KIND: ("share_metric_codes", "base_metric_codes", "pool_metric_codes"),
+    METRIC_DIFF_PERSON_KIND: ("addend_metric_codes", "subtrahend_metric_codes"),
     METRIC_DIFF_KIND: ("addend_metric_codes", "subtrahend_metric_codes"),
 }
 
@@ -1438,6 +1443,7 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
             METRIC_RATIO_PERSON_KIND,
             METRIC_SUM_PERSON_KIND,
             METRIC_ALLOC_PERSON_KIND,
+            METRIC_DIFF_PERSON_KIND,
             METRIC_DIFF_KIND,
             METRIC_BALANCE_AVG_KIND,
         ):
@@ -1457,7 +1463,7 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
                         f"比率指标缺少 numerator_metric_codes / denominator_metric_codes 配置: {metric.code}"
                     )
                 codes = metric_dependency_codes(config)
-            elif kind == METRIC_DIFF_KIND:
+            elif kind in (METRIC_DIFF_KIND, METRIC_DIFF_PERSON_KIND):
                 # 差额指标：加项与减项各是一组指标，分别求和后再相减
                 addend_codes = _normalize_metric_codes(config.get("addend_metric_codes"))
                 subtrahend_codes = _normalize_metric_codes(config.get("subtrahend_metric_codes"))
@@ -1504,7 +1510,7 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
                 denominator_subtrahend_metrics = [
                     (id_by_code[code], code) for code in denominator_subtrahend_codes
                 ]
-            elif kind == METRIC_DIFF_KIND:
+            elif kind in (METRIC_DIFF_KIND, METRIC_DIFF_PERSON_KIND):
                 addend_metrics = [(id_by_code[code], code) for code in addend_codes]
                 subtrahend_metrics = [(id_by_code[code], code) for code in subtrahend_codes]
             elif kind == METRIC_ALLOC_PERSON_KIND:
@@ -2118,6 +2124,53 @@ async def _compute_person_ratio(
     }
 
 
+async def _compute_person_diff(db, context: dict, period_type: str, period: str) -> dict:
+    """业务员差额：加项业务员指标之和 − 减项业务员指标之和（缺失项按 0 计入）。
+
+    如「边际贡献 = 营销结算收入10%（STF-18）− 变动费用分摊（STF-26）」，
+    公司合计 = Σ各业务员差额。
+    """
+    config = context["config"]
+    omit_zero = bool(config.get("omit_zero_persons", True))
+    addends = await _load_person_metric_rows(db, context["addend_metrics"], period_type, period)
+    subtrahends = await _load_person_metric_rows(db, context["subtrahend_metrics"], period_type, period)
+    persons: dict[str, dict] = {}
+    person_meta: dict[str, dict] = {}
+    total = 0.0
+    addend_total = 0.0
+    subtrahend_total = 0.0
+    for person in sorted(set(addends) | set(subtrahends)):
+        addend_value = float((addends.get(person) or {}).get("value") or 0)
+        subtrahend_value = float((subtrahends.get(person) or {}).get("value") or 0)
+        value = round(addend_value - subtrahend_value, 4)
+        addend_total += addend_value
+        subtrahend_total += subtrahend_value
+        if omit_zero and value == 0:
+            continue
+        persons[person] = {"value": value, "rows": 1}
+        meta = addends.get(person) or subtrahends.get(person) or {}
+        person_meta[person] = {
+            "person_id": meta.get("person_id"),
+            "person_code": person or "未指定业务员",
+            "person_name": _text(meta.get("person_name")) or person or "未指定业务员",
+        }
+        total += value
+    return {
+        "persons": persons,
+        "person_meta": person_meta,
+        "total": round(total, 4),
+        "matched_rows": len(persons),
+        "missing_rows": 0,
+        "missing_orders": [],
+        "backfilled_periods": [],
+        "lookback_periods": 1,
+        "person_count": len(persons),
+        "total_numerator": round(addend_total, 4),
+        "total_denominator": round(subtrahend_total, 4),
+        "components": [code for _, code in context["component_metrics"]],
+    }
+
+
 async def _compute_person_alloc(db, context: dict, period_type: str, period: str) -> dict:
     """业务员分摊：``业务员基数 ÷ 分摊基数总额 × 待分摊费用池``，按业务员分别计算。
 
@@ -2343,6 +2396,7 @@ async def _execute_metric_calc_inner(
         METRIC_RATIO_KIND,
         METRIC_RATIO_PERSON_KIND,
         METRIC_SUM_PERSON_KIND,
+        METRIC_DIFF_PERSON_KIND,
         METRIC_DIFF_KIND,
     ):
         # 当期组成指标必须是「今天算的」，否则派生值会滞后一天
@@ -2399,6 +2453,10 @@ async def _execute_metric_calc_inner(
         # 业务员分摊：业务员基数 ÷ 基数总额 × 费用池
         async with async_db_session() as alloc_db:
             person_result = await _compute_person_alloc(alloc_db, context, period_type, period)
+    if kind == METRIC_DIFF_PERSON_KIND:
+        # 业务员差额：加项业务员指标 − 减项业务员指标
+        async with async_db_session() as diff_db:
+            person_result = await _compute_person_diff(diff_db, context, period_type, period)
 
     async with async_db_session() as db, db.begin():
         metric_id = context["metric_id"]
@@ -2487,7 +2545,12 @@ async def _execute_metric_calc_inner(
                 "denominator": denominator,
                 "components": [code for _, code in context["component_metrics"]],
             }
-        elif kind in (METRIC_RATIO_PERSON_KIND, METRIC_SUM_PERSON_KIND, METRIC_ALLOC_PERSON_KIND):
+        elif kind in (
+            METRIC_RATIO_PERSON_KIND,
+            METRIC_SUM_PERSON_KIND,
+            METRIC_ALLOC_PERSON_KIND,
+            METRIC_DIFF_PERSON_KIND,
+        ):
             # 业务员比率 / 业务员汇总：按业务员分别相除或相加
             # （复购率 = 本月下单老客户数 ÷ 总客户数；对外出货净额 = 出货未税 + 设计服务收入 + 退货退款）
             persons = person_result.get("persons") or {}
@@ -2553,6 +2616,14 @@ async def _execute_metric_calc_inner(
                         "pool_total": person_result.get("total_denominator", 0),
                     }
                     if kind == METRIC_ALLOC_PERSON_KIND
+                    else {}
+                ),
+                **(
+                    {
+                        "addend": person_result.get("total_numerator", 0),
+                        "subtrahend": person_result.get("total_denominator", 0),
+                    }
+                    if kind == METRIC_DIFF_PERSON_KIND
                     else {}
                 ),
                 "persons": person_result.get("person_count", 0),

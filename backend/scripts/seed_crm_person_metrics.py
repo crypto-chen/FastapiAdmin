@@ -679,6 +679,20 @@ METRICS = [
             "unit": "元",
         },
     },
+    {
+        "code": "marketing_person_contribution_margin",
+        "name": "营销中心业务员边际贡献",
+        "excel_code": "STF-27",
+        "rule": "边际贡献（元）= 营销结算收入10%（STF-18）− 变动费用分摊（STF-26），"
+        "按业务员分别相减（kind=metric_diff_person，加项 − 减项，缺失项按 0）；公司合计 = Σ各业务员；"
+        "与公司口径「营销中心边际贡献」= 总收益（营销结算收入）− 变动费用合计 同思路。",
+        "measures": {
+            "kind": "metric_diff_person",
+            "addend_metric_codes": ["marketing_person_settlement_income"],
+            "subtrahend_metric_codes": ["marketing_person_variable_expense_allocation"],
+            "unit": "元",
+        },
+    },
 ]
 
 
