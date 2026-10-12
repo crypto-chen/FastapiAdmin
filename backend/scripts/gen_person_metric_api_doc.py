@@ -35,6 +35,63 @@ ImportUtil.find_models(MappedBase)
 DEFAULT_OUTPUT = PROJECT_ROOT.parent / "docs" / "业务员指标开放接口对接说明.md"
 PERSON_CATEGORY = "营销中心-业务员"
 
+# 指标分组（仅用于文档目录，方便对接方按主题找指标；不含的指标自动归入「其他」）
+METRIC_GROUPS: list[tuple[str, list[str]]] = [
+    ("报价", ["marketing_person_quote_count", "marketing_person_quote_success_rate", "marketing_person_quote_gross_profit_rate"]),
+    (
+        "接单",
+        [
+            "marketing_person_order_intake_untaxed",
+            "marketing_person_order_count",
+            "marketing_person_order_price",
+            "marketing_person_sample_order_intake_untaxed",
+            "marketing_person_batch_order_intake_untaxed",
+            "marketing_person_new_customer_intake_untaxed",
+            "marketing_person_old_customer_intake_untaxed",
+        ],
+    ),
+    (
+        "出货与收入",
+        [
+            "marketing_person_goods_shipment_untaxed",
+            "marketing_person_goods_shipment_qty",
+            "marketing_person_design_service_income",
+            "marketing_person_return_refund_untaxed",
+            "marketing_person_external_shipment_net_untaxed",
+            "marketing_person_settlement_income",
+        ],
+    ),
+    ("下推", ["marketing_person_order_push_untaxed", "marketing_person_order_push_period"]),
+    ("库存", ["marketing_person_unship_order_inventory"]),
+    (
+        "费用与收益",
+        [
+            "marketing_person_variable_expense_allocation",
+            "marketing_person_fixed_expense_allocation",
+            "marketing_person_hq_allocation",
+            "marketing_person_contribution_margin",
+            "marketing_person_settlement_profit",
+        ],
+    ),
+    (
+        "客户与复购",
+        [
+            "marketing_person_total_customer_count",
+            "marketing_person_old_customer_order_count",
+            "marketing_person_repurchase_rate",
+        ],
+    ),
+    (
+        "线索（近30天滚动）",
+        [
+            "marketing_person_clue_count_30d",
+            "marketing_person_clue_deal_count_30d",
+            "marketing_person_clue_conversion_rate",
+        ],
+    ),
+    ("工时与人均", ["marketing_person_total_labor_hours", "marketing_person_sales_per_capita", "marketing_person_profit_per_capita"]),
+]
+
 
 def _cell(value: Any) -> str:
     """表格单元格转义：换行与竖线会让 Markdown 表格错位。"""
@@ -363,6 +420,37 @@ def _render(metrics: list[dict[str, Any]], sample: dict[str, Any], base_url: str
             + " |"
         )
     add("")
+    # 5.1 分组概览（按主题列编码，方便对接方挑选要订阅的指标）
+    known = {code for _group, codes in METRIC_GROUPS for code in codes}
+    others = [m["code"] for m in metrics if m["code"] not in known]
+    add("### 5.1 指标分组（按主题看编码）")
+    add("")
+    add("| 分组 | 指标（`metrics` 里传这些编码或对应 STF 编码） |")
+    add("| --- | --- |")
+    code_to_excel = {m["code"]: m["excel_code"] for m in metrics}
+    exist = {m["code"] for m in metrics}
+    for group, codes in METRIC_GROUPS:
+        picked = [code for code in codes if code in exist]
+        if not picked:
+            continue
+        cells = "、".join(
+            f"`{code_to_excel.get(code) or code}` {code}" for code in picked
+        )
+        add(f"| {group} | {cells} |")
+    if others:
+        add(f"| 其他 | {'、'.join('`' + code + '`' for code in others)} |")
+    add("")
+    # 5.2 Excel 科目编码对照表（对接方按财务底稿编码对接时用）
+    excel_rows = [m for m in metrics if m.get("excel_code")]
+    add("### 5.2 Excel 科目编码对照表")
+    add("")
+    add("| STF 编码 | 指标编码 | 指标名称 | 单位 |")
+    add("| --- | --- | --- | --- |")
+    for item in excel_rows:
+        add(f"| `{_cell(item['excel_code'])}` | `{_cell(item['code'])}` | {_cell(item['name'])} | {_cell(item['unit'])} |")
+    if others:
+        add(f"| - | {'、'.join('`' + code + '`' for code in others)} | 暂无 Excel 科目编码（配套指标） | - |")
+    add("")
     add("## 6. 返回数据样例（真实数据）")
     add("")
     add("### 6.1 长表：`level=person` + `format=long`")
@@ -462,6 +550,9 @@ def _render(metrics: list[dict[str, Any]], sample: dict[str, Any], base_url: str
     add("| `value` | number | 指标值（保留 4 位小数，单位见指标清单） |")
     add("| `calc_version` | int | 计算版本（每次重算递增） |")
     add("| `calc_time` | string | 计算时间（北京时间），用于判断数据新鲜度 |")
+    add("")
+    add("> **单位不要猜**：每个指标的单位（元 / % / 天 / 小时 / 单 / 条 / 家 / 个 / 元·单⁻¹）")
+    add("> 都在响应体的 `data.metrics[].unit` 里（`include_meta=true` 时返回），按它解释 `value`。")
     add("")
     add("## 8. 口径注意事项（务必阅读）")
     add("")
