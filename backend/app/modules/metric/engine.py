@@ -96,6 +96,8 @@ METRIC_ALLOC_PERSON_KIND = "metric_alloc_person"
 # 业务员差额：加项业务员指标之和 − 减项业务员指标之和
 # （如边际贡献 = 营销结算收入10% − 变动费用分摊）
 METRIC_DIFF_PERSON_KIND = "metric_diff_person"
+# 业务员工时：CRM 企微打卡日报（/hs/getWorkTime）按员工汇总总劳动时间 = 正常工时 + 加班工时
+CRM_WORKTIME_PERSON_KIND = "crm_worktime_person"
 # 指标期初期末平均：自身不取数，值为「上期组成指标合计 × begin_weight + 当期组成指标合计 × end_weight」
 # （如平均库存 =（期初 + 期末）÷ 2；期初取上一期该指标的结果，上期无结果按 0 计入）
 METRIC_BALANCE_AVG_KIND = "metric_balance_avg"
@@ -125,6 +127,7 @@ CRM_PERSON_KINDS = (
     CRM_SHIPMENT_PERSON_AMOUNT_KIND,
     CRM_ORDER_PUSH_PERSON_KIND,
     CRM_QUOTE_PERSON_KIND,
+    CRM_WORKTIME_PERSON_KIND,
 )
 METRIC_SUM_KIND = "metric_sum"
 SUPPORTED_KINDS = {
@@ -148,6 +151,7 @@ SUPPORTED_KINDS = {
     CRM_SHIPMENT_PERSON_AMOUNT_KIND,
     CRM_ORDER_PUSH_PERSON_KIND,
     CRM_QUOTE_PERSON_KIND,
+    CRM_WORKTIME_PERSON_KIND,
 }
 # 计算时实时取数、不依赖同步批次的取数类型
 LIVE_KINDS = {AR_AGING_KIND}
@@ -805,6 +809,42 @@ def extract_shipment_person_amount(
     }
 
 
+def extract_worktime_person(payload: dict, config: dict) -> dict:
+    """把 CRM 企微打卡日报按**员工工号**汇总总劳动时间 = 正常工时 + 加班工时。
+
+    数据源：``/hs/getWorkTime``（与公司口径「营销中心工时」同一接口/同一批次）。
+    响应结构：``data.regularWork.detail``（每人正常工时，含 ``userid`` 工号与 ``hours``）与
+    ``data.overtime.byUser``（每人加班工时，字段同上）；两边的 ``userid`` 都是工号（如 ``YG20014``）。
+
+    配置项（``measures`` 或 component）:
+    - ``regular_list_path``：正常工时明细路径，默认 ``data.regularWork.detail``；
+    - ``overtime_list_path``：加班工时明细路径，默认 ``data.overtime.byUser``；
+    - ``user_field`` / ``hours_field``：人员字段与小时字段，默认 ``userid`` / ``hours``。
+
+    返回 ``persons`` 为 ``{工号: {"value": 总小时, "rows": 明细行数}}``（调用方按工号解析标准人员）。
+    """
+    regular_path = str(config.get("regular_list_path") or "data.regularWork.detail")
+    overtime_path = str(config.get("overtime_list_path") or "data.overtime.byUser")
+    user_field = str(config.get("user_field") or "userid")
+    hours_field = str(config.get("hours_field") or "hours")
+    persons: dict[str, dict] = {}
+    matched_rows = 0
+    for path in (regular_path, overtime_path):
+        rows = _dig(payload, path)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            user = _text(_cell(row, [], user_field))
+            if not user:
+                continue
+            hours = _parse_amount(_cell(row, [], hours_field))
+            bucket = persons.setdefault(user, {"value": 0.0, "rows": 0})
+            bucket["value"] = round(float(bucket["value"]) + hours, 4)
+            bucket["rows"] = int(bucket["rows"]) + 1
+            matched_rows += 1
+    return {"persons": persons, "matched_rows": matched_rows}
+
+
 def extract_quote_person_stat(rows: list, fields: list[str], config: dict) -> dict:
     """把 CRM 报价单明细按业务员汇总「次数 / 已转单数 / 报价未税 / 料工费」四个计数。
 
@@ -1383,6 +1423,43 @@ async def _load_person_index(db) -> dict[str, dict]:
     return index
 
 
+async def _load_employee_person_index(db) -> dict[str, dict]:
+    """工号（如 ``YG20014``）→ 标准人员信息。
+
+    CRM 工时接口按**工号**标识人员（``userid``），与订单/客户侧的 ``create_id`` 不同，
+    因此单独建一份索引：``source_person``（``source_type='crm'``，``raw_json.number`` = 工号）
+    取 CRM 用户名与姓名，``master_person.code``（同样存工号）取标准人员ID。
+    """
+    masters = {
+        _text(code): (int(pid), _text(name))
+        for pid, code, name in (
+            await db.execute(select(MasterPersonModel.id, MasterPersonModel.code, MasterPersonModel.name))
+        ).all()
+    }
+    rows = (
+        await db.execute(
+            select(
+                SourcePersonModel.source_code,
+                SourcePersonModel.source_name,
+                SourcePersonModel.raw_json,
+            ).where(SourcePersonModel.source_type == CRM_SOURCE_TYPE)
+        )
+    ).all()
+    index: dict[str, dict] = {}
+    for source_code, source_name, raw in rows:
+        raw = raw if isinstance(raw, dict) else {}
+        employee_no = _text(raw.get("number"))
+        if not employee_no:
+            continue
+        person_id, master_name = masters.get(employee_no, (None, ""))
+        index[employee_no] = {
+            "person_id": person_id,
+            "person_code": _text(source_code) or employee_no,
+            "person_name": _text(source_name) or master_name or employee_no,
+        }
+    return index
+
+
 async def _latest_success_run(db, job_id: int, period_value: str | None = None) -> MetaSyncRunModel | None:
     """取该任务在指定期间最近一次成功的同步批次（期间为空则取最近一次）。
 
@@ -1943,6 +2020,10 @@ async def _aggregate_crm_person_amount(context: dict) -> dict:
 
     async with async_db_session() as db:
         person_index = await _load_person_index(db)
+        # 工时接口按工号标识人员（不是 create_id），单独取一份工号索引
+        employee_index = (
+            await _load_employee_person_index(db) if kind == CRM_WORKTIME_PERSON_KIND else {}
+        )
     if not person_index:
         # 没有 CRM 人员主数据时，业务员只能显示 CRM{ID}，提醒先同步人员
         logger.warning(
@@ -1984,6 +2065,16 @@ async def _aggregate_crm_person_amount(context: dict) -> dict:
                 if not rows:
                     continue
                 extracted = extract_quote_person_stat(rows, _field_order(params), cfg)
+                matched_rows += int(extracted["matched_rows"])
+                merge(extracted["persons"])
+            continue
+        if kind == CRM_WORKTIME_PERSON_KIND:
+            # 工时：同一批次里同时含正常工时与加班工时明细，按员工工号相加
+            for job_id, _org_code, params, _variables in jobs_by_key.get("source_object_code") or []:
+                payload = await _load_run_payload(job_id, period)
+                if payload is None:
+                    continue
+                extracted = extract_worktime_person(payload, cfg)
                 matched_rows += int(extracted["matched_rows"])
                 merge(extracted["persons"])
             continue
@@ -2029,12 +2120,18 @@ async def _aggregate_crm_person_amount(context: dict) -> dict:
         if omit_zero and value == 0:
             continue
         persons[person] = {"value": value, "rows": rows}
+    # 工时类按工号解析人员，其余按 create_id 解析
+    meta_index = employee_index if kind == CRM_WORKTIME_PERSON_KIND else person_index
     person_meta: dict[str, dict] = {}
     for person_key in persons:
-        person_meta[person_key] = person_index.get(person_key) or {
+        # 工时类找不到人员时直接用工号（如 YG20014）；其余类用 CRM{create_id} 兜底
+        fallback = person_key or "未指定业务员"
+        if kind != CRM_WORKTIME_PERSON_KIND and person_key:
+            fallback = f"CRM{person_key}"
+        person_meta[person_key] = meta_index.get(person_key) or {
             "person_id": None,
-            "person_code": f"CRM{person_key}" if person_key else "未指定业务员",
-            "person_name": f"CRM{person_key}" if person_key else "未指定业务员",
+            "person_code": fallback,
+            "person_name": fallback,
         }
     total_orders = sum(int(bucket.get("orders") or 0) for bucket in buckets.values())
     total_days = round(sum(float(bucket.get("days") or 0) for bucket in buckets.values()), 4)

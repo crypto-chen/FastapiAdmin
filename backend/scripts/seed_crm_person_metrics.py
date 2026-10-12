@@ -821,6 +821,24 @@ METRICS = [
             "unit": "%",
         },
     },
+    {
+        "code": "marketing_person_total_labor_hours",
+        "name": "营销中心业务员总劳动时间",
+        "excel_code": "STF-32",
+        "rule": "总劳动时间（小时）= 正常工作时间 + 加班时间（**企微打卡口径**），按员工汇总；"
+        "数据源为 CRM 工时接口 `/hs/getWorkTime`（与公司口径「营销中心总劳动时间」同一批次）："
+        "`data.regularWork.detail`（每人正常工时，按天扣 1.5 小时午休）"
+        "+ `data.overtime.byUser`（每人加班工时，超过 18 点扣 30 分钟吃饭）；"
+        "人员键是**工号**（如 YG20014），按工号映射到 CRM 用户名/姓名与 master_person；"
+        "覆盖范围是企微通讯录里工号 YG20 开头的**在职营销人员**（约 85~100 人），"
+        "比下单业务员（约 53 人）多，未映射上 CRM 人员的按工号显示。",
+        "measures": {
+            "kind": "crm_worktime_person",
+            "group_by": "person",
+            "unit": "小时",
+            "components": [{"label": "工时", "source_object_code": "/hs/getWorkTime"}],
+        },
+    },
 ]
 
 

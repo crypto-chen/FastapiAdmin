@@ -1,8 +1,8 @@
 -- ==========================================================================
 -- 业务员指标 - 元数据 / 来源对象 / 同步任务 / 指标定义（幂等，可重复执行）
--- 生成时间：2026-10-10 14:05
+-- 生成时间：2026-10-12 16:38
 -- 由 backend/scripts/export_person_metrics_sql.py 生成，请勿手工修改
--- 指标 32 个，来源对象 8 个，同步任务 8 个
+-- 指标 33 个，来源对象 8 个，同步任务 8 个
 -- 执行顺序：先 01_schema.sql，再本文件
 -- 所有 INSERT 均按业务唯一键判重：连接按 name、来源系统/对象/指标按 code、同步任务按 name
 -- ==========================================================================
@@ -327,6 +327,16 @@ INSERT INTO metric_def
   (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
    source_entity_id, version, status, description, is_deleted, created_time, updated_time)
 VALUES ('2c7db5f8-9f1c-46ab-b6fb-5cc5becad348', 'marketing_person_settlement_profit', '营销中心业务员结算收益', '营销中心-业务员', 'STF-30', 'month', 0, '结算收益（元）= 边际贡献（STF-27）− 固定费用分摊（STF-28）− 总部分摊（STF-29），按业务员分别相减（kind=metric_diff_person，加项 1 个、减项 2 个，缺失项按 0）；公司合计 = Σ各业务员。', '{"org":false,"dept":true,"person":true}', '{"kind":"metric_diff_person","unit":"元","addend_metric_codes":["marketing_person_contribution_margin"],"subtrahend_metric_codes":["marketing_person_fixed_expense_allocation","marketing_person_hq_allocation"]}', NULL, 1, 0, '结算收益（元）= 边际贡献（STF-27）− 固定费用分摊（STF-28）− 总部分摊（STF-29），按业务员分别相减（kind=metric_diff_person，加项 1 个、减项 2 个，缺失项按 0）；公司合计 = Σ各业务员。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
+  period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
+  dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
+  description = VALUES(description), version = VALUES(version);
+
+-- 指标 STF-32 marketing_person_total_labor_hours
+INSERT INTO metric_def
+  (uuid, code, name, category, excel_code, period_type, sensitivity, formula, dimensions, measures,
+   source_entity_id, version, status, description, is_deleted, created_time, updated_time)
+VALUES ('db10865c-417a-4349-9d14-a7e1502c6a98', 'marketing_person_total_labor_hours', '营销中心业务员总劳动时间', '营销中心-业务员', 'STF-32', 'month', 0, '总劳动时间（小时）= 正常工作时间 + 加班时间（**企微打卡口径**），按员工汇总；数据源为 CRM 工时接口 `/hs/getWorkTime`（与公司口径「营销中心总劳动时间」同一批次）：`data.regularWork.detail`（每人正常工时，按天扣 1.5 小时午休）+ `data.overtime.byUser`（每人加班工时，超过 18 点扣 30 分钟吃饭）；人员键是**工号**（如 YG20014），按工号映射到 CRM 用户名/姓名与 master_person；覆盖范围是企微通讯录里工号 YG20 开头的**在职营销人员**（约 85~100 人），比下单业务员（约 53 人）多，未映射上 CRM 人员的按工号显示。', '{"org":false,"dept":true,"person":true}', '{"kind":"crm_worktime_person","unit":"小时","group_by":"person","components":[{"label":"工时","source_object_code":"/hs/getWorkTime"}]}', NULL, 1, 0, '总劳动时间（小时）= 正常工作时间 + 加班时间（**企微打卡口径**），按员工汇总；数据源为 CRM 工时接口 `/hs/getWorkTime`（与公司口径「营销中心总劳动时间」同一批次）：`data.regularWork.detail`（每人正常工时，按天扣 1.5 小时午休）+ `data.overtime.byUser`（每人加班工时，超过 18 点扣 30 分钟吃饭）；人员键是**工号**（如 YG20014），按工号映射到 CRM 用户名/姓名与 master_person；覆盖范围是企微通讯录里工号 YG20 开头的**在职营销人员**（约 85~100 人），比下单业务员（约 53 人）多，未映射上 CRM 人员的按工号显示。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。', 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), excel_code = VALUES(excel_code),
   period_type = VALUES(period_type), sensitivity = VALUES(sensitivity), formula = VALUES(formula),
   dimensions = VALUES(dimensions), measures = VALUES(measures), status = VALUES(status),
