@@ -55,6 +55,10 @@ MO_OBJECT = "PRD_MO"
 TRADE_DOMESTIC = "domestic"
 TRADE_EXPORT = "export"
 
+# 发货/退货等「接单之后才发生」的明细，构建某期间时要往后看多少期。
+# 例：DY202609-03163 是 9 月接单、10 月才发货，只看 9 月批次会取不到出货数据。
+FORWARD_PERIODS = 12
+
 
 # --------------------------------------------------------------------------- #
 # 取值工具
@@ -259,6 +263,45 @@ async def merged_order_rows(db: AsyncSession, object_code: str, period_value: st
     return batch_ids, list(merged.values())
 
 
+async def forward_rows(
+    db: AsyncSession, object_code: str, from_period: str, max_periods: int = FORWARD_PERIODS
+) -> list[dict]:
+    """取「该期间及之后」的明细行（每个期间只取最新一次成功批次，避免重复计数）。
+
+    用于发货 / 退货这类**发生在接单之后**的明细：9 月接单的单可能 10 月才发货，
+    只读 9 月的批次会漏掉出货数据。期间取到已存在的最后一个月为止（未来月份还没数据）。
+    """
+    object_id = (
+        await db.execute(select(SourceObjectModel.id).where(SourceObjectModel.code == object_code))
+    ).scalar()
+    if object_id is None:
+        return []
+    latest_per_period = (
+        select(func.max(MetaSyncRunModel.id).label("run_id"))
+        .join(MetaSyncJobModel, MetaSyncJobModel.id == MetaSyncRunModel.job_id)
+        .where(
+            MetaSyncJobModel.source_object_id == object_id,
+            MetaSyncRunModel.status == "success",
+            MetaSyncRunModel.period_value.is_not(None),
+            MetaSyncRunModel.period_value >= from_period,
+        )
+        .group_by(MetaSyncRunModel.period_value)
+        .order_by(MetaSyncRunModel.period_value)
+        .limit(max_periods)
+        .subquery()
+    )
+    run_ids = (
+        await db.execute(select(latest_per_period.c.run_id).order_by(latest_per_period.c.run_id))
+    ).scalars().all()
+    rows: list[dict] = []
+    for run_id in run_ids:
+        payload = (
+            await db.execute(select(MetaSyncRunModel.rows_json).where(MetaSyncRunModel.id == run_id))
+        ).scalar()
+        rows.extend(extract_payload_rows(payload or {}))
+    return rows
+
+
 # --------------------------------------------------------------------------- #
 # 构建
 # --------------------------------------------------------------------------- #
@@ -289,12 +332,19 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
         if not order_rows_domestic and not order_rows_export:
             raise ValueError(f"期间 {period_value} 没有 CRM 订单明细批次（orderAnalyze 内贸/外贸）")
 
-        _, shipment_rows_domestic = await latest_batch(db, SHIPMENT_OBJECT_DOMESTIC, period_value)
-        _, shipment_rows_export = await latest_batch(db, SHIPMENT_OBJECT_EXPORT, period_value)
+        # 发货明细按「该期间及之后」取：跨月发货（9 月接单、10 月发货）才算得到
+        shipment_rows_domestic = await forward_rows(db, SHIPMENT_OBJECT_DOMESTIC, period_value)
+        shipment_rows_export = await forward_rows(db, SHIPMENT_OBJECT_EXPORT, period_value)
+        batches["shipment_periods"] = {
+            "domestic": len(shipment_rows_domestic),
+            "export": len(shipment_rows_export),
+        }
         _, customer_rows = await latest_batch(db, CUSTOMER_OBJECT, None)
-        _, return_rows = await latest_batch(db, RETURN_OBJECT, period_value)
-        mo_batch, mo_rows = await latest_batch(db, MO_OBJECT, period_value)
-        batches["mo"] = mo_batch
+        # 退货/退款同样可能发生在接单之后的月份
+        return_rows = await forward_rows(db, RETURN_OBJECT, period_value)
+        # 生产订单：接单当月或次月建单，往后看 3 期（批次较大，窗口收紧）
+        mo_rows = await forward_rows(db, MO_OBJECT, period_value, max_periods=3)
+        batches["mo_rows"] = len(mo_rows)
         # 业务员/客户所属业务员：CRM 人员ID → 姓名
         person_index = await _load_person_index(db)
 
