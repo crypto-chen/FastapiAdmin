@@ -1,7 +1,7 @@
 """元数据同步任务执行与 APScheduler 注册。"""
 
-import asyncio
 import ast
+import asyncio
 import re
 from datetime import UTC, date, datetime, timedelta
 
@@ -509,9 +509,14 @@ async def execute_meta_sync_job(job_id: int, period_value: str | None = None) ->
     except Exception as e:
         logger.exception(f"元数据同步任务 {job_id} 执行失败")
         if run_id is not None:
-            async with async_db_session() as db, db.begin():
-                run = await db.get(MetaSyncRunModel, run_id)
-                if run is not None:
-                    run.status = "failed"
-                    run.error = str(e)[:4000]
-                    run.finished_at = datetime.now(UTC)
+            # 失败回写本身也要兜住：数据库不可用（如写大 JSON 时连接被断）时，
+            # 这里再抛一次会把异常冒到调用方（批量回补脚本会中断整批）
+            try:
+                async with async_db_session() as db, db.begin():
+                    run = await db.get(MetaSyncRunModel, run_id)
+                    if run is not None:
+                        run.status = "failed"
+                        run.error = str(e)[:4000]
+                        run.finished_at = datetime.now(UTC)
+            except Exception:  # noqa: BLE001 - 回写失败只记日志，不再向上抛
+                logger.exception(f"元数据同步任务 {job_id} 失败状态回写失败（数据库不可用）")

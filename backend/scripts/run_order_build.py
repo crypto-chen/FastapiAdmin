@@ -67,17 +67,24 @@ async def main() -> None:
         parser.error("必须提供 --period 或 --all")
     print(f"待构建期间 {len(periods)} 个：{periods[0]} ~ {periods[-1]}")
 
+    failed: list[str] = []
     for period in periods:
-        if args.refresh:
-            executed = await refresh_period_sources(period)
-            print(f"  期间 {period} 重拉来源 {len(executed)} 个任务")
-        async with async_db_session() as db, db.begin():
-            result = await build_period(db, period, prune_versions=args.keep_versions)
-        print(
-            f"期间 {result['period_value']} 版本 v{result['calc_version']}："
-            f"订单 {result['order_count']} 张，关联生产订单 {result['mo_linked_count']} 张，"
-            f"成本缺失 {result['cost_missing_count']} 张"
-        )
+        try:
+            if args.refresh:
+                executed = await refresh_period_sources(period)
+                print(f"  期间 {period} 重拉来源 {len(executed)} 个任务")
+            async with async_db_session() as db, db.begin():
+                result = await build_period(db, period, prune_versions=args.keep_versions)
+            print(
+                f"期间 {result['period_value']} 版本 v{result['calc_version']}："
+                f"订单 {result['order_count']} 张，关联生产订单 {result['mo_linked_count']} 张，"
+                f"成本缺失 {result['cost_missing_count']} 张"
+            )
+        except Exception as exc:  # noqa: BLE001 - 单个期间失败不中断其余期间
+            failed.append(period)
+            print(f"期间 {period} 失败：{str(exc)[:200]}")
+    if failed:
+        print(f"\n失败期间 {len(failed)} 个：{', '.join(failed)}（可单独重跑，已成功的期间不受影响）")
     await async_engine.dispose()
 
 
