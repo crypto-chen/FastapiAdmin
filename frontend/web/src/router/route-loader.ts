@@ -18,6 +18,7 @@ import ModuleManualBinding from "@views/module_manual_binding/index.vue";
 import ModuleSysDeptBinding from "@views/module_sys_dept_binding/index.vue";
 import ModuleMasterDataPerson from "@views/module_masterdata/person/index.vue";
 import ModuleMetricValue from "@views/module_metric/value/index.vue";
+import ModuleMetricOrder from "@views/module_metric/order/index.vue";
 import {
   IframeRouteManager,
   IframeView,
@@ -39,6 +40,7 @@ const staticPageComponents: Record<string, unknown> = {
   "module_sys_dept_binding/index": ModuleSysDeptBinding,
   "module_masterdata/person/index": ModuleMasterDataPerson,
   "module_metric/value/index": ModuleMetricValue,
+  "module_metric/order/index": ModuleMetricOrder,
 };
 
 /**

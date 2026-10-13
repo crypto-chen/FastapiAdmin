@@ -47,6 +47,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[Any, Any]:
 
     await reconcile_metric_calc_jobs()
     logger.info("✅ 指标计算任务 初始化完成")
+    from app.modules.order.schedule import reconcile_order_build_jobs
+
+    await reconcile_order_build_jobs()
+    logger.info("✅ 订单全链路构建任务 初始化完成")
 
     console_start(
         host=settings.SERVER_HOST,

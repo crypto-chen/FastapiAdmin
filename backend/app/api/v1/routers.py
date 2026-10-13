@@ -24,6 +24,7 @@ from app.modules.monitor.health.controller import HealthRouter
 from app.modules.monitor.online.controller import OnlineRouter
 from app.modules.monitor.server.controller import ServerRouter
 from app.modules.openapi.controller import OpenApiLogRouter, OpenClientRouter
+from app.modules.order.controller import OrderRouter
 from app.modules.system.auth.controller import AuthRouter
 from app.modules.system.dept.controller import DeptRouter
 from app.modules.system.dict.controller import DictRouter
@@ -92,6 +93,7 @@ DOMAIN_CONTROLLERS: dict[str, list[APIRouter]] = {
         SyncJobRouter,
     ],
     "/metric": [MetricRouter, MetricValueRouter],
+    "/order": [OrderRouter],
     "/openapi": [OpenClientRouter, OpenApiLogRouter],
     "/system-mapping": [SystemMappingRouter],
     "/common": [FileRouter],

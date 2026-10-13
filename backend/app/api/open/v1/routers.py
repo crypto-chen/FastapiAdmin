@@ -6,7 +6,8 @@
 from fastapi import APIRouter
 
 from app.modules.openapi.open_controller import OpenAuthRouter, OpenMetricRouter, OpenOrgRouter
+from app.modules.order.open_controller import OpenOrderRouter
 
 open_v1 = APIRouter(prefix="/open/v1")
-for controller in (OpenAuthRouter, OpenMetricRouter, OpenOrgRouter):
+for controller in (OpenAuthRouter, OpenMetricRouter, OpenOrgRouter, OpenOrderRouter):
     open_v1.include_router(controller)

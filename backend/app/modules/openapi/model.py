@@ -31,6 +31,15 @@ class OpenClientModel(ModelMixin, UserMixin):
     allow_run_calc: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, comment="是否允许触发指标重算"
     )
+    allow_order_detail: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="是否允许查询订单全链路明细(默认不开放)"
+    )
+    allow_cost_fields: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="是否允许读取成本/毛利/边际贡献类字段(默认不开放)"
+    )
+    order_scope: Mapped[dict | None] = mapped_column(
+        JSON, default=None, nullable=True, comment="允许的订单范围(客户/业务员/贸易类型)，空=不限"
+    )
     org_scope: Mapped[list | None] = mapped_column(
         JSON, default=None, nullable=True, comment="允许的组织编码列表，空=全部启用组织"
     )

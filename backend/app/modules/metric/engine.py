@@ -211,6 +211,22 @@ def _payload_rows(payload: dict | None) -> list | None:
     return None
 
 
+def _set_payload_rows(payload: dict, rows: list) -> None:
+    """把合并后的行写回 ``payload`` 原来的位置（与 :func:`_payload_rows` 对称）。"""
+    if isinstance(payload.get("Rows"), list):
+        payload["Rows"] = rows
+        return
+    if isinstance(payload.get("datas"), list):
+        payload["datas"] = rows
+        return
+    data = payload.get("data")
+    if isinstance(data, list):
+        payload["data"] = rows
+        return
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        data["data"] = rows
+
+
 def _cell(row: Any, fields: list[str], key: str) -> Any:
     if isinstance(row, dict):
         return row.get(key)
@@ -1961,10 +1977,55 @@ async def _sum_component_values_by_org(
 
 
 async def _load_run_payload(job_id: int, period_value: str) -> dict | None:
-    """读取某同步任务在指定期间最近一次成功批次的原始返回（无批次返回 ``None``）。"""
+    """读取某同步任务在指定期间最近一次成功批次的原始返回（无批次返回 ``None``）。
+
+    同一期间存在多个成功批次时，对**按单号可合并**的明细做逐行合并：行内含 ``number``
+    （典型是 CRM ``orderAnalyze``）时，把该期间所有成功批次按 ``number`` 合并，
+    后批次的非空值覆盖前批次。这样上游改版（如 2026-10-13 起 orderAnalyze 只剩 6 个
+    字段、但带回了成本字段）不会把已有指标直接打成 0——旧批次继续提供业务属性，
+    新批次提供新增字段。
+
+    子单级明细（发货单 ``order_number``、金蝶 ``FBillNo``）保持「只取最近一次批次」，
+    避免把多行明细合并成一行。
+    """
     async with async_db_session() as db:
         run = await _latest_success_run(db, job_id, period_value)
-        return dict(run.rows_json or {}) if run is not None else None
+        if run is None:
+            return None
+        payload = dict(run.rows_json or {})
+        rows = _payload_rows(payload)
+        if not rows or not isinstance(rows[0], dict) or "number" not in rows[0]:
+            return payload
+        if not period_value:
+            return payload
+        run_ids = (
+            await db.execute(
+                select(MetaSyncRunModel.id)
+                .where(
+                    MetaSyncRunModel.job_id == job_id,
+                    MetaSyncRunModel.status == "success",
+                    MetaSyncRunModel.period_value == period_value,
+                )
+                .order_by(MetaSyncRunModel.id.asc())
+            )
+        ).scalars().all()
+        if len(run_ids) <= 1:
+            return payload
+        merged: dict[str, dict] = {}
+        for run_id in run_ids:
+            item = await db.get(MetaSyncRunModel, run_id)
+            for row in _payload_rows(dict(item.rows_json or {})) or []:
+                if not isinstance(row, dict):
+                    continue
+                number = str(row.get("number") or "").strip()
+                if not number:
+                    continue
+                target = merged.setdefault(number, {})
+                for field, value in row.items():
+                    if value is not None and value != "":
+                        target[field] = value
+        _set_payload_rows(payload, list(merged.values()))
+        return payload
 
 
 async def _aggregate_crm_person_amount(context: dict) -> dict:

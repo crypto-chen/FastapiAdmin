@@ -106,6 +106,9 @@ class StandardFieldModel(ModelMixin, UserMixin):
     field_code: Mapped[str] = mapped_column(String(128), nullable=False, index=True, comment="标准字段编码")
     field_name: Mapped[str] = mapped_column(String(255), nullable=False, comment="标准字段名称")
     data_type: Mapped[str] = mapped_column(String(32), default="string", nullable=False, comment="数据类型")
+    excel_code: Mapped[str | None] = mapped_column(
+        String(64), default=None, nullable=True, index=True, comment="指标编码（财务底稿 ORD-xx 等）"
+    )
     is_dimension: Mapped[bool] = mapped_column(default=False, nullable=False, comment="是否维度")
     is_measure: Mapped[bool] = mapped_column(default=False, nullable=False, comment="是否度量")
     status: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="状态(0:启用 1:停用)")
