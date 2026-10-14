@@ -137,29 +137,8 @@ import { ElMessage, ElMessageBox } from "element-plus";
 
 defineOptions({ name: "OrderFullChain" });
 
-const DEFAULT_FIELDS = [
-  "order_number",
-  "trade_type",
-  "order_type",
-  "sku",
-  "product_series",
-  "customer_name",
-  "customer_number",
-  "salesman_name",
-  "customer_principal_name",
-  "qty",
-  "intake_untaxed",
-  "unit_cost",
-  "ship_untaxed",
-  "net_shipment",
-  "mo_numbers",
-  "order_date",
-  "push_date",
-  "finish_date",
-  "ship_date",
-  "on_time",
-  "data_quality_flag",
-];
+/** 目录拉不到时兜底（正常情况下按 ORD 编码动态取） */
+const FALLBACK_FIELDS = ["order_number", "customer_name", "salesman_name", "intake_untaxed"];
 
 const loading = ref(false);
 const running = ref(false);
@@ -171,7 +150,7 @@ const qualityFlag = ref<string | undefined>(undefined);
 const customerName = ref("");
 
 const columns = ref<OrderFieldItem[]>([]);
-const visibleFields = ref<string[]>([...DEFAULT_FIELDS]);
+const visibleFields = ref<string[]>([]);
 const rows = ref<OrderRow[]>([]);
 const query = reactive({ page_no: 1, page_size: 50 });
 const page = reactive({
@@ -236,14 +215,23 @@ function formatCell(value: unknown, col: OrderFieldItem) {
   return String(value).replace("T", " ").slice(0, 19);
 }
 
+/** 默认展示全部带 ORD 编码的字段（与财务底稿口径一致）；档案里没有编码的辅助字段不默认展示。 */
+function applyDefaultFields() {
+  const codes = columns.value.filter((col) => col.excel_code).map((col) => col.field_code);
+  visibleFields.value = codes.length ? codes : [...FALLBACK_FIELDS];
+}
+
 function resetFields() {
-  visibleFields.value = [...DEFAULT_FIELDS];
+  applyDefaultFields();
 }
 
 async function loadMeta() {
   const [fieldRes, periodRes] = await Promise.all([OrderAPI.fields(), OrderAPI.periods()]);
   columns.value = fieldRes.data?.data ?? [];
   periodOptions.value = periodRes.data?.data ?? [];
+  if (!visibleFields.value.length) {
+    applyDefaultFields();
+  }
   if (!periodValue.value && periodOptions.value.length) {
     periodValue.value = periodOptions.value[0];
   }
