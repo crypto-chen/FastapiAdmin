@@ -60,6 +60,8 @@ TRADE_EXPORT = "export"
 
 # 订单类型：CRM order_type 1=批量 2=打样 3=零售（宽表展示名称，编码另存 order_type_code）
 ORDER_TYPE_NAMES = {"1": "批量", "2": "打样", "3": "零售"}
+# 新老客户：CRM is_new 1=新客户 2=老客户（宽表展示名称，编码另存 is_new_code）
+IS_NEW_NAMES = {"1": "新客户", "2": "老客户"}
 
 # 发货/退货等「接单之后才发生」的明细，构建某期间时要往后看多少期。
 # 例：DY202609-03163 是 9 月接单、10 月才发货，只看 9 月批次会取不到出货数据。
@@ -511,6 +513,10 @@ def build_record(
     order_type_code = str(pick(row, SOURCE_KEYS["order_type"]) or "").strip()
     extra["order_type_code"] = order_type_code or None
     extra["order_type"] = ORDER_TYPE_NAMES.get(order_type_code)
+    # 新老客户：同样存名称，编码另存 is_new_code
+    is_new_code = str(pick(row, SOURCE_KEYS["is_new"]) or "").strip()
+    extra["is_new_code"] = is_new_code or None
+    extra["is_new"] = IS_NEW_NAMES.get(is_new_code)
     # 店铺（source）与平台（source_platform）：编码来自基础分类字典，宽表存名称，编码另存 *_id
     platform_id = to_number(extra.get("platform"))
     extra["platform_id"] = int(platform_id) if platform_id is not None else None
