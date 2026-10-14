@@ -49,6 +49,8 @@ ORDER_OBJECT_EXPORT = "/hs/order/orderAnalyze?type=2"
 SHIPMENT_OBJECT_DOMESTIC = "/hs/order/orderShipments?type=1"
 SHIPMENT_OBJECT_EXPORT = "/hs/order/orderShipments?type=2"
 CUSTOMER_OBJECT = "/hs/customer/getCusotmerList"
+PRODUCT_CATEGORY_OBJECT = "/hs/product/getProductCategory"
+PRODUCT_MODEL_OBJECT = "/hs/product/getProductModel"
 RETURN_OBJECT = "/hs/getReturnOrderDetail"
 MO_OBJECT = "PRD_MO"
 
@@ -347,6 +349,16 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
         batches["mo_rows"] = len(mo_rows)
         # 业务员/客户所属业务员：CRM 人员ID → 姓名
         person_index = await _load_person_index(db)
+        # 产品字典：型号ID → 型号名称、系列ID → 系列名称
+        _, category_rows = await latest_batch(db, PRODUCT_CATEGORY_OBJECT, None)
+        _, model_rows = await latest_batch(db, PRODUCT_MODEL_OBJECT, None)
+        category_names = {
+            int(row["id"]): str(row.get("name") or "") for row in category_rows if row.get("id") is not None
+        }
+        model_names = {
+            int(row["id"]): str(row.get("model") or "") for row in model_rows if row.get("id") is not None
+        }
+        batches["product_dict"] = {"series": len(category_names), "model": len(model_names)}
 
         # 客户主数据：以客户列表接口为唯一权威来源（订单上的 wangwang 是旺旺号，不是客户名）
         customer_map = {
@@ -401,6 +413,8 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
                     shipments_by_order,
                     return_by_order,
                     mo_by_order,
+                    model_names,
+                    category_names,
                 )
                 if record is None:
                     continue
@@ -458,6 +472,8 @@ def build_record(
     shipments_by_order: dict[str, float],
     return_by_order: dict[str, float],
     mo_by_order: dict[str, list[dict]],
+    model_names: dict[int, str],
+    category_names: dict[int, str],
 ) -> tuple[OrderFullChainModel | None, list[str]]:
     """单行 CRM 订单 → 宽表记录。返回 (记录, 质量标记列表)。"""
     number = str(row.get("number") or "").strip()
@@ -470,6 +486,14 @@ def build_record(
         value = pick(row, keys)
         if value is not None:
             extra[field_code] = value
+
+    # SKU（型号）与产品线（系列）：CRM 给的是编码，宽表存**名称**，编码另存 *_id 字段
+    sku_id = to_number(extra.get("sku"))
+    extra["sku_id"] = int(sku_id) if sku_id is not None else None
+    extra["sku"] = model_names.get(int(sku_id)) if sku_id is not None else None
+    series_id = to_number(extra.get("product_series"))
+    extra["product_series_id"] = int(series_id) if series_id is not None else None
+    extra["product_series"] = category_names.get(int(series_id)) if series_id is not None else None
 
     qty = to_number(pick(row, SOURCE_KEYS["qty"]))
     intake = to_number(pick(row, INTAKE_KEYS_DOMESTIC if trade_type == TRADE_DOMESTIC else INTAKE_KEYS_EXPORT))

@@ -141,6 +141,8 @@ const DEFAULT_FIELDS = [
   "order_number",
   "trade_type",
   "order_type",
+  "sku",
+  "product_series",
   "customer_name",
   "customer_number",
   "salesman_name",
