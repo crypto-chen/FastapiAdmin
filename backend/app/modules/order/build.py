@@ -51,6 +51,7 @@ SHIPMENT_OBJECT_EXPORT = "/hs/order/orderShipments?type=2"
 CUSTOMER_OBJECT = "/hs/customer/getCusotmerList"
 PRODUCT_CATEGORY_OBJECT = "/hs/product/getProductCategory"
 PRODUCT_MODEL_OBJECT = "/hs/product/getProductModel"
+BASE_CATEGORY_OBJECT = "/hs/base/getBaseCategoryList"
 RETURN_OBJECT = "/hs/getReturnOrderDetail"
 MO_OBJECT = "PRD_MO"
 
@@ -362,6 +363,12 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
             int(row["id"]): str(row.get("model") or "") for row in model_rows if row.get("id") is not None
         }
         batches["product_dict"] = {"series": len(category_names), "model": len(model_names)}
+        # 基础分类字典：订单的 source（店铺）与 source_platform（平台）都是它的 id
+        _, base_rows = await latest_batch(db, BASE_CATEGORY_OBJECT, None)
+        base_names = {
+            int(row["id"]): str(row.get("name") or "") for row in base_rows if row.get("id") is not None
+        }
+        batches["base_dict"] = len(base_names)
 
         # 客户主数据：以客户列表接口为唯一权威来源（订单上的 wangwang 是旺旺号，不是客户名）
         customer_map = {
@@ -418,6 +425,7 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
                     mo_by_order,
                     model_names,
                     category_names,
+                    base_names,
                 )
                 if record is None:
                     continue
@@ -477,6 +485,7 @@ def build_record(
     mo_by_order: dict[str, list[dict]],
     model_names: dict[int, str],
     category_names: dict[int, str],
+    base_names: dict[int, str],
 ) -> tuple[OrderFullChainModel | None, list[str]]:
     """单行 CRM 订单 → 宽表记录。返回 (记录, 质量标记列表)。"""
     number = str(row.get("number") or "").strip()
@@ -502,6 +511,13 @@ def build_record(
     order_type_code = str(pick(row, SOURCE_KEYS["order_type"]) or "").strip()
     extra["order_type_code"] = order_type_code or None
     extra["order_type"] = ORDER_TYPE_NAMES.get(order_type_code)
+    # 店铺（source）与平台（source_platform）：编码来自基础分类字典，宽表存名称，编码另存 *_id
+    platform_id = to_number(extra.get("platform"))
+    extra["platform_id"] = int(platform_id) if platform_id is not None else None
+    extra["platform"] = base_names.get(int(platform_id)) if platform_id is not None else None
+    shop_id = to_number(extra.get("shop"))
+    extra["shop_id"] = int(shop_id) if shop_id is not None else None
+    extra["shop"] = base_names.get(int(shop_id)) if shop_id is not None else None
 
     qty = to_number(pick(row, SOURCE_KEYS["qty"]))
     intake = to_number(pick(row, INTAKE_KEYS_DOMESTIC if trade_type == TRADE_DOMESTIC else INTAKE_KEYS_EXPORT))

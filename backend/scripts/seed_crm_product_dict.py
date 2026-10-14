@@ -1,10 +1,12 @@
-"""初始化 CRM 产品字典同步（产品系列 + 产品型号）。
+"""初始化 CRM 字典同步（产品系列/型号 + 基础分类）。
 
 目的：订单全链路里的 ``product_model``（型号ID）与 ``product_series``（系列ID）都是编码，
 同步这两张字典后就能在宽表里展示**名称**：
 
-- ``/hs/product/getProductCategory`` → 系列：``id`` / ``pid`` / ``name``
-- ``/hs/product/getProductModel``    → 型号：``id`` / ``category_id`` / ``model`` / 宽高长
+- ``/hs/product/getProductCategory``   → 产品系列：``id`` / ``pid`` / ``name``
+- ``/hs/product/getProductModel``      → 产品型号：``id`` / ``category_id`` / ``model`` / 宽高长
+- ``/hs/base/getBaseCategoryList``     → 基础分类：订单的 ``source``（店铺）与
+  ``source_platform``（平台）都是这张表的 ``id``，用它映射成名称
 
 两个接口都是**无参数、不分页的全量快照**，按周同步即可（与客户列表同节奏）。
 
@@ -44,6 +46,7 @@ DICT_CRON = "0 0 2 ? * MON"
 OBJECTS = [
     {"code": "/hs/product/getProductCategory", "name": "CRM 产品系列字典"},
     {"code": "/hs/product/getProductModel", "name": "CRM 产品型号字典"},
+    {"code": "/hs/base/getBaseCategoryList", "name": "CRM 基础分类字典（店铺/平台）"},
 ]
 
 
