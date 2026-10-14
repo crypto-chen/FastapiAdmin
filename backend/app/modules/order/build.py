@@ -57,6 +57,9 @@ MO_OBJECT = "PRD_MO"
 TRADE_DOMESTIC = "domestic"
 TRADE_EXPORT = "export"
 
+# 订单类型：CRM order_type 1=批量 2=打样 3=零售（宽表展示名称，编码另存 order_type_code）
+ORDER_TYPE_NAMES = {"1": "批量", "2": "打样", "3": "零售"}
+
 # 发货/退货等「接单之后才发生」的明细，构建某期间时要往后看多少期。
 # 例：DY202609-03163 是 9 月接单、10 月才发货，只看 9 月批次会取不到出货数据。
 FORWARD_PERIODS = 12
@@ -494,6 +497,11 @@ def build_record(
     series_id = to_number(extra.get("product_series"))
     extra["product_series_id"] = int(series_id) if series_id is not None else None
     extra["product_series"] = category_names.get(int(series_id)) if series_id is not None else None
+    # 订单类型：宽表 extra["order_type"] 存名称（批量/打样/零售，覆盖物理列里的编码），
+    # 物理列 order_type 仍是 1/2/3 —— 供 /order/page 与开放接口按编码过滤
+    order_type_code = str(pick(row, SOURCE_KEYS["order_type"]) or "").strip()
+    extra["order_type_code"] = order_type_code or None
+    extra["order_type"] = ORDER_TYPE_NAMES.get(order_type_code)
 
     qty = to_number(pick(row, SOURCE_KEYS["qty"]))
     intake = to_number(pick(row, INTAKE_KEYS_DOMESTIC if trade_type == TRADE_DOMESTIC else INTAKE_KEYS_EXPORT))
