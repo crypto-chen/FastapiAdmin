@@ -576,8 +576,6 @@ def build_record(
     extra["full_cycle"] = days_between(
         order_date and datetime(order_date.year, order_date.month, order_date.day), ship_date
     )
-    extra["sku"] = None
-
     customer_id = to_number(pick(row, SOURCE_KEYS["customer_id"]))
     if customer_id is not None:
         customer = customer_map.get(int(customer_id)) or {}

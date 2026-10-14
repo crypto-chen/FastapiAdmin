@@ -107,7 +107,10 @@ SOURCE_KEYS: dict[str, list[str]] = {
     "salesman_code": ["create_id"],
     "order_type": ["order_type"],
     "platform": ["source_platform"],
-    "shop": ["store_name"],
+    # 店铺取 orderAnalyze 的 source 字段（业务口径确认）；store_name 是外贸侧的另一套编码
+    "shop": ["source"],
+    # SKU 取 product_model（业务口径确认）
+    "sku": ["product_model"],
     "is_new": ["is_new"],
     "product_series": ["product_series"],
     "design_fee": ["design_remove_taxes_freight", "design_cost"],
