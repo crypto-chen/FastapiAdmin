@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +58,8 @@ COMPANY_METRIC_CODES: dict[str, str] = {
     "PER-02": "marketing_per02_total",
 }
 SETTLEMENT_RATE = 0.10  # CUS-17 营销结算收入 = 对外出货净额 × 10%
+# 呆滞库存阈值（天）：入库后超过该天数仍未发货（CUS-38，与 CRM /hs/get90NoChuHuo 一致）
+STAGNANT_DAYS = 90
 
 # 客户维度的应收类指标（已由指标引擎按「往来单位 = 客户」写入 metric_value.dept_code）
 AR_BALANCE_CODE = "marketing_ar_balance"
@@ -368,6 +370,9 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                 "ar_balance": 0.0,
                 "ar_overdue": 0.0,
                 "aging": {},
+                "theoretical_inventory": 0.0,
+                "theoretical_inventory_orders": 0,
+                "stagnant_inventory": 0.0,
                 "ar_only": False,
                 "customer_category": None,
                 "collection_term": None,
@@ -415,6 +420,19 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
         term = str(extra.get("collection_term") or "").strip()
         if term:
             bucket["term_counter"][term] = bucket["term_counter"].get(term, 0.0) + 1
+        # 理论库存（CUS-36）= 已入库未发货的订单成本；呆滞库存（CUS-38）= 其中入库超 90 天未发货的部分
+        if row.finish_date is not None and row.ship_date is None:
+            # 未发货订单「入库数量」为 0，cost_basis（单位成本×入库数量）通常为 0，
+            # 因此优先取整单成本合计 total_cost（材料费 + 加工费）
+            order_cost = to_number(extra.get("total_cost"))
+            if not order_cost:
+                order_cost = to_number(extra.get("cost_basis"))
+            if not order_cost:
+                order_cost = to_number(extra.get("unit_cost")) * to_number(extra.get("inbound_qty"))
+            bucket["theoretical_inventory"] += order_cost
+            bucket["theoretical_inventory_orders"] += 1
+            if row.finish_date.date() < (datetime.now().date() - timedelta(days=STAGNANT_DAYS)):
+                bucket["stagnant_inventory"] += order_cost
         # 业务员按姓名展示（同一客户当月多个业务员时按金额降序拼接）
         salesman_name = str(extra.get("salesman_name") or "").strip()
         if salesman_name:
@@ -452,6 +470,9 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                 "ar_balance": 0.0,
                 "ar_overdue": 0.0,
                 "aging": {},
+                "theoretical_inventory": 0.0,
+                "theoretical_inventory_orders": 0,
+                "stagnant_inventory": 0.0,
                 "ar_only": True,
                 "customer_category": None,
                 "collection_term": None,
@@ -498,6 +519,9 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                 "ar_balance": 0.0,
                 "ar_overdue": 0.0,
                 "aging": {},
+                "theoretical_inventory": 0.0,
+                "theoretical_inventory_orders": 0,
+                "stagnant_inventory": 0.0,
                 "ar_only": True,
                 "customer_category": None,
                 "collection_term": None,
@@ -572,6 +596,9 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
             "CUS-25": (bucket["aging"] or {}).get("CUS-25"),
             "CUS-26": (bucket["aging"] or {}).get("CUS-26"),
             "CUS-27": (bucket["aging"] or {}).get("CUS-27"),
+            "CUS-36": money(bucket["theoretical_inventory"]),
+            "CUS-38": money(bucket["stagnant_inventory"]),
+            "theoretical_inventory_orders": bucket["theoretical_inventory_orders"],
             "CUS-28": gross_profit,
             "CUS-29": percent(gross_profit, net_shipment),
             "CUS-30": contribution,
