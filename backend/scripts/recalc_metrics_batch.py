@@ -3,9 +3,11 @@
 用法：
     python scripts/recalc_metrics_batch.py --code marketing_travel_expense --code marketing_vehicle_expense
     python scripts/recalc_metrics_batch.py --code marketing_total_expense --period 2026-09
+    python scripts/recalc_metrics_batch.py --code marketing_total_expense --period-from 2026-01 --period-to 2026-10
     python scripts/recalc_metrics_batch.py --code marketing_total_expense --log recalc.log
 
-不传 ``--period`` 时按已有同步批次的全部期间依次重算。
+期间三种写法：``--period``（可重复，精确指定）、``--period-from/--period-to``（闭区间，按已有期间过滤）、
+都不传时按已有同步批次的全部期间依次重算。
 """
 
 import argparse
@@ -59,10 +61,21 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="批量重算指标")
     parser.add_argument("--code", action="append", required=True, help="指标编码，可重复")
     parser.add_argument("--period", action="append", default=None, help="期间值，可重复；缺省为全部已有期间")
+    parser.add_argument("--period-from", default=None, help="起始期间（含），如 2026-01")
+    parser.add_argument("--period-to", default=None, help="结束期间（含），如 2026-10")
     parser.add_argument("--log", default=None, help="同时写入日志文件")
     args = parser.parse_args()
 
-    periods = args.period or await available_periods()
+    if args.period:
+        periods = list(args.period)
+    else:
+        periods = await available_periods()
+        if args.period_from:
+            periods = [item for item in periods if item >= args.period_from]
+        if args.period_to:
+            periods = [item for item in periods if item <= args.period_to]
+    if not periods:
+        raise SystemExit("没有匹配的期间，请检查 --period / --period-from / --period-to")
     plan = await metric_ids(args.code)
     print(f"期间 {len(periods)} 个，指标 {len(plan)} 个，共 {len(periods) * len(plan)} 次计算", flush=True)
 
