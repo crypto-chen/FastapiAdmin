@@ -144,8 +144,11 @@ export const MetricAPI = {
       timeout: 15 * 60 * 1000,
     });
   },
-  /** 批量重算：metric_ids 为空表示重算全部启用指标（按依赖分层执行）。 */
-  runBatch(body: { metric_ids?: number[]; codes?: string[]; period_value?: string } = {}) {
+  /**
+   * 批量重算：metric_ids 为空表示重算全部启用指标（按依赖分层执行）。
+   * refresh=true 时先重拉该期间的取数批次再算（月结补算用）。
+   */
+  runBatch(body: { metric_ids?: number[]; codes?: string[]; period_value?: string; refresh?: boolean } = {}) {
     return request<ApiResponse<MetricBatchResult>>({
       url: "/metric/def/run-batch",
       method: "post",

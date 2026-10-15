@@ -147,6 +147,9 @@
           value-format="YYYY-MM"
           style="width: 150px"
         />
+        <ElCheckbox v-model="recalcRefresh" title="ERP 在期间结束后才补录凭证时勾选">
+          先重拉取数批次再算（月结补算）
+        </ElCheckbox>
       </div>
       <ElScrollbar height="320px">
         <ElCheckboxGroup v-model="recalcIds" class="recalc-list">
@@ -157,6 +160,8 @@
       </ElScrollbar>
       <ElAlert :closable="false" type="info" show-icon class="recalc-tip">
         重算按依赖分层执行（组成指标先算），派生指标会自动带上其依赖指标；历史期间首次重算需按期间回补取数，可能耗时数分钟。
+        若该期间的数据在金蝶/ERP 里是月底或次月才补录的（如月末凭证、快递费等），
+        必须勾选「先重拉取数批次再算」，否则会沿用库里不含月末数据的旧批次、重算结果仍为 0。
       </ElAlert>
       <template #footer>
         <ElButton @click="recalcVisible = false">取消</ElButton>
@@ -223,6 +228,7 @@ const page = reactive({ page_no: 1, page_size: 200, total: 0 });
 const recalcVisible = ref(false);
 const recalcIds = ref<number[]>([]);
 const recalcPeriod = ref<string>(periodValue.value);
+const recalcRefresh = ref(false);
 
 const recalcAll = computed({
   get: () => metrics.value.length > 0 && recalcIds.value.length === metrics.value.length,
@@ -369,7 +375,7 @@ function openRecalc() {
 }
 
 async function handleRunAll() {
-  await runBatch(undefined, recalcPeriod.value);
+  await runBatch(undefined, recalcPeriod.value, recalcRefresh.value);
 }
 
 async function handleRunSelected() {
@@ -377,18 +383,23 @@ async function handleRunSelected() {
     ElMessage.warning("请先勾选要重算的指标");
     return;
   }
-  await runBatch([...recalcIds.value], recalcPeriod.value);
+  await runBatch([...recalcIds.value], recalcPeriod.value, recalcRefresh.value);
 }
 
-async function runBatch(ids: number[] | undefined, period: string) {
+async function runBatch(ids: number[] | undefined, period: string, refresh: boolean) {
   running.value = true;
   ElMessage.info(
-    ids?.length ? `正在重算 ${ids.length} 个指标，请勿关闭页面` : "正在重算全部启用指标，请勿关闭页面",
+    refresh
+      ? "正在重拉取数批次并重算，耗时数分钟，请勿关闭页面"
+      : ids?.length
+        ? `正在重算 ${ids.length} 个指标，请勿关闭页面`
+        : "正在重算全部启用指标，请勿关闭页面",
   );
   try {
     const res = await MetricAPI.runBatch({
       metric_ids: ids,
       period_value: period || undefined,
+      refresh,
     });
     const data = res.data?.data;
     const failed = data?.failed ?? [];

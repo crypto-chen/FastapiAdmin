@@ -287,7 +287,11 @@ class MetricService:
         )
 
     async def run_batch(self, data: MetricBatchRunRequestSchema) -> MetricBatchResultSchema:
-        """批量重算：按依赖分层执行（组成指标先算），支持「全部指标」与「勾选的指标」。"""
+        """批量重算：按依赖分层执行（组成指标先算），支持「全部指标」与「勾选的指标」。
+
+        ``refresh=True`` 时先重拉该期间的取数批次：ERP 常在期间结束后才补录凭证，
+        此时库里那份旧批次不含月末数据，不重拉就会一直按 0 重算。
+        """
         codes = [str(code).strip() for code in (data.codes or []) if str(code).strip()]
         if data.metric_ids:
             rows = (
@@ -301,7 +305,7 @@ class MetricService:
             summary = await run_metric_batch(
                 period_value=data.period_value,
                 codes=codes or None,
-                refresh=False,
+                refresh=bool(data.refresh),
                 label="手动重算",
             )
         except ValueError as e:

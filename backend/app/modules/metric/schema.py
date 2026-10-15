@@ -165,6 +165,10 @@ class MetricBatchRunRequestSchema(BaseModel):
     metric_ids: list[int] | None = Field(default=None, description="要重算的指标定义ID")
     codes: list[str] | None = Field(default=None, description="要重算的指标编码")
     period_value: str | None = Field(default=None, max_length=32, description="期间值，缺省取当前期间")
+    refresh: bool = Field(
+        default=False,
+        description="重算前先按期间重拉取数批次（月结补算用：ERP 在期间结束后才补录凭证时，必须开这个开关）",
+    )
 
 
 class MetricBatchResultSchema(BaseModel):
