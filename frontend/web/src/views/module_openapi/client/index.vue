@@ -69,6 +69,11 @@
             {{ row.allow_cost_fields ? "开放" : "未开放" }}
           </template>
         </ElTableColumn>
+        <ElTableColumn label="客户分析" width="110" align="center">
+          <template #default="{ row }">
+            {{ row.allow_customer_detail ? "开放" : "未开放" }}
+          </template>
+        </ElTableColumn>
         <ElTableColumn label="限流(次/分)" width="110" align="center">
           <template #default="{ row }">{{ row.rate_limit }}</template>
         </ElTableColumn>
@@ -172,6 +177,10 @@
           <ElSwitch v-model="form.allow_cost_fields" />
           <span class="form-tip">关闭时成本、毛利、边际贡献类字段被剔除（字段 57 → 46）</span>
         </ElFormItem>
+        <ElFormItem label="客户分析明细">
+          <ElSwitch v-model="form.allow_customer_detail" />
+          <span class="form-tip">关闭时 /open/v1/customers 会被拒绝（403）；开启后才能拉客户分析明细</span>
+        </ElFormItem>
         <ElFormItem label="订单范围">
           <ElSelect v-model="form.order_scope_trade" clearable placeholder="不限" style="width: 100%">
             <ElOption label="不限" value="" />
@@ -258,6 +267,7 @@ const form = reactive({
   allow_run_calc: false,
   allow_order_detail: false,
   allow_cost_fields: false,
+  allow_customer_detail: false,
   order_scope_trade: "" as string,
   ip_whitelist: "",
   expire_time: "" as string | null,
@@ -333,6 +343,7 @@ function resetForm() {
     allow_run_calc: false,
     allow_order_detail: false,
     allow_cost_fields: false,
+    allow_customer_detail: false,
     order_scope_trade: "",
     ip_whitelist: "",
     expire_time: "",
@@ -363,6 +374,7 @@ function openEdit(row: OpenClientItem) {
     allow_run_calc: row.allow_run_calc,
     allow_order_detail: row.allow_order_detail,
     allow_cost_fields: row.allow_cost_fields,
+    allow_customer_detail: row.allow_customer_detail,
     order_scope_trade: (row.order_scope as { trade_type?: string } | null)?.trade_type ?? "",
     ip_whitelist: row.ip_whitelist ?? "",
     expire_time: row.expire_time ? row.expire_time.replace(" ", "T").slice(0, 19) : "",
@@ -384,6 +396,7 @@ function buildPayload() {
     allow_run_calc: form.allow_run_calc,
     allow_order_detail: form.allow_order_detail,
     allow_cost_fields: form.allow_cost_fields,
+    allow_customer_detail: form.allow_customer_detail,
     order_scope: form.order_scope_trade ? { trade_type: form.order_scope_trade } : null,
     ip_whitelist: form.ip_whitelist || null,
     expire_time: form.expire_time || null,
