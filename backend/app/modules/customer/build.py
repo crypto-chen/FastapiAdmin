@@ -60,6 +60,8 @@ COMPANY_METRIC_CODES: dict[str, str] = {
 SETTLEMENT_RATE = 0.10  # CUS-17 营销结算收入 = 对外出货净额 × 10%
 # 呆滞库存阈值（天）：入库后超过该天数仍未发货（CUS-38，与 CRM /hs/get90NoChuHuo 一致）
 STAGNANT_DAYS = 90
+# 库存周转天数按 30 天折算（与公司口径 marketing_inventory_turnover_days 一致）
+TURNOVER_DAYS = 30
 
 # 客户维度的应收类指标（已由指标引擎按「往来单位 = 客户」写入 metric_value.dept_code）
 AR_BALANCE_CODE = "marketing_ar_balance"
@@ -84,6 +86,42 @@ def period_end_date(period_value: str) -> date:
     leap = 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28
     last_day = [31, leap, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
     return date(year, month, last_day)
+
+
+def previous_period_value(period_value: str) -> str:
+    """``YYYY-MM`` → 上一期。"""
+    year, month = (int(part) for part in period_value.split("-")[:2])
+    year, month = (year - 1, 12) if month == 1 else (year, month - 1)
+    return f"{year}-{month:02d}"
+
+
+async def _load_previous_inventory(db: AsyncSession, period_value: str) -> dict[str, float]:
+    """上期（上一自然月，最新版本）各客户的理论库存，用于算平均库存（CUS-37）。"""
+    previous = previous_period_value(period_value)
+    version = (
+        await db.execute(
+            select(func.max(CustomerAnalysisModel.calc_version)).where(
+                CustomerAnalysisModel.period_value == previous
+            )
+        )
+    ).scalar()
+    if version is None:
+        return {}
+    rows = (
+        await db.execute(
+            select(CustomerAnalysisModel.customer_code, CustomerAnalysisModel.extra).where(
+                CustomerAnalysisModel.period_value == previous,
+                CustomerAnalysisModel.calc_version == version,
+                CustomerAnalysisModel.is_aggregate == 0,
+            )
+        )
+    ).all()
+    result: dict[str, float] = {}
+    for code, extra in rows:
+        if not code:
+            continue
+        result[str(code)] = to_number((extra or {}).get("CUS-36"))
+    return result
 
 
 async def _load_aging_rows(period_value: str) -> dict[str, dict[str, Any]]:
@@ -316,6 +354,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     company = await _company_metric_totals(db, period_value)
     ar_rows = await _load_ar_customer_rows(db, period_value)
     aging_rows = await _load_aging_rows(period_value)
+    prev_inventory = await _load_previous_inventory(db, period_value)
     person_index = await _load_person_index(db)
 
     master: dict[int, dict] = {}
@@ -373,6 +412,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                 "theoretical_inventory": 0.0,
                 "theoretical_inventory_orders": 0,
                 "stagnant_inventory": 0.0,
+                "sales_order_cost": 0.0,
                 "ar_only": False,
                 "customer_category": None,
                 "collection_term": None,
@@ -421,14 +461,13 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
         if term:
             bucket["term_counter"][term] = bucket["term_counter"].get(term, 0.0) + 1
         # 理论库存（CUS-36）= 已入库未发货的订单成本；呆滞库存（CUS-38）= 其中入库超 90 天未发货的部分
+        order_cost = to_number(extra.get("total_cost"))
+        if not order_cost:
+            order_cost = to_number(extra.get("cost_basis"))
+        if not order_cost:
+            order_cost = to_number(extra.get("unit_cost")) * to_number(extra.get("inbound_qty"))
+        bucket["sales_order_cost"] += order_cost  # 本期销售订单成本（CUS-37 分母）
         if row.finish_date is not None and row.ship_date is None:
-            # 未发货订单「入库数量」为 0，cost_basis（单位成本×入库数量）通常为 0，
-            # 因此优先取整单成本合计 total_cost（材料费 + 加工费）
-            order_cost = to_number(extra.get("total_cost"))
-            if not order_cost:
-                order_cost = to_number(extra.get("cost_basis"))
-            if not order_cost:
-                order_cost = to_number(extra.get("unit_cost")) * to_number(extra.get("inbound_qty"))
             bucket["theoretical_inventory"] += order_cost
             bucket["theoretical_inventory_orders"] += 1
             if row.finish_date.date() < (datetime.now().date() - timedelta(days=STAGNANT_DAYS)):
@@ -473,6 +512,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                 "theoretical_inventory": 0.0,
                 "theoretical_inventory_orders": 0,
                 "stagnant_inventory": 0.0,
+                "sales_order_cost": 0.0,
                 "ar_only": True,
                 "customer_category": None,
                 "collection_term": None,
@@ -522,6 +562,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                 "theoretical_inventory": 0.0,
                 "theoretical_inventory_orders": 0,
                 "stagnant_inventory": 0.0,
+                "sales_order_cost": 0.0,
                 "ar_only": True,
                 "customer_category": None,
                 "collection_term": None,
@@ -599,6 +640,17 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
             "CUS-36": money(bucket["theoretical_inventory"]),
             "CUS-38": money(bucket["stagnant_inventory"]),
             "theoretical_inventory_orders": bucket["theoretical_inventory_orders"],
+            "sales_order_cost": money(bucket["sales_order_cost"]),
+            "previous_theoretical_inventory": money(prev_inventory.get(str(bucket["customer_code"]), 0.0)),
+            # 库存周转天数 = (上期理论库存 + 本期理论库存) ÷ 2 ÷ 本期销售订单成本 × 30
+            "CUS-37": round(
+                ((prev_inventory.get(str(bucket["customer_code"]), 0.0) + bucket["theoretical_inventory"]) / 2)
+                / bucket["sales_order_cost"]
+                * TURNOVER_DAYS,
+                4,
+            )
+            if bucket["sales_order_cost"]
+            else 0.0,
             "CUS-28": gross_profit,
             "CUS-29": percent(gross_profit, net_shipment),
             "CUS-30": contribution,

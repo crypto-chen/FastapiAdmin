@@ -70,7 +70,7 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str, str]] = [
     ("CUS-35", "客户贡献率", "number", "成本", False, "计算", "CUS-32 ÷ REV-01"),
     ("CUS-36", "理论库存", "number", "库存", True, "ERP", "客户已入库未发货的订单成本（Σ cost_basis）"),
     ("CUS-36-1", "实际库存", "number", "库存", True, "ERP", "（待口径）"),
-    ("CUS-37", "库存周转天数", "number", "库存", False, "计算", "平均库存÷销售成本×天数"),
+    ("CUS-37", "库存周转天数", "number", "库存", False, "计算", "(上期理论库存+本期理论库存)÷2 ÷ 本期销售订单成本 ×30"),
     ("CUS-38", "呆滞库存", "number", "库存", True, "ERP", "已入库未发货且入库超 90 天的订单成本"),
     ("CUS-40", "复购率", "number", "其他", False, "计算", "复购订单 ÷ 总订单"),
     ("CUS-41", "退货率", "number", "其他", False, "计算", "退货额 ÷ CUS-16"),
