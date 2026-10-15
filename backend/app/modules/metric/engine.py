@@ -1402,6 +1402,42 @@ async def _resolve_dept_id(db, org_id: int | None, dept_code: str) -> int | None
     ).scalars().first()
 
 
+# 进程内缓存：同一批次的行数据在多个指标计算间复用（单批次几 MB，反复解析是主要耗时）
+_RUN_PAYLOAD_CACHE: dict[int, dict] = {}
+_RUN_PAYLOAD_CACHE_LIMIT = 24
+# 组织 → {部门编码: 部门ID}，避免每个维度查一次库
+_DEPT_CODE_CACHE: dict[int, dict[str, int]] = {}
+
+
+def _cached_run_payload(run) -> dict:
+    """取批次原始返回（带进程内缓存；与按任务+期间的 ``_load_run_payload`` 区分开）。"""
+    if run is None:
+        return {}
+    cached = _RUN_PAYLOAD_CACHE.get(run.id)
+    if cached is not None:
+        return cached
+    payload = dict(run.rows_json or {})
+    _RUN_PAYLOAD_CACHE[run.id] = payload
+    if len(_RUN_PAYLOAD_CACHE) > _RUN_PAYLOAD_CACHE_LIMIT:
+        _RUN_PAYLOAD_CACHE.pop(next(iter(_RUN_PAYLOAD_CACHE)))
+    return payload
+
+
+async def _dept_id_map(db, org_id: int | None) -> dict[str, int]:
+    """组织下 ``master_dept.code → id`` 映射（一次查询 + 进程内缓存）。"""
+    if org_id is None:
+        return {}
+    cached = _DEPT_CODE_CACHE.get(org_id)
+    if cached is not None:
+        return cached
+    rows = (
+        await db.execute(select(MasterDeptModel.code, MasterDeptModel.id).where(MasterDeptModel.org_id == org_id))
+    ).all()
+    mapping = {str(code): int(dept_id) for code, dept_id in rows}
+    _DEPT_CODE_CACHE[org_id] = mapping
+    return mapping
+
+
 async def _load_person_index(db) -> dict[str, dict]:
     """CRM 业务员ID（订单 ``create_id``）→ 标准人员信息。
 
@@ -3077,7 +3113,7 @@ async def _execute_metric_calc_inner(
                 payload = prefetched_payloads[job_id]
             else:
                 source_run = await _latest_success_run(db, job_id, period)
-                payload = (source_run.rows_json or {}) if source_run else {}
+                payload = _cached_run_payload(source_run)
             if kind == API_SCALAR_KIND:
                 # 单值接口（如 CRM 订单未税金额）：响应里只有一个数值，没有行结构
                 extracted = extract_api_scalar(payload, config)
@@ -3118,8 +3154,9 @@ async def _execute_metric_calc_inner(
             )
             # 非部门维度（如客户、店铺）不做 master_dept 映射：省掉每个维度一次查询
             is_dept_dim = bool(config.get("detail_is_department", kind == ACCOUNT_BALANCE_KIND))
+            dept_map = await _dept_id_map(db, org_id) if is_dept_dim else {}
             for dept_code, bucket in extracted["departments"].items():
-                dept_id = await _resolve_dept_id(db, org_id, dept_code) if is_dept_dim else None
+                dept_id = dept_map.get(dept_code) if is_dept_dim else None
                 db.add(
                     MetricValueModel(
                         metric_id=metric_id,

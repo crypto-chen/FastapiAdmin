@@ -56,13 +56,15 @@ METRIC_DEFS = [
         "code": "marketing_travel_expense",
         "name": "营销中心差旅费用",
         # 差旅口径含三种维度写法：差旅费 / 交通费 / 交通差旅
-        "detail_name_contains": ["差旅费", "交通费", "交通差旅"],
+        # 核算对应表：交通费归车辆费用，差旅费/交通差旅归本指标
+        "detail_name_contains": ["差旅费", "交通差旅"],
     },
     {
         "code": "marketing_vehicle_expense",
         "name": "营销中心车辆费用",
         # 车辆口径按费用项目精确匹配，避免误纳「推广店铺直通车」等同含"车"字的广告费用
-        "detail_name_contains": ["车辆维修费", "车辆年审保养保险", "车油卡充值", "停车费"],
+        # 核算对应表：过路费/车油卡充值/车辆年审保养保险/交通费/停车费/车辆维修费
+        "detail_name_contains": ["过路费", "车辆维修费", "车辆年审保养保险", "车油卡充值", "停车费", "交通费"],
     },
     {
         "code": "marketing_low_value_consumables",
@@ -78,18 +80,21 @@ METRIC_DEFS = [
         "code": "marketing_intl_express_expense",
         "name": "营销中心国际快递费",
         # 只取国际（外贸快递）；内贸快递、快递费、运输费用另有维度，需要时再加
-        "detail_name_contains": ["外贸快递"],
+        # 核算对应表：外贸快递、报关费
+        "detail_name_contains": ["外贸快递", "报关费"],
     },
     {
         "code": "marketing_domestic_express_expense",
         "name": "营销中心国内快递费",
-        "detail_name_contains": ["内贸快递", "快递费"],
+        # 核算对应表：内贸快递、售后运输费（快递费归运输费）
+        "detail_name_contains": ["内贸快递", "售后运输费"],
     },
     {
         "code": "marketing_welfare_expense",
         "name": "营销中心福利费",
         # 只取「其他福利」；奖金/补贴类（业绩提成奖金、年终奖金、岗位补贴等）不在本指标口径
-        "detail_name_contains": ["其他福利"],
+        # 核算对应表：其他福利、直接人工-其他福利
+        "detail_name_contains": ["其他福利", "直接人工-其他福利"],
     },
     {
         "code": "marketing_utility_expense",
@@ -100,22 +105,22 @@ METRIC_DEFS = [
     {
         "code": "marketing_platform_expense",
         "name": "营销中心平台费",
-        # 按费用项目精确匹配（括号为全角，与 ERP 维度名称一致）
+        # 核算对应表：平台交易服务费、平台费（非运营平台-公众号）、平台延迟发货赔付费
+        # （平台固定费（年费/月租）对应表归「人员费用」，已移出本指标）
         "detail_name_contains": [
             "专用平台费用",
             "平台交易服务费",
             "平台费（非运营平台-公众号）",
-            "平台固定费（年费/月租）",
             "平台延迟发货赔付费",
         ],
     },
     {
         "code": "marketing_after_sales_expense",
         "name": "营销中心售后费用",
-        # 按 5 个售后费用项目精确匹配；注意「售后组/电话费」这类"部门名含售后"的行不会被计入
+        # 核算对应表：售后返工费（售后运输费归国内快递费）
+        # 注意「售后组/电话费」这类"部门名含售后"的行不会被计入
         "detail_name_contains": [
             "售后其它费用",
-            "售后运输费",
             "售后赔偿费",
             "售后返工费",
         ],
@@ -129,7 +134,8 @@ METRIC_DEFS = [
         "code": "marketing_transport_expense",
         "name": "营销中心运输费",
         # 只取「运输费用」；「售后运输费」属售后费用指标口径，不在此指标内
-        "detail_name_contains": ["运输费用"],
+        # 核算对应表：运输费用、快递费
+        "detail_name_contains": ["运输费用", "快递费"],
     },
     {
         "code": "marketing_recruitment_expense",
@@ -166,12 +172,14 @@ METRIC_DEFS = [
             "推广店铺直通车",
             "推广SEO工具费用",
             "推广物流单号费",
+            "商务费用",
         ],
     },
     {
         "code": "marketing_rent_property_expense",
         "name": "营销中心租金及物业管理费",
-        "detail_name_contains": ["场地租金", "物业管理费"],
+        # 核算对应表：场地租金、物业管理费、宿舍租金
+        "detail_name_contains": ["场地租金", "物业管理费", "宿舍租金"],
     },
     {
         "code": "marketing_ecommerce_association_fee",
