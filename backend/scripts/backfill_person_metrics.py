@@ -86,8 +86,12 @@ def _source_codes(measures: dict) -> set[str]:
     return codes
 
 
-async def _load_targets(codes: list[str] | None):
-    """返回 (指标定义列表, 来源对象快照列表, 来源对象按期间列表, 任务映射)。"""
+async def _load_targets(codes: list[str] | None, skip_codes: list[str] | None = None):
+    """返回 (指标编码列表, 来源对象快照列表, 来源对象按期间列表, 任务映射)。
+
+    ``codes`` 只回补列出的指标；``skip_codes`` 反向排除（两者可同时用，先按 codes 筛选再排除）。
+    """
+    excluded = {str(code).strip() for code in (skip_codes or []) if str(code).strip()}
     async with async_db_session() as db:
         query = select(MetricDefModel).where(
             MetricDefModel.category == PERSON_CATEGORY, MetricDefModel.is_deleted == False  # noqa: E712
@@ -95,6 +99,8 @@ async def _load_targets(codes: list[str] | None):
         if codes:
             query = query.where(MetricDefModel.code.in_(codes))
         metrics = (await db.execute(query.order_by(MetricDefModel.id.asc()))).scalars().all()
+        if excluded:
+            metrics = [item for item in metrics if str(item.code) not in excluded]
         if not metrics:
             raise SystemExit("没有找到业务员指标（分类 营销中心-业务员）；请先执行 seed_crm_person_metrics.py")
 
@@ -170,12 +176,18 @@ async def main() -> None:
     parser.add_argument("--start", required=True, help="起始期间，如 2025-01")
     parser.add_argument("--end", required=True, help="结束期间，如 2026-09")
     parser.add_argument("--code", action="append", default=None, help="只回补指定指标编码，可重复")
+    parser.add_argument(
+        "--skip-code",
+        action="append",
+        default=None,
+        help="排除指定指标编码（可重复）；跨月回补时常用它跳过线索类（近30天滚动口径）",
+    )
     parser.add_argument("--refresh", action="store_true", help="已有批次也强制重拉")
     parser.add_argument("--skip-sync", action="store_true", help="只算指标，不重新取数")
     args = parser.parse_args()
 
     periods = _months(args.start, args.end)
-    metric_codes, snapshots, period_objects, jobs_by_object = await _load_targets(args.code)
+    metric_codes, snapshots, period_objects, jobs_by_object = await _load_targets(args.code, args.skip_code)
     print(f"待回补期间 {len(periods)} 个：{periods[0]} ~ {periods[-1]}")
     print(f"业务员指标 {len(metric_codes)} 个；快照来源 {len(snapshots)} 个；按期间来源 {len(period_objects)} 个")
 
