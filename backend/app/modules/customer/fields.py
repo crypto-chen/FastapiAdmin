@@ -37,7 +37,7 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str, str]] = [
     ("CUS-01", "客户编码", "string", "基础", False, "CRM", "客户主档 number"),
     ("CUS-02", "客户名称", "string", "基础", False, "CRM", "客户主档 name"),
     ("CUS-03", "客户类型", "string", "维度", False, "CRM", "订单行 customer_category → 字典"),
-    ("CUS-04", "地区", "string", "维度", False, "CRM", "客户主档：内贸 region(省/市/区)｜外贸 country(国家)"),
+    ("CUS-04", "地区", "string", "维度", False, "CRM", "客户主档：内贸 region(省/市/区)｜外贸 country(国家，数字ID 经 /hs/base/getBaseWorldList 翻译)"),
     ("CUS-05", "贸易类型", "string", "维度", False, "CRM", "接口 type=1/2；多值拼接"),
     ("CUS-06", "信用等级", "string", "维度", False, "财经", "A/B/C/D（待财经给表）"),
     ("CUS-07", "账期", "string", "维度", False, "合同", "天数（collection_term 编码需映射）"),

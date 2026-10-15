@@ -78,6 +78,40 @@ PENDING_NOTES: list[str] = [
 REGION_KEYS = ("region", "country", "continents")
 
 AGING_INI = Path(__file__).resolve().parents[3] / "env" / "kindee_conf.ini"
+# 外贸国家字典：/hs/base/getBaseWorldList 返回 {"29": "巴西", ...}（ID → 名称）
+WORLD_LIST_PATH = "/hs/base/getBaseWorldList"
+
+
+async def _load_world_map() -> dict[str, str]:
+    """国家/地区字典（ID → 名称）；取不到时返回空、不影响其它字段。"""
+    import httpx
+
+    from app.modules.crm.client import DEFAULT_BASE_URL
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            response = await client.get(f"{DEFAULT_BASE_URL}{WORLD_LIST_PATH}")
+            payload = response.json().get("data")
+        if isinstance(payload, dict):
+            return {str(key): str(value) for key, value in payload.items()}
+        if isinstance(payload, list):
+            return {
+                str(item.get("id")): str(item.get("name"))
+                for item in payload
+                if isinstance(item, dict) and item.get("id") is not None
+            }
+    except Exception as exc:  # noqa: BLE001 - 字典取不到只是少一层翻译
+        logger.warning(f"国家字典取数失败（{WORLD_LIST_PATH}）：{exc}")
+    return {}
+
+
+def map_region_names(value: str, world_map: dict[str, str]) -> str:
+    """地区取值里的纯数字（国家 ID）翻译成名称，其余原样保留。"""
+    if not value:
+        return value
+    return "/".join(
+        world_map.get(part, part) if part.isdigit() else part for part in value.split("/") if part
+    )
 
 
 def period_end_date(period_value: str) -> date:
@@ -356,6 +390,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     aging_rows = await _load_aging_rows(period_value)
     prev_inventory = await _load_previous_inventory(db, period_value)
     person_index = await _load_person_index(db)
+    world_map = await _load_world_map()
 
     master: dict[int, dict] = {}
     for row in master_rows:
@@ -600,6 +635,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
         elif master_type == "2":
             region_value = str((master_row or {}).get("country") or "").strip()
         region_value = region_value or _concat(bucket["region_counter"])
+        region_value = map_region_names(region_value, world_map)
         trade_value = _concat(bucket["trade_counter"]) or MASTER_TYPE_NAMES.get(master_type, "")
         intake = money(bucket["intake_untaxed"])
         net_shipment = money(bucket["ship_untaxed"] + bucket["design_income"] + bucket["return_refund"])
