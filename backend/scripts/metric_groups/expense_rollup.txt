@@ -1,0 +1,13 @@
+# 营销中心费用类汇总/比率指标：依赖 expense_caliber.txt 里的费用指标
+# 必须在费用指标重算之后执行（用 --with-dependents 时可省略本文件）
+# 用法：python scripts/recalc_metrics_batch.py --code-file scripts/metric_groups/expense_rollup.txt \
+#         --period-from 2026-01 --period-to 2026-10
+marketing_total_expense
+marketing_fixed_expense_subtotal
+marketing_fixed_expense_total
+marketing_variable_expense_total
+marketing_fixed_expense_rate
+marketing_variable_expense_rate
+marketing_cost_expense_rate
+marketing_break_even_sales
+marketing_platform_promotion_roi

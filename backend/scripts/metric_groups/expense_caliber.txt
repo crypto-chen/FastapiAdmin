@@ -1,0 +1,14 @@
+# 营销中心费用类指标：核算口径变更后需要重算的指标清单
+# 对应财务「核算对应表」（2026-10-15 对齐）中直接改了核算维度条件的 10 个指标；
+# 用法：python scripts/recalc_metrics_batch.py --code-file scripts/metric_groups/expense_caliber.txt \
+#         --period-from 2026-01 --period-to 2026-10 [--with-dependents]
+marketing_travel_expense
+marketing_vehicle_expense
+marketing_welfare_expense
+marketing_intl_express_expense
+marketing_domestic_express_expense
+marketing_platform_expense
+marketing_after_sales_expense
+marketing_promotion_expense
+marketing_transport_expense
+marketing_rent_property_expense
