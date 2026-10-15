@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.modules.ai.chat.controller import ChatRouter
 from app.modules.common.file.controller import FileRouter
+from app.modules.customer.controller import CustomerRouter
 from app.modules.erp.jushuitan.controller import JushuitanRouter
 from app.modules.erp.kingdee.controller import KingdeeRouter
 from app.modules.generator.gencode.controller import GenRouter
@@ -94,6 +95,7 @@ DOMAIN_CONTROLLERS: dict[str, list[APIRouter]] = {
     ],
     "/metric": [MetricRouter, MetricValueRouter],
     "/order": [OrderRouter],
+    "/customer": [CustomerRouter],
     "/openapi": [OpenClientRouter, OpenApiLogRouter],
     "/system-mapping": [SystemMappingRouter],
     "/common": [FileRouter],

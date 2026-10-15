@@ -37,6 +37,9 @@ class OpenClientModel(ModelMixin, UserMixin):
     allow_cost_fields: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, comment="是否允许读取成本/毛利/边际贡献类字段(默认不开放)"
     )
+    allow_customer_detail: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="是否允许查询客户分析明细(默认不开放)"
+    )
     order_scope: Mapped[dict | None] = mapped_column(
         JSON, default=None, nullable=True, comment="允许的订单范围(客户/业务员/贸易类型)，空=不限"
     )
