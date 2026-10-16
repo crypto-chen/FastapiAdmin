@@ -39,14 +39,18 @@ class ProductLineAnalysisModel(ModelMixin, UserMixin):
         Integer, default=0, nullable=False, comment="0=明细 1=产品线小计 2=全表合计"
     )
 
+    # 注意：这三列参与唯一键 uq_dwd_product_line_key(period_value, product_line_code, sku, calc_version)，
+    # 长度必须收敛——utf8mb4 下 64+64 字符 ≈ 580 字节，能同时满足 InnoDB COMPACT(767) 与
+    # 老版本/非 DYNAMIC 行格式(1000) 的索引键长上限；写成 128 会超限报
+    # `Specified key was too long; max key length is 1000 bytes`。
     product_line_code: Mapped[str | None] = mapped_column(
-        String(128), default=None, nullable=True, comment="产品线大类（型号字典上卷原值）"
+        String(64), default=None, nullable=True, comment="产品线大类（型号字典上卷原值）"
     )
     product_line_name: Mapped[str | None] = mapped_column(
-        String(255), default=None, nullable=True, comment="产品线大类名称（同 code，便于展示）"
+        String(128), default=None, nullable=True, comment="产品线大类名称（同 code，便于展示）"
     )
     sku: Mapped[str | None] = mapped_column(
-        String(128), default=None, nullable=True, comment="SKU（型号字典 model）"
+        String(64), default=None, nullable=True, comment="SKU（型号字典 model）"
     )
 
     order_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="订单数(接单量)")

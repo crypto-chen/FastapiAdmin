@@ -24,9 +24,11 @@ def upgrade() -> None:
     sa.Column('period_value', sa.String(length=16), nullable=False, comment='期间(YYYY-MM)'),
     sa.Column('calc_version', sa.Integer(), nullable=False, comment='计算版本'),
     sa.Column('is_aggregate', sa.Integer(), nullable=False, comment='0=明细 1=产品线小计 2=全表合计'),
-    sa.Column('product_line_code', sa.String(length=128), nullable=True, comment='产品线大类（型号字典上卷原值）'),
-    sa.Column('product_line_name', sa.String(length=255), nullable=True, comment='产品线大类名称（同 code，便于展示）'),
-    sa.Column('sku', sa.String(length=128), nullable=True, comment='SKU（型号字典 model）'),
+    # 这三列参与唯一键 uq_dwd_product_line_key，长度必须收敛：utf8mb4 下 64+64 字符 ≈ 580 字节，
+    # 才能同时满足 InnoDB COMPACT(767) 与老版本/非 DYNAMIC 行格式(1000) 的索引键长上限。
+    sa.Column('product_line_code', sa.String(length=64), nullable=True, comment='产品线大类（型号字典上卷原值）'),
+    sa.Column('product_line_name', sa.String(length=128), nullable=True, comment='产品线大类名称（同 code，便于展示）'),
+    sa.Column('sku', sa.String(length=64), nullable=True, comment='SKU（型号字典 model）'),
     sa.Column('order_count', sa.Integer(), nullable=False, comment='订单数(接单量)'),
     sa.Column('ship_qty', sa.Numeric(precision=20, scale=4), nullable=True, comment='出货数量（订单全链路 ship_qty，待补）'),
     sa.Column('intake_untaxed', sa.Numeric(precision=20, scale=4), nullable=True, comment='接单未税'),

@@ -37,6 +37,13 @@ ORDER_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("ship_qty", "DECIMAL(18,4) NULL", "出货数量（发货明细 send_qty 汇总，发货时间口径优先）"),
 )
 
+# 参与唯一键 uq_dwd_product_line_key 的列，长度必须收敛（否则 utf8mb4 下索引键超 767/1000 字节）
+NARROW_COLUMNS: tuple[tuple[str, int, str], ...] = (
+    ("product_line_code", 64, "产品线大类（型号字典上卷原值）"),
+    ("product_line_name", 128, "产品线大类名称（同 code，便于展示）"),
+    ("sku", 64, "SKU（型号字典 model）"),
+)
+
 
 def alembic_heads() -> list[str]:
     result = subprocess.run(
@@ -84,6 +91,7 @@ async def inspect_and_fix(apply: bool) -> None:
     missing_tables: list = []
     missing_columns: list[str] = []
     missing_indexes: list[str] = []
+    wide_columns: list[tuple[str, int, str]] = []
 
     async with async_engine.begin() as conn:
         names = await conn.run_sync(lambda c: set(inspect(c).get_table_names()))
@@ -137,6 +145,31 @@ async def inspect_and_fix(apply: bool) -> None:
             if not flag:
                 missing_columns.append("allow_product_line_detail")
 
+        print("  ④ 唯一键列宽（超宽会在建表时报 1071 Specified key was too long）：")
+        if ProductLineAnalysisModel.__table__.name in names:
+            widths = {
+                row[0]: row[1]
+                for row in (
+                    await conn.execute(
+                        text(
+                            "SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dwd_product_line_analysis'"
+                        )
+                    )
+                ).all()
+            }
+            for column, target, comment in NARROW_COLUMNS:
+                current = widths.get(column)
+                if current is None:
+                    print(f"     {column:<32} 列不存在 ⚠️")
+                elif int(current) > target:
+                    print(f"     {column:<32} 当前 {int(current)} > 目标 {target}，需收窄 ⚠️")
+                    wide_columns.append((column, target, comment))
+                else:
+                    print(f"     {column:<32} {int(current)} ≤ {target} ✅")
+        else:
+            print("     （表不存在，建表时按模型长度创建，无需收窄）")
+
         if not apply:
             return
 
@@ -163,7 +196,15 @@ async def inspect_and_fix(apply: bool) -> None:
                 text(f"CREATE INDEX {index} ON dwd_order_full_chain(order_id)")
             )
             print(f"     已建索引：{index}")
-        if not (missing_tables or missing_columns or missing_indexes):
+        if wide_columns:
+            clauses = ", ".join(
+                f"MODIFY {column} VARCHAR({target}) NULL COMMENT '{comment}'"
+                for column, target, comment in wide_columns
+            )
+            await conn.execute(text(f"ALTER TABLE dwd_product_line_analysis {clauses}"))
+            for column, target, _comment in wide_columns:
+                print(f"     已收窄列：{column} → VARCHAR({target})")
+        if not (missing_tables or missing_columns or missing_indexes or wide_columns):
             print("     无需补齐（4 类对象都已在库里）")
 
     await async_engine.dispose()
