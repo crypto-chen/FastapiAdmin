@@ -1,0 +1,148 @@
+存货收发存汇总表（组织 100 · 全仓 · 全物料）数据接入 —— 验证记录
+============================================================
+日期：2026-10-16    执行目录：D:\永锢\06.核算指标系统\FastapiAdmin\backend
+目标库：fastapiadmin（MySQL localhost:3306）    金蝶：http://14.29.131.249:82/k3cloud/（只读 GetSysReportData）
+
+一、改动文件与产物路径（4 个必交产物：MODIFIED_FILE / DIFF_FILE / VERIFICATION.txt / ROLLBACK.sh）
+------------------------------------------------------------
+1) MODIFIED_FILE（主改动：数据源 code 与金蝶 FormId 解耦）
+   D:\永锢\06.核算指标系统\FastapiAdmin\backend\app\modules\metadata\sync.py
+   改动：新增 REQUEST_FORM_ID_KEY / resolve_report_target()；fetch_source_payload 的报表分支
+         改用 resolve_report_target(source_object.code, params) 解析提交目标。
+   改动前哈希（git HEAD 版本）: d680ff4b94405f47e244f4fe3b78915ea4d746de
+   改动后哈希（工作区文件）    : fe492bea6f3043015966f38a573aa4dc42f468a1
+   （复核命令：`git show HEAD:backend/app/modules/metadata/sync.py | git hash-object --stdin`
+     与 `git hash-object backend/app/modules/metadata/sync.py`）
+   文档改动后哈希：docs\核算指标系统设计.md = 5332bb1ba75f1063238ba70236aed979b11823b0
+                   CHANGELOG.md = cee033cc32fb246ee5b24a50bfdd2acc6dbe6228
+2) 新增脚本（数据源与同步任务声明式维护）
+   D:\永锢\06.核算指标系统\FastapiAdmin\backend\scripts\seed_inventory_inout_summary_full.py
+3) 新增校验脚本（金蝶实时基线 vs 落库批次逐列比对）
+   D:\永锢\06.核算指标系统\FastapiAdmin\backend\scripts\check_inventory_inout_summary.py
+4) DIFF_FILE / ROLLBACK.sh / 本记录
+   D:\永锢\06.核算指标系统\FastapiAdmin\deploy\inventory-inout-summary\CHANGES.diff
+   D:\永锢\06.核算指标系统\FastapiAdmin\deploy\inventory-inout-summary\ROLLBACK.sh
+   D:\永锢\06.核算指标系统\FastapiAdmin\deploy\inventory-inout-summary\VERIFICATION.txt
+   （附带单元测试 backend/tests/test_inventory_inout_summary.py；文档 CHANGELOG.md、
+     docs\核算指标系统设计.md 各 1 处新增说明，均在 CHANGES.diff 内）
+
+二、BASELINE（接入前：金蝶实时取数，20 列 / FIsDisplayPeriod=false）
+------------------------------------------------------------
+命令（BASELINE 侧由校验脚本内置，同一份 fetch_report_data 分页取全量）：
+    cd D:\永锢\06.核算指标系统\FastapiAdmin\backend
+    .\.venv\Scripts\python.exe scripts\check_inventory_inout_summary.py --period 2026-09 --check-period-column
+输入：组织 100、会计期间 2026-09、仓库区间留空（全仓）、单据状态 C、核算体系 KJHSTX01_SYS、会计政策 KJZC01_SYS
+实际输出（逐字，节选关键行）：
+    --- 金蝶实时汇总 ---
+    行数 总=46151 明细=28905 小计=17246 无仓库=0
+      FENDQty          合计=      954,956.2281  非空行=11309
+      FENDPrice        合计=      334,138.5590  非空行=10951
+      FENDAmount       合计=    1,509,397.2300  非空行=21402
+    退出码：0（整条命令 EXITCODE=0，见三、）
+
+三、MODIFIED（接入后：落库批次，21 列 / FIsDisplayPeriod=true）
+------------------------------------------------------------
+步骤 1 建数据源（幂等，可重复执行）：
+    cd D:\永锢\06.核算指标系统\FastapiAdmin\backend
+    .\.venv\Scripts\python.exe scripts\seed_inventory_inout_summary_full.py
+实际输出（逐字）：
+    金蝶连接 id=1
+    来源系统 id=1 code=kingdee
+    来源对象 id=62 code=HS_INOUTSTOCKSUMMARYRPT_FULL（FormId=HS_INOUTSTOCKSUMMARYRPT）
+    标准实体 id=11 code=inventory_inout_summary_full 字段 21 个
+    同步任务 id=81 name=存货收发存汇总表-组织100（全仓全物料） cron=0 0 5 * * ? org=100
+    存货收发存汇总表（全仓·全物料）数据源初始化完成
+    退出码：0（SEED_RERUN_EXIT=0；二次执行后行数仍为 来源字段 21 / 标准字段 21 / 映射 21 / 任务 1）
+
+步骤 2 取 2026-09 数据：
+    .\.venv\Scripts\python.exe scripts\run_meta_sync.py --job-id 81 --period 2026-09 --show-latest
+实际输出（逐字，节选）：
+    ... 元数据同步任务 81 执行成功，批次 20261016063354042848，行数 46151
+    最近批次：
+      批次 id=1613 period=2026-09 status=success rows=46151
+    退出码：0
+
+步骤 3 取当期 2026-10 数据（cron 每天 05:00 走同一代码路径）：
+    .\.venv\Scripts\python.exe scripts\run_meta_sync.py --job-id 81 --period 2026-10 --show-latest
+实际输出（逐字，节选）：
+    元数据同步任务 81 执行成功，批次 20261016064817481541，行数 32191
+    批次 id=1614 period=2026-10 status=success rows=32191
+    退出码：0
+
+步骤 4 基线 vs 落库逐列比对（同一命令，含 20 列/21 列一致性）：
+    .\.venv\Scripts\python.exe scripts\check_inventory_inout_summary.py --period 2026-09 --check-period-column
+实际输出（逐字，节选）：
+    落库批次（MODIFIED）任务=存货收发存汇总表-组织100（全仓全物料） 期间=2026-09 run_id=1613 batch=20261016063354042848 row_count=46151，耗时 391.0s
+    行数 总=46151 明细=28905 小计=17246 无仓库=0
+    库存结存成本（期末结存金额 FENDAmount 合计）= 1,509,397.23
+    库存结存数量（期末结存数量 FENDQty 合计）  = 954,956.2281
+    --- 金蝶实时汇总（20 列，FIsDisplayPeriod=false） ---
+    行数 总=46151 明细=28905 小计=17246 无仓库=0
+    === 结论 ===
+    基线（金蝶实时）与接入后（落库批次）逐项一致，差异 0
+    退出码：0（EXITCODE=0）
+
+比对覆盖的 12 列（各列合计与非空行数逐项相等，差异 0）：
+    FINITQty/FRECEIVEQty/FSENDQty/FENDQty、FINITPrice/FRECEIVEPrice/FSENDPrice/FENDPrice、
+    FINITAMOUNT/FRECEIVEAmount/FSENDAmount/FENDAmount
+
+四、物料成本（期末结存单价 FENDPrice）Top 明细实测（2026-09）
+------------------------------------------------------------
+命令：.\.venv\Scripts\python.exe scripts\check_inventory_inout_summary.py --period 2026-09 --top 8
+实际输出（逐字节选）：
+    BCP0026745-1101 105-45-100喷砂 半成品 K15 海柔仓   155.0000   6.4385   997.96
+    BCP0030614-1202 215-52-263.5 半成品 G07 机箱成品仓  92.0000  10.8340   996.73
+    BCP0143706-1102 108-42-120喷砂 半成品 H70 海柔仓   126.0000   7.8999   995.39
+    WGB00071       J19壳体        型材原料 80*23.8 型材仓   0.0000   0.0000   994.79  ← 与金额差 -994.7900
+说明：数量×单价≈金额 对绝大多数明细成立；少数行「数量/单价为空、金额有值」（实测存在），
+      故成本类统计以金额列 FENDAmount 为准，单价列 FENDPrice 用于单件成本穿透核对。
+
+五、ROLLBACK（在副本库上实测，生产库保持改动后状态）
+------------------------------------------------------------
+1) 复制一份数据到副本库 fastapiadmin_rollback_test（create table like + insert select）：
+   实际输出：复制 meta_source_object: 1 行 / meta_source_field: 21 行 / meta_standard_entity: 1 行 /
+             meta_standard_field: 21 行 / meta_field_mapping: 21 行 / meta_sync_job: 1 行 / meta_sync_run: 2 行
+2) 执行回滚（ROLLBACK.sh 调用的同一入口）：
+   bash deploy/inventory-inout-summary/ROLLBACK.sh fastapiadmin_rollback_test
+   等价直接入口：.\.venv\Scripts\python.exe scripts\seed_inventory_inout_summary_full.py --rollback --db-name fastapiadmin_rollback_test
+   实际输出（逐字）：
+    meta_sync_run: 删除 2 行
+    meta_sync_job: 删除 1 行
+    meta_field_mapping: 删除 21 行
+    meta_source_field: 删除 21 行
+    meta_standard_field: 删除 21 行
+    meta_standard_entity: 删除 1 行
+    meta_source_object: 删除 1 行
+    回滚完成（库 fastapiadmin_rollback_test），共删除 68 行
+    退出码：0（ROLLBACK_EXIT=0）
+3) 回滚后校验：
+   回滚后 副本库行数: {'meta_source_object': 0, 'meta_source_field': 0, 'meta_standard_entity': 0,
+                     'meta_standard_field': 0, 'meta_field_mapping': 0, 'meta_sync_job': 0, 'meta_sync_run': 0}
+   回滚后 生产库行数（应保持不变）: {'meta_source_object': 1, 'meta_source_field': 21, 'meta_standard_entity': 1,
+                     'meta_standard_field': 21, 'meta_field_mapping': 21, 'meta_sync_job': 1, 'meta_sync_run': 2}
+   副本库残留行数合计 = 0   退出码：0（VERIFY_EXIT=0）；副本库已 drop
+4) ROLLBACK.sh 语法校验：bash -n deploy/inventory-inout-summary/ROLLBACK.sh → BASH_N_OK，退出码 0
+
+六、行为/状态恢复与回归
+------------------------------------------------------------
+- 生产库 2026-09 批次（run_id=1613，46151 行）与 2026-10 批次（run_id=1614，32191 行）保持接入后状态（未回滚）。
+- 既有数据源未受影响：meta_source_object.id=37（code=HS_INOUTSTOCKSUMMARYRPT，仓库区间 JXCPC~JXCPC，15 列）
+  与 meta_sync_job.id=62 原样保留（该对象下仍只有 1 个同步任务、模板内无 FormId 键）；
+  依赖它的指标 metric_value（metric_id=88，2026-09 = 382,901.9200）数值未变。
+- 单元测试：
+    .\.venv\Scripts\python.exe -m pytest tests\test_inventory_inout_summary.py -q  → 9 passed，退出码 0
+    .\.venv\Scripts\python.exe -m pytest tests -q → 96 passed, 2 errors
+    其中 2 个 error（tests/test_main.py::test_check_health、tests/test_migrations.py::test_bootstrap_matches_metadata）
+    为既有环境问题：`sqlite3.OperationalError: index ix_master_person_org_id already exists`
+    （masterdata 模型索引在 SQLite 引导期重复创建，与本次改动无关）——已用 `git stash push -- backend/app/modules/metadata/sync.py`
+    复现同样的 2 个 error，证明为改动前既有失败，随后 `git stash pop` 恢复。
+- 代码检查：ruff check（seed/check/test/metadata.sync）→ All checks passed!，退出码 0
+- 幂等：重复执行 seed 脚本后来源字段仍 21、标准字段 21、映射 21、同步任务 1（无重复行）。
+
+七、口径速查（按用户要求的两列成本）
+------------------------------------------------------------
+库存结存的成本 = 期末结存金额 FENDAmount（2026-09 全组织100全仓全物料合计 = 1,509,397.23 元）
+库存结存数量   = 期末结存数量 FENDQty（= 954,956.2281）
+物料的成本     = 期末结存单价 FENDPrice（= FENDAmount ÷ FENDQty，逐行核对相符）
+数据存放：meta_sync_run.rows_json（run_id=1613 / 1614），列顺序 = 请求参数 FieldKeys（21 列）
+查询入口：元数据同步批次接口（page_sync_run / detail_sync_run），或 scripts/check_inventory_inout_summary.py

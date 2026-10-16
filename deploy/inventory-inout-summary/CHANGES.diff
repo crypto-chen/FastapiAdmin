@@ -1,0 +1,1003 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 80e1f016..cee033cc 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -11,6 +11,7 @@
+ - **2026-09-03** 存储与工作流模块重构，调整目录结构与初始化逻辑
+ 
+ ### 新增
++- **2026-10-16** 接入金蝶《存货收发存汇总表》全量数据源（组织 100 · 全仓 · 全物料）：新增 `backend/scripts/seed_inventory_inout_summary_full.py`（来源对象 code `HS_INOUTSTOCKSUMMARYRPT_FULL`，FormId 由请求模板指定 `HS_INOUTSTOCKSUMMARYRPT`；标准实体 `inventory_inout_summary_full` / 表 `dwd_inventory_inout_summary_full`；同步任务「存货收发存汇总表-组织100（全仓全物料）」每天 05:00 取当期）与校验脚本 `backend/scripts/check_inventory_inout_summary.py`。21 列含**库存结存成本**（期末结存金额 `FENDAmount` + 数量 `FENDQty`）与**物料成本**（期末结存单价 `FENDPrice`）。2026-09 实测 46151 行（明细 28905 / 小计 17246）、期末结存金额 1,509,397.23 元、期末结存数量 954,956.2281，与金蝶实时取数逐列差异 0。元数据同步支持请求模板里用 `FormId` 覆盖提交给金蝶的业务对象（`app/modules/metadata/sync.py` 的 `resolve_report_target`），同一金蝶报表可按不同口径建多个数据源而不撞 `meta_source_object.code`；踩坑：`FYearPeriod` 需 `FIsDisplayPeriod = true`，`FEXPENSEID/FEXPENSENAME` 本组合不可查
+ - **2026-10-12** 对接文档再升级：新增「5.1 指标分组（按主题看编码）」（报价/接单/出货与收入/下推/库存/费用与收益/客户与复购/线索/工时与人均）与「5.2 Excel 科目编码对照表」（STF ↔ 系统编码 ↔ 单位），并在字段说明补充「单位请读 `data.metrics[].unit`，不要自行推断」；当前 33 个指标 / 463 行 / 40KB
+ - **2026-10-12** 业务员指标扩充到 33 个：新增取数类型 `crm_worktime_person`（读 CRM 工时接口 `/hs/getWorkTime` 的 `data.regularWork.detail` + `data.overtime.byUser`，按**工号**汇总总劳动时间；工号 → `source_person.raw_json.number` → CRM 用户名/姓名 + `master_person.code`）与指标 `marketing_person_total_labor_hours`（STF-32 业务员总劳动时间 = 正常工作时间 + 加班时间；2026-09 = 15,858.14 小时 / 83 人）。复用既有 `/hs/getWorkTime` 同步任务，无需新增取数
+ - **2026-10-10** 对接文档升级（面向外部系统交付）：《业务员指标开放接口对接说明》指标清单增加「最新期间」列、业务员数改为只统计最新计算版本（此前多次重算会虚高）；样例期间改为**指标覆盖最多**的期间、长表样例只用带 Excel 编码的指标、宽表样例补线索类期间差异说明；口径注意事项扩充到 9 条（线索类近30天滚动、分摊类 ORD-01 分母、库存为未出货订单金额、两个「人均」等于对应指标等）。当前 32 个指标 / 410 行
+diff --git a/backend/app/modules/metadata/sync.py b/backend/app/modules/metadata/sync.py
+index d680ff4b..fe492bea 100644
+--- a/backend/app/modules/metadata/sync.py
++++ b/backend/app/modules/metadata/sync.py
+@@ -333,6 +333,24 @@ JUSHUITAN_CONNECTOR = "jushuitan"
+ CRM_CONNECTOR = "crm"
+ # 金蝶单据查询（ExecuteBillQuery）：来源对象 ``query_type = bill_query``
+ KINGDEE_QUERY_TYPE_BILL = "bill_query"
++# 请求模板里显式声明提交给金蝶的业务对象（FormId）：同一个金蝶对象可能被多个口径的数据源查询
++# （如存货收发存汇总表：机箱成品仓一份、全仓全物料一份），而 ``meta_source_object.code``
++# 有 (system_id, code) 唯一约束不允许重名，故用模板里的 ``FormId`` 覆盖提交对象。
++REQUEST_FORM_ID_KEY = "FormId"
++
++
++def resolve_report_target(default_form_id: str, params: dict) -> tuple[str, dict]:
++    """解析报表取数目标：返回 ``(提交给金蝶的 FormId, 实际提交的参数)``。
++
++    模板未声明 ``FormId`` 时行为与历史一致（用来源对象 code 作 FormId、参数原样提交）；
++    声明了则以模板为准，并把该键从提交参数里摘掉，避免金蝶收到多余字段。
++    """
++    params = params or {}
++    if REQUEST_FORM_ID_KEY not in params:
++        return default_form_id, params
++    declared = str(params.get(REQUEST_FORM_ID_KEY) or "").strip()
++    clean = {key: value for key, value in params.items() if key != REQUEST_FORM_ID_KEY}
++    return declared or default_form_id, clean
+ 
+ 
+ async def fetch_kingdee_bill_query(
+@@ -440,7 +458,9 @@ async def fetch_source_payload(source_system: SourceSystemModel, source_object:
+     if str(source_object.query_type or "").strip() == KINGDEE_QUERY_TYPE_BILL:
+         # 单据查询：一次取一页，按 StartRow 翻页
+         return await fetch_kingdee_bill_query(client, source_object.code, params)
+-    return await fetch_report_data(client, source_object.code, params)
++    # 系统报表：模板里的 FormId 优先（同一声明式数据源可查同一个金蝶对象）
++    form_id, report_params = resolve_report_target(source_object.code, params)
++    return await fetch_report_data(client, form_id, report_params)
+ 
+ 
+ def extract_payload_rows(payload: dict) -> list:
+diff --git a/backend/scripts/check_inventory_inout_summary.py b/backend/scripts/check_inventory_inout_summary.py
+new file mode 100644
+index 00000000..76370c61
+--- /dev/null
++++ b/backend/scripts/check_inventory_inout_summary.py
+@@ -0,0 +1,296 @@
++"""校验「存货收发存汇总表（全仓·全物料）」数据接入：金蝶实时取数（基线） vs 落库批次（接入后）。
++
++两侧用**同一份请求参数与同一套汇总规则**：
++
++- 汇总规则与指标引擎 ``extract_inventory_ledger`` 一致：跳过小计行（物料编码以 ``-总计`` 结尾）
++  与仓库为空的行，明细行求和；
++- 基线（BASELINE）= 实时直连金蝶 ``GetSysReportData`` 分页取全量后汇总；
++- 接入后（MODIFIED）= 读 ``meta_sync_run.rows_json``（该数据源当日同步批次）汇总。
++
++输出：
++
++1. 行数（总行 / 明细行 / 小计行）与 12 个数量·单价·金额列的合计；
++2. **库存结存成本** = 期末结存金额 ``FENDAmount`` 合计、期末结存数量 ``FENDQty`` 合计；
++3. **物料成本** = 期末结存单价 ``FENDPrice``（按期末结存金额 Top N 明细，附 数量×单价≈金额 校验）；
++4. 基线 vs 落库的逐项差异（差异为 0 才算通过，退出码 0/1）。
++
++用法：
++    python scripts/check_inventory_inout_summary.py --period 2026-09
++    python scripts/check_inventory_inout_summary.py --period 2026-09 --check-period-column
++    python scripts/check_inventory_inout_summary.py --period 2026-09 --skip-live   # 只看落库批次
++"""
++
++import argparse
++import asyncio
++import json
++import sys
++from datetime import datetime
++from pathlib import Path
++
++PROJECT_ROOT = Path(__file__).resolve().parents[1]
++SCRIPT_DIR = Path(__file__).resolve().parent
++INI_PATH = PROJECT_ROOT / "env" / "kindee_conf.ini"
++ENV_PATH = PROJECT_ROOT / "env" / ".env.dev"
++if str(PROJECT_ROOT) not in sys.path:
++    sys.path.insert(0, str(PROJECT_ROOT))
++# 声明式常量与本脚本同目录；直接运行脚本时目录已在 sys.path，用 importlib 加载时需要显式补上
++if str(SCRIPT_DIR) not in sys.path:
++    sys.path.insert(0, str(SCRIPT_DIR))
++
++from seed_inventory_inout_summary_full import (  # noqa: E402
++    ENV_PATH as _ENV_PATH,
++)
++from seed_inventory_inout_summary_full import (  # noqa: E402
++    FORM_ID,
++    REQUEST_PARAMS,
++    SYNC_JOB_NAME,
++    load_env_file,
++)
++
++from app.modules.erp.kingdee.client import KingdeeClient  # noqa: E402
++from app.modules.metadata.sync import (  # noqa: E402
++    fetch_report_data,
++    render_request_params,
++    resolve_period_datetime,
++)
++
++SUBTOTAL_SUFFIX = "-总计"
++AMOUNT_COLUMNS = ["FINITAMOUNT", "FRECEIVEAmount", "FSENDAmount", "FENDAmount"]
++QTY_COLUMNS = ["FINITQty", "FRECEIVEQty", "FSENDQty", "FENDQty"]
++PRICE_COLUMNS = ["FINITPrice", "FRECEIVEPrice", "FSENDPrice", "FENDPrice"]
++HIGHLIGHT_COLUMNS = QTY_COLUMNS + PRICE_COLUMNS + AMOUNT_COLUMNS
++
++
++def to_number(value) -> float:
++    text = str(value if value is not None else "").strip()
++    if not text:
++        return 0.0
++    try:
++        return float(text)
++    except ValueError:
++        return 0.0
++
++
++def aggregate(rows: list, fields: list[str]) -> dict:
++    """按指标引擎同一规则汇总：跳过小计行与仓库为空的行。"""
++    index = {field: position for position, field in enumerate(fields)}
++    totals = dict.fromkeys(HIGHLIGHT_COLUMNS, 0.0)
++    non_null = dict.fromkeys(HIGHLIGHT_COLUMNS, 0)
++    detail_rows = 0
++    subtotal_rows = 0
++    rows_without_stock = 0
++    details: list[dict] = []
++    for row in rows:
++        if not isinstance(row, list):
++            continue
++        material = str(row[index["FMATERIALBASEID"]] or "") if "FMATERIALBASEID" in index else ""
++        if material.endswith(SUBTOTAL_SUFFIX):
++            subtotal_rows += 1
++            continue
++        stock = str(row[index["FSTOCKId"]] or "") if "FSTOCKId" in index else ""
++        if not stock.strip():
++            rows_without_stock += 1
++            continue
++        detail_rows += 1
++        for field in HIGHLIGHT_COLUMNS:
++            value = row[index[field]] if index.get(field) is not None and index[field] < len(row) else None
++            if str(value if value is not None else "").strip():
++                non_null[field] += 1
++            totals[field] += to_number(value)
++        details.append(
++            {
++                "material": material,
++                "name": str(row[index["FMATERIALNAME"]] or ""),
++                "group": str(row[index["FMATERIALGROUP"]] or ""),
++                "model": str(row[index["FMODEL"]] or ""),
++                "stock": stock,
++                "end_qty": to_number(row[index["FENDQty"]]),
++                "end_price": to_number(row[index["FENDPrice"]]),
++                "end_amount": to_number(row[index["FENDAmount"]]),
++            }
++        )
++    return {
++        "rows": len(rows),
++        "detail_rows": detail_rows,
++        "subtotal_rows": subtotal_rows,
++        "rows_without_stock": rows_without_stock,
++        "totals": totals,
++        "non_null": non_null,
++        "details": details,
++    }
++
++
++def print_side(tag: str, stat: dict) -> None:
++    print(f"\n--- {tag} ---")
++    print(
++        f"行数 总={stat['rows']} 明细={stat['detail_rows']} "
++        f"小计={stat['subtotal_rows']} 无仓库={stat['rows_without_stock']}"
++    )
++    for field in HIGHLIGHT_COLUMNS:
++        print(f"  {field:<16} 合计={stat['totals'][field]:>18,.4f}  非空行={stat['non_null'][field]}")
++
++
++def diff_side(baseline: dict, modified: dict) -> list[str]:
++    problems: list[str] = []
++    for key in ("rows", "detail_rows", "subtotal_rows"):
++        if baseline[key] != modified[key]:
++            problems.append(f"{key}: 基线 {baseline[key]} ≠ 落库 {modified[key]}")
++    for field in HIGHLIGHT_COLUMNS:
++        delta = round(baseline["totals"][field] - modified["totals"][field], 4)
++        if abs(delta) > 1e-6:
++            problems.append(f"{field} 合计差异 {delta}")
++    return problems
++
++
++def top_material_cost(stat: dict, limit: int) -> None:
++    """物料成本（期末结存单价）按期末结存金额 Top N 展示，并校验 数量×单价≈金额。"""
++    picks = sorted(stat["details"], key=lambda item: item["end_amount"], reverse=True)[:limit]
++    print(f"\n--- 物料成本（期末结存单价 FENDPrice）Top {limit}，按期末结存金额排序 ---")
++    print(f"{'物料编码':<16}{'名称':<14}{'分组':<10}{'规格':<12}{'仓库':<12}{'期末数量':>12}{'期末单价':>14}{'期末金额':>16}  数量×单价")
++    for item in picks:
++        check = item["end_qty"] * item["end_price"]
++        flag = "" if abs(check - item["end_amount"]) < 0.02 else f"  ← 与金额差 {check - item['end_amount']:.4f}"
++        print(
++            f"{item['material']:<16}{item['name'][:12]:<14}{item['group'][:8]:<10}{item['model'][:10]:<12}"
++            f"{item['stock'][:10]:<12}{item['end_qty']:>12,.4f}{item['end_price']:>14,.4f}{item['end_amount']:>16,.2f}{flag}"
++        )
++
++
++def load_batch(job_name: str, period: str) -> dict:
++    """读落库批次：任务参数（字段顺序）与该期间最新一次成功批次。"""
++    import pymysql
++
++    env = load_env_file(_ENV_PATH)
++    connection = pymysql.connect(
++        host=env.get("DATABASE_HOST", "localhost"),
++        port=int(env.get("DATABASE_PORT", "3306")),
++        user=env.get("DATABASE_USER", "root"),
++        password=env.get("DATABASE_PASSWORD", ""),
++        database=env.get("DATABASE_NAME", "fastapiadmin"),
++        charset="utf8mb4",
++        cursorclass=pymysql.cursors.DictCursor,
++    )
++    try:
++        with connection.cursor() as cursor:
++            cursor.execute(
++                "select j.id job_id, j.request_params, j.variables, o.variables object_variables "
++                "from meta_sync_job j join meta_source_object o on o.id = j.source_object_id "
++                "where j.name = %s",
++                (job_name,),
++            )
++            job = cursor.fetchone()
++            if job is None:
++                raise SystemExit(f"同步任务不存在：{job_name}（先跑 seed_inventory_inout_summary_full.py）")
++            cursor.execute(
++                "select id, batch_id, status, row_count, period_value, started_at, finished_at "
++                "from meta_sync_run where job_id = %s and period_value = %s and status = 'success' "
++                "order by id desc limit 1",
++                (job["job_id"], period),
++            )
++            run = cursor.fetchone()
++            if run is not None:
++                # rows_json 单批可达 10MB：按主键单独取，避免小 sort buffer 下 filesort 报
++                # 「Out of sort memory」（同一查询里带大 JSON 列排序会踩这个坑）
++                cursor.execute("select rows_json from meta_sync_run where id = %s", (run["id"],))
++                payload_row = cursor.fetchone()
++                run["rows_json"] = payload_row["rows_json"] if payload_row else None
++    finally:
++        connection.close()
++    if run is None:
++        raise SystemExit(f"没有 {period} 的成功批次：{job_name}（先执行 run_meta_sync.py --job-id … --period {period}）")
++    request_params = job["request_params"]
++    if isinstance(request_params, str):
++        request_params = json.loads(request_params)
++    payload = run["rows_json"]
++    if isinstance(payload, (str, bytes)):
++        payload = json.loads(payload)
++    meta = {
++        "job_id": job["job_id"],
++        "run_id": run["id"],
++        "batch_id": run["batch_id"],
++        "row_count": run["row_count"],
++        "started_at": run["started_at"],
++        "finished_at": run["finished_at"],
++        "period_value": run["period_value"],
++    }
++    return {"request_params": request_params, "rows": payload.get("Rows") or [], "meta": meta}
++
++
++def render_params(period: str) -> dict:
++    now = resolve_period_datetime(period)
++    variables = [
++        {"name": "year", "value_type": "expression", "value": "now.strftime('%Y')"},
++        {"name": "period", "value_type": "expression", "value": "now.strftime('%m')"},
++    ]
++    return render_request_params(REQUEST_PARAMS, "100", variables, now=now)
++
++
++async def live_rows(period: str, params: dict | None = None) -> tuple[list, dict]:
++    client = KingdeeClient.from_ini(INI_PATH)
++    payload = params or render_params(period)
++    report = await fetch_report_data(client, FORM_ID, payload)
++    return report.get("Rows") or [], payload
++
++
++async def main() -> int:
++    parser = argparse.ArgumentParser(description="校验存货收发存汇总表（全仓·全物料）数据接入")
++    parser.add_argument("--period", default=datetime.now().strftime("%Y-%m"), help="取数期间 YYYY-MM")
++    parser.add_argument("--job-name", default=SYNC_JOB_NAME, help="同步任务名称")
++    parser.add_argument("--top", type=int, default=8, help="物料成本展示条数")
++    parser.add_argument("--skip-live", action="store_true", help="跳过金蝶实时基线（只看落库批次）")
++    parser.add_argument(
++        "--check-period-column",
++        action="store_true",
++        help="额外比一次「不显示各期间明细」（20 列）与「显示各期间明细」（21 列）的汇总是否一致",
++    )
++    args = parser.parse_args()
++
++    batch = load_batch(args.job_name, args.period)
++    fields = [item.strip() for item in str(batch["request_params"].get("FieldKeys") or "").split(",") if item.strip()]
++    modified = aggregate(batch["rows"], fields)
++    meta = batch["meta"]
++    duration = ""
++    if isinstance(meta["started_at"], datetime) and isinstance(meta["finished_at"], datetime):
++        duration = f"，耗时 {(meta['finished_at'] - meta['started_at']).total_seconds():.1f}s"
++    print(
++        f"\n=== 落库批次（MODIFIED）任务={args.job_name} 期间={args.period} "
++        f"run_id={meta['run_id']} batch={meta['batch_id']} row_count={meta['row_count']}{duration} ==="
++    )
++    print(f"FieldKeys（{len(fields)} 列）：{','.join(fields)}")
++    print_side("落库批次汇总", modified)
++    print(f"\n库存结存成本（期末结存金额 FENDAmount 合计）= {modified['totals']['FENDAmount']:,.2f}")
++    print(f"库存结存数量（期末结存数量 FENDQty 合计）  = {modified['totals']['FENDQty']:,.4f}")
++    top_material_cost(modified, args.top)
++
++    problems: list[str] = []
++    if not args.skip_live:
++        rows, payload = await live_rows(args.period)
++        baseline = aggregate(rows, fields)
++        print(f"\n=== 金蝶实时取数（BASELINE）期间={args.period} 组织={payload['Model']['FACCTGORGID']['FNumber']} ===")
++        print_side("金蝶实时汇总", baseline)
++        problems.extend(diff_side(baseline, modified))
++        if args.check_period_column:
++            plain_fields = [field for field in fields if field != "FYearPeriod"]
++            plain_params = json.loads(json.dumps(payload))
++            plain_params["FieldKeys"] = ",".join(plain_fields)
++            plain_params["Model"]["FIsDisplayPeriod"] = False
++            plain_rows, _ = await live_rows(args.period, plain_params)
++            plain = aggregate(plain_rows, plain_fields)
++            print_side("金蝶实时汇总（20 列，FIsDisplayPeriod=false）", plain)
++            problems.extend([f"20 列 vs 21 列：{item}" for item in diff_side(plain, modified)])
++
++    print("\n=== 结论 ===")
++    if problems:
++        for item in problems:
++            print(f"差异：{item}")
++        print(f"校验不通过：{len(problems)} 项差异")
++        return 1
++    if args.skip_live:
++        print("（--skip-live：未比对金蝶实时基线，仅确认落库批次可读且汇总规则可跑通）")
++        return 0
++    print("基线（金蝶实时）与接入后（落库批次）逐项一致，差异 0")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(asyncio.run(main()))
+diff --git a/backend/scripts/seed_inventory_inout_summary_full.py b/backend/scripts/seed_inventory_inout_summary_full.py
+new file mode 100644
+index 00000000..b3e4b085
+--- /dev/null
++++ b/backend/scripts/seed_inventory_inout_summary_full.py
+@@ -0,0 +1,429 @@
++"""接入金蝶《存货收发存汇总表》（组织 100 · 全仓 · 全物料），声明式维护元数据与同步任务。
++
++报表口径（请求参数见 ``REQUEST_PARAMS``，改口径只改这里）：
++
++1. 取 ERP100 组织（组织编码 ``100``）的金蝶《存货收发存汇总表》
++   （``HS_INOUTSTOCKSUMMARYRPT``，``GetSysReportData`` 系统报表）；
++2. 核算体系 ``KJHSTX01_SYS`` + 核算组织 ``{{org_code}}`` + 会计政策 ``KJZC01_SYS`` +
++   会计期间 = 当期年月（``{{year}}`` / ``{{period}}``）+ 单据状态 ``C``（已审核）；
++3. **仓库不限**（模板里不填仓库区间 = 全部仓库）、**物料不限**，返回 21 列：会计期间 +
++   物料（编码/名称/分组/规格型号/库存状态）+ 仓库 + 核算范围 + 4 组「数量 / 单价 / 金额」
++   （期初结存、本期收入、本期发出、期末结存）。
++
++两列成本口径（用户要的数据就在这两列）：
++
++- **库存结存的成本** = 期末结存金额 ``FENDAmount``（配套期末结存数量 ``FENDQty``）；
++- **物料的成本** = 期末结存单价 ``FENDPrice``（= 期末结存金额 ÷ 期末结存数量，实测相符）。
++
++WebAPI 实测要点（踩坑记录）：
++
++- ``FYearPeriod``（会计期间，值形如 ``2026.09``）**只有** ``FIsDisplayPeriod = true`` 时可查，
++  否则报「标识为FYearPeriod的字段不存在」；
++- ``FEXPENSEID`` / ``FEXPENSENAME``（费用项目）本报表按此参数组合取不到（同样报字段不存在），
++  需要费用项目明细列时应置 ``FCHXEXPENSE = true``；
++- 报表同一批结果同时返回**明细行**与**小计行**（物料编码以 ``-总计`` 结尾、仓库列为空），
++  汇总时必须跳过小计行，否则金额被重复计入一倍；
++- 来源对象 ``code`` 是数据源唯一标识（``HS_INOUTSTOCKSUMMARYRPT_FULL``），真正提交给金蝶的
++  业务对象由请求模板里的 ``FormId`` 指定（``metadata/sync.py`` 的 ``resolve_report_target``）——
++  既有的「存货收发存汇总表-组织100」（仓库区间 ``JXCPC``，机箱成品仓指标在用）已占用
++  ``meta_source_object.code = HS_INOUTSTOCKSUMMARYRPT``，共用同一 code 会让指标引擎按 code
++  反查来源对象时定位到歧义行，故本数据源用独立 code。
++
++同步任务每天 05:00 取当期数据（单次约 20~25 页 / 4.6 万行 / 2~5 分钟）。
++
++用法：
++    python scripts/seed_inventory_inout_summary_full.py                 # 建/更新数据源与同步任务
++    python scripts/seed_inventory_inout_summary_full.py --rollback      # 删除本脚本建的元数据（幂等）
++    python scripts/seed_inventory_inout_summary_full.py --rollback --db-name xxx  # 对指定库执行回滚
++"""
++
++import argparse
++import asyncio
++import configparser
++import sys
++from pathlib import Path
++
++from sqlalchemy import select
++
++PROJECT_ROOT = Path(__file__).resolve().parents[1]
++INI_PATH = PROJECT_ROOT / "env" / "kindee_conf.ini"
++ENV_PATH = PROJECT_ROOT / "env" / ".env.dev"
++if str(PROJECT_ROOT) not in sys.path:
++    sys.path.insert(0, str(PROJECT_ROOT))
++
++from app.core.base_model import MappedBase  # noqa: E402
++from app.core.database import async_db_session, async_engine  # noqa: E402
++from app.modules.erp.kingdee.model import KingdeeConnectionModel  # noqa: E402
++from app.modules.metadata.model import (  # noqa: E402
++    FieldMappingModel,
++    MetaSyncJobModel,
++    SourceFieldModel,
++    SourceObjectModel,
++    SourceSystemModel,
++    StandardEntityModel,
++    StandardFieldModel,
++)
++from app.modules.metadata.sync import register_meta_sync_job  # noqa: E402
++from app.utils.crypto_util import CryptoUtil  # noqa: E402
++from app.utils.import_util import ImportUtil  # noqa: E402
++
++ImportUtil.find_models(MappedBase)
++
++CONNECTION_NAME = "金蝶默认连接"
++SOURCE_SYSTEM_CODE = "kingdee"
++# 提交给金蝶的业务对象（报表 FormId）
++FORM_ID = "HS_INOUTSTOCKSUMMARYRPT"
++# 数据源唯一标识：与既有「存货收发存汇总表-组织100」数据源区分开
++SOURCE_OBJECT_CODE = "HS_INOUTSTOCKSUMMARYRPT_FULL"
++SOURCE_OBJECT_NAME = "存货收发存汇总表（全仓·全物料）"
++STANDARD_ENTITY_CODE = "inventory_inout_summary_full"
++STANDARD_ENTITY_NAME = "存货收发存汇总表（全仓·全物料）"
++STANDARD_TABLE_NAME = "dwd_inventory_inout_summary_full"
++SYNC_JOB_NAME = "存货收发存汇总表-组织100（全仓全物料）"
++SYNC_CRON = "0 0 5 * * ?"  # 每天 05:00（避开既有机箱成品仓 02:00 与指标调度 02:30）
++
++ORG_CODE = "100"
++ACCT_SYSTEM_CODE = "KJHSTX01_SYS"
++ACCT_POLICY_CODE = "KJZC01_SYS"
++CURRENCY_CODE = "PRE001"
++DOC_STATUS_AUDITED = "C"
++
++# 报表返回列：FieldKeys 的顺序即返回值的顺序（实测确认，不可随意调序）
++# (字段Key, 字段名称, 是否度量)
++SOURCE_FIELDS = [
++    ("FYearPeriod", "会计期间", False),
++    ("FMATERIALBASEID", "物料编码", False),
++    ("FMATERIALNAME", "物料名称", False),
++    ("FMATERIALGROUP", "物料分组", False),
++    ("FMODEL", "规格型号", False),
++    ("FSTOCKSTATUSNAME", "库存状态", False),
++    ("FSTOCKId", "仓库", False),
++    ("FACCTGRANGEID", "核算范围编码", False),
++    ("FACCTGRANGENAME", "核算范围名称", False),
++    ("FINITQty", "期初结存数量", True),
++    ("FINITPrice", "期初结存单价", True),
++    ("FINITAMOUNT", "期初结存金额", True),
++    ("FRECEIVEQty", "本期收入数量", True),
++    ("FRECEIVEPrice", "本期收入单价", True),
++    ("FRECEIVEAmount", "本期收入金额", True),
++    ("FSENDQty", "本期发出数量", True),
++    ("FSENDPrice", "本期发出单价", True),
++    ("FSENDAmount", "本期发出金额", True),
++    ("FENDQty", "期末结存数量", True),
++    ("FENDPrice", "期末结存单价", True),
++    ("FENDAmount", "期末结存金额", True),
++]
++FIELD_KEYS = [field_key for field_key, _name, _is_measure in SOURCE_FIELDS]
++FIELD_NAMES = {field_key: field_name for field_key, field_name, _is_measure in SOURCE_FIELDS}
++MEASURE_FIELD_KEYS = {field_key for field_key, _name, is_measure in SOURCE_FIELDS if is_measure}
++PRIMARY_KEY_FIELD = "FMATERIALBASEID"
++
++# 期间变量：{{ year }} / {{ period }} 由元数据同步任务按取数期间渲染
++# （回补历史期间时按该期间 1 日渲染，见 metadata/sync.py 的 resolve_period_datetime）
++OBJECT_VARIABLES = [
++    {"name": "year", "value_type": "expression", "value": "now.strftime('%Y')", "description": "会计年度"},
++    {"name": "period", "value_type": "expression", "value": "now.strftime('%m')", "description": "会计期间"},
++]
++
++REQUEST_PARAMS = {
++    # 数据源 code ≠ 金蝶 FormId，这里显式声明提交对象
++    "FormId": FORM_ID,
++    "FieldKeys": ",".join(FIELD_KEYS),
++    "SchemeId": "",
++    "StartRow": 0,
++    "Limit": 2000,
++    "IsVerifyBaseDataField": "true",
++    "FilterString": [],
++    "Model": {
++        "FACCTGSYSTEMID": {"FNumber": ACCT_SYSTEM_CODE},
++        "FACCTGORGID": {"FNumber": "{{org_code}}"},
++        "FACCTPOLICYID": {"FNumber": ACCT_POLICY_CODE},
++        "FYear": "{{year}}",
++        "FPeriod": "{{period}}",
++        "FENDYEAR": "{{year}}",
++        "FEndPeriod": "{{period}}",
++        "FMATERIALID": {"FNumber": ""},
++        "FENDMATERIALID": {"FNumber": ""},
++        "FACCTGRANGEID": {"FNumber": ""},
++        "FOwnerID": {"FNumber": ""},
++        # 仓库区间留空 = 全部仓库（填起止同一编码才锁定单一仓库）
++        "FSTOCKId": {"FNumber": ""},
++        "FENDSTOCKID": {"FNumber": ""},
++        "FSTOCKORGID": {"FNumber": ""},
++        "FMATERTYPEID": {"FNUMBER": ""},
++        "FCOMBOTotalType": "0",
++        "FDimType": "1",
++        "FCHXEXPENSE": False,
++        "FCHXTotal": False,
++        "FCHXNOINOUT": False,
++        "FCHXNOCOSTALLOT": False,
++        # FYearPeriod（会计期间）列只有打开「显示各期间明细」才可查
++        "FIsDisplayPeriod": True,
++        "FCHXNOSTOCKADJ": False,
++        "FCOMBOSTATUS": DOC_STATUS_AUDITED,
++        "FCURRENCYID": {"FNumber": CURRENCY_CODE},
++    },
++}
++
++DESCRIPTION = (
++    "存货收发存汇总表（GetSysReportData）：核算组织 {{org_code}}（100）、"
++    "会计期间=当期、仓库不限、物料不限、单据状态=已审核；"
++    "返回 21 列（会计期间 / 物料编码·名称·分组·规格型号·库存状态 / 仓库 / 核算范围 + "
++    "期初结存·本期收入·本期发出·期末结存 各 数量·单价·金额）；"
++    "库存结存成本取期末结存金额 FENDAmount，物料成本取期末结存单价 FENDPrice"
++)
++
++
++def load_env_file(path: Path) -> dict[str, str]:
++    """读取 ``key = value`` 形式的 .env（只要数据库连接四项）。"""
++    values: dict[str, str] = {}
++    if not path.exists():
++        return values
++    for line in path.read_text(encoding="utf-8-sig").splitlines():
++        text = line.strip()
++        if not text or text.startswith("#") or "=" not in text:
++            continue
++        key, _, value = text.partition("=")
++        values[key.strip()] = value.strip().strip("'\"")
++    return values
++
++
++async def get_or_create(db, model, match_keys: list[str], values: dict, defaults: dict | None = None):
++    conditions = [getattr(model, key) == values[key] for key in match_keys if key in values]
++    obj = (await db.execute(select(model).where(*conditions))).scalars().first()
++    if obj is None:
++        obj = model(**{**(defaults or {}), **values})
++        db.add(obj)
++    else:
++        for key, value in (defaults or {}).items():
++            setattr(obj, key, value)
++    await db.flush()
++    return obj
++
++
++async def setup() -> None:
++    conf = configparser.ConfigParser()
++    conf.read(INI_PATH, encoding="utf-8")
++
++    async with async_db_session() as db, db.begin():
++        connection = (
++            await db.execute(
++                select(KingdeeConnectionModel).where(KingdeeConnectionModel.name == CONNECTION_NAME)
++            )
++        ).scalars().first()
++        if connection is None:
++            connection = KingdeeConnectionModel(
++                name=CONNECTION_NAME,
++                server_url=conf.get("config", "x-kdapi-serverurl", fallback=""),
++                acct_id=conf.get("config", "x-kdapi-acctid", fallback=""),
++                username=conf.get("config", "x-kdapi-username", fallback=""),
++                app_id=conf.get("config", "x-kdapi-appid", fallback=""),
++                app_secret=CryptoUtil.encrypt(conf.get("config", "x-kdapi-appsec", fallback="")),
++                lcid=conf.getint("config", "x-kdapi-lcid", fallback=2052),
++                org_num=conf.getint("config", "x-kdapi-orgnum", fallback=0),
++                connect_timeout=conf.getint("config", "x-kdapi-connecttimeout", fallback=120),
++                request_timeout=conf.getint("config", "x-kdapi-requesttimeout", fallback=120),
++                status=0,
++            )
++            db.add(connection)
++            await db.flush()
++
++        system = await get_or_create(
++            db,
++            SourceSystemModel,
++            ["code"],
++            {"code": SOURCE_SYSTEM_CODE, "name": "金蝶云星空", "connector_type": "kingdee"},
++            {"connection_id": connection.id, "status": 0},
++        )
++        system.connection_id = connection.id
++
++        source_object = await get_or_create(
++            db,
++            SourceObjectModel,
++            ["system_id", "code"],
++            {"system_id": system.id, "code": SOURCE_OBJECT_CODE},
++            {
++                "name": SOURCE_OBJECT_NAME,
++                "query_type": "sys_report",
++                "request_template": REQUEST_PARAMS,
++                "variables": OBJECT_VARIABLES,
++                "status": 0,
++            },
++        )
++        source_object.query_type = "sys_report"
++        source_object.request_template = REQUEST_PARAMS
++        source_object.variables = OBJECT_VARIABLES
++
++        standard_entity = await get_or_create(
++            db,
++            StandardEntityModel,
++            ["code"],
++            {"code": STANDARD_ENTITY_CODE},
++            {"name": STANDARD_ENTITY_NAME, "table_name": STANDARD_TABLE_NAME, "status": 0},
++        )
++
++        for field_key in FIELD_KEYS:
++            is_measure = field_key in MEASURE_FIELD_KEYS
++            source_field = await get_or_create(
++                db,
++                SourceFieldModel,
++                ["object_id", "field_key"],
++                {"object_id": source_object.id, "field_key": field_key},
++                {
++                    "field_name": FIELD_NAMES[field_key],
++                    "data_type": "number" if is_measure else "string",
++                    "is_primary_key": field_key == PRIMARY_KEY_FIELD,
++                    "is_watermark": False,
++                    "status": 0,
++                },
++            )
++            standard_field = await get_or_create(
++                db,
++                StandardFieldModel,
++                ["entity_id", "field_code"],
++                {"entity_id": standard_entity.id, "field_code": field_key},
++                {
++                    "field_name": FIELD_NAMES[field_key],
++                    "data_type": "number" if is_measure else "string",
++                    "is_dimension": not is_measure,
++                    "is_measure": is_measure,
++                    "status": 0,
++                },
++            )
++            exists_mapping = (
++                await db.execute(
++                    select(FieldMappingModel).where(
++                        FieldMappingModel.source_field_id == source_field.id,
++                        FieldMappingModel.standard_field_id == standard_field.id,
++                    )
++                )
++            ).scalars().first()
++            if exists_mapping is None:
++                db.add(
++                    FieldMappingModel(
++                        source_object_id=source_object.id,
++                        source_field_id=source_field.id,
++                        standard_field_id=standard_field.id,
++                        transform_type="direct",
++                        order=0,
++                        status=0,
++                    )
++                )
++
++        job = (
++            await db.execute(select(MetaSyncJobModel).where(MetaSyncJobModel.name == SYNC_JOB_NAME))
++        ).scalars().first()
++        if job is None:
++            job = MetaSyncJobModel(name=SYNC_JOB_NAME)
++            db.add(job)
++        job.source_system_id = system.id
++        job.source_object_id = source_object.id
++        job.standard_entity_id = standard_entity.id
++        job.org_code = ORG_CODE
++        job.cron_expr = SYNC_CRON
++        job.request_params = REQUEST_PARAMS
++        job.variables = []
++        job.sync_mode = "full"
++        job.status = 0
++        job.description = DESCRIPTION
++        await db.flush()
++        job_id = job.id
++
++        print(f"金蝶连接 id={connection.id}")
++        print(f"来源系统 id={system.id} code={system.code}")
++        print(f"来源对象 id={source_object.id} code={source_object.code}（FormId={FORM_ID}）")
++        print(f"标准实体 id={standard_entity.id} code={standard_entity.code} 字段 {len(FIELD_KEYS)} 个")
++        print(f"同步任务 id={job_id} name={job.name} cron={job.cron_expr} org={job.org_code}")
++
++    job = await _load_job(job_id)
++    if job is not None:
++        register_meta_sync_job(job)
++    await async_engine.dispose()
++    print("存货收发存汇总表（全仓·全物料）数据源初始化完成")
++
++
++async def _load_job(job_id: int) -> MetaSyncJobModel | None:
++    async with async_db_session() as db:
++        return await db.get(MetaSyncJobModel, job_id)
++
++
++ROLLBACK_STATEMENTS: list[tuple[str, str]] = [
++    ("meta_sync_run", "delete from meta_sync_run where job_id in (select id from meta_sync_job where name = %s)"),
++    ("meta_sync_job", "delete from meta_sync_job where name = %s"),
++    (
++        "meta_field_mapping",
++        "delete from meta_field_mapping where source_object_id in "
++        "(select id from meta_source_object where code = %s)",
++    ),
++    (
++        "meta_source_field",
++        "delete from meta_source_field where object_id in "
++        "(select id from meta_source_object where code = %s)",
++    ),
++    (
++        "meta_standard_field",
++        "delete from meta_standard_field where entity_id in "
++        "(select id from meta_standard_entity where code = %s)",
++    ),
++    ("meta_standard_entity", "delete from meta_standard_entity where code = %s"),
++    ("meta_source_object", "delete from meta_source_object where code = %s"),
++]
++
++
++def rollback_key(table: str) -> str:
++    """回滚语句的匹配键：同步任务按任务名，来源侧按数据源 code，标准侧按实体 code。"""
++    if table.startswith("meta_sync"):
++        return SYNC_JOB_NAME
++    if table in {"meta_field_mapping", "meta_source_field", "meta_source_object"}:
++        return SOURCE_OBJECT_CODE
++    return STANDARD_ENTITY_CODE
++
++
++def rollback(db_name: str) -> int:
++    """删除本脚本创建/维护的元数据行（幂等），返回删除总行数。"""
++    import pymysql
++
++    env = load_env_file(ENV_PATH)
++    connection = pymysql.connect(
++        host=env.get("DATABASE_HOST", "localhost"),
++        port=int(env.get("DATABASE_PORT", "3306")),
++        user=env.get("DATABASE_USER", "root"),
++        password=env.get("DATABASE_PASSWORD", ""),
++        database=db_name,
++        charset="utf8mb4",
++        autocommit=False,
++    )
++    total = 0
++    try:
++        with connection.cursor() as cursor:
++            for table, statement in ROLLBACK_STATEMENTS:
++                cursor.execute(statement, (rollback_key(table),))
++                affected = cursor.rowcount
++                total += max(affected, 0)
++                print(f"{table}: 删除 {affected} 行")
++        connection.commit()
++    finally:
++        connection.close()
++    print(f"回滚完成（库 {db_name}），共删除 {total} 行")
++    return total
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="接入金蝶《存货收发存汇总表》（全仓·全物料）")
++    parser.add_argument("--rollback", action="store_true", help="删除本脚本创建的元数据（幂等）")
++    parser.add_argument(
++        "--db-name",
++        default="",
++        help="回滚目标库名（缺省取 env/.env.dev 的 DATABASE_NAME，用于在副本库上验证回滚）",
++    )
++    args = parser.parse_args()
++
++    if args.rollback:
++        db_name = args.db_name or load_env_file(ENV_PATH).get("DATABASE_NAME", "fastapiadmin")
++        rollback(db_name)
++        return
++    asyncio.run(setup())
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/backend/tests/test_inventory_inout_summary.py b/backend/tests/test_inventory_inout_summary.py
+new file mode 100644
+index 00000000..3b84a71a
+--- /dev/null
++++ b/backend/tests/test_inventory_inout_summary.py
+@@ -0,0 +1,136 @@
++"""存货收发存汇总表（全仓·全物料）数据接入的纯函数测试（不依赖数据库与金蝶）。"""
++
++import importlib.util
++from pathlib import Path
++
++import pytest
++
++from app.modules.metadata.sync import resolve_report_target
++
++SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
++
++
++def _load(module_name: str):
++    spec = importlib.util.spec_from_file_location(module_name, SCRIPTS_DIR / f"{module_name}.py")
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++seed = _load("seed_inventory_inout_summary_full")
++check = _load("check_inventory_inout_summary")
++
++
++# --------------------------------------------------------------------------- #
++# 取数目标解析：来源对象 code 与提交给金蝶的 FormId 解耦
++# --------------------------------------------------------------------------- #
++def test_report_target_uses_template_form_id():
++    """模板声明了 FormId：以模板为准，且把该键从提交参数里摘掉。"""
++    form_id, params = resolve_report_target(seed.SOURCE_OBJECT_CODE, seed.REQUEST_PARAMS)
++    assert form_id == seed.FORM_ID == "HS_INOUTSTOCKSUMMARYRPT"
++    assert "FormId" not in params
++    assert params["FieldKeys"] == seed.REQUEST_PARAMS["FieldKeys"]
++    assert seed.REQUEST_PARAMS["FormId"] == seed.FORM_ID  # 原模板不被就地修改
++
++
++def test_report_target_keeps_legacy_behaviour_without_form_id():
++    """模板没写 FormId（既有数据源）：FormId 取来源对象 code，参数原样提交。"""
++    params = {"FieldKeys": "FBillNo", "StartRow": 0, "Limit": 2000}
++    form_id, sent = resolve_report_target("GL_RPT_AccountBalance", params)
++    assert form_id == "GL_RPT_AccountBalance"
++    assert sent is params
++
++
++@pytest.mark.parametrize("declared", ["", "   ", None])
++def test_report_target_falls_back_when_form_id_blank(declared):
++    """FormId 为空/空白：回退到来源对象 code，同时仍然摘掉该键。"""
++    params = {"FormId": declared, "FieldKeys": "FBillNo"}
++    form_id, sent = resolve_report_target("HS_INOUTSTOCKSUMMARYRPT_FULL", params)
++    assert form_id == "HS_INOUTSTOCKSUMMARYRPT_FULL"
++    assert sent == {"FieldKeys": "FBillNo"}
++
++
++# --------------------------------------------------------------------------- #
++# 数据源声明（脚本常量）
++# --------------------------------------------------------------------------- #
++def test_field_keys_match_declared_fields():
++    keys = [key for key, _name, _is_measure in seed.SOURCE_FIELDS]
++    assert keys == seed.FIELD_KEYS
++    assert seed.REQUEST_PARAMS["FieldKeys"] == ",".join(seed.FIELD_KEYS)
++    assert len(keys) == 21
++    # 库存结存成本 / 物料成本 两列必须在列清单里
++    assert {"FENDQty", "FENDPrice", "FENDAmount"} <= set(keys)
++    assert seed.MEASURE_FIELD_KEYS == {
++        "FINITQty",
++        "FINITPrice",
++        "FINITAMOUNT",
++        "FRECEIVEQty",
++        "FRECEIVEPrice",
++        "FRECEIVEAmount",
++        "FSENDQty",
++        "FSENDPrice",
++        "FSENDAmount",
++        "FENDQty",
++        "FENDPrice",
++        "FENDAmount",
++    }
++
++
++def test_model_scope_is_org100_all_warehouses():
++    model = seed.REQUEST_PARAMS["Model"]
++    # 核算组织走 {{org_code}} 占位，由同步任务的 org_code（=100）在取数时渲染
++    assert model["FACCTGORGID"]["FNumber"] == "{{org_code}}"
++    assert seed.ORG_CODE == "100"
++    assert model["FACCTGSYSTEMID"]["FNumber"] == "KJHSTX01_SYS"
++    assert model["FACCTPOLICYID"]["FNumber"] == "KJZC01_SYS"
++    assert model["FYear"] == "{{year}}" and model["FPeriod"] == "{{period}}"
++    assert model["FENDYEAR"] == "{{year}}" and model["FEndPeriod"] == "{{period}}"
++    assert model["FCOMBOSTATUS"] == "C"
++    # 仓库区间留空 = 全部仓库（只填一端会失效，两端都填同一编码才锁定单一仓库）
++    assert model["FSTOCKId"]["FNumber"] == "" and model["FENDSTOCKID"]["FNumber"] == ""
++    # FYearPeriod 列要求打开「显示各期间明细」
++    assert model["FIsDisplayPeriod"] is True
++
++
++# --------------------------------------------------------------------------- #
++# 校验脚本的汇总规则：与指标引擎 extract_inventory_ledger 一致
++# --------------------------------------------------------------------------- #
++def _row(material, stock, end_qty, end_price, end_amount):
++    """按 seed.FIELD_KEYS 顺序造一行（当期字段省略为空）。"""
++    values = dict.fromkeys(seed.FIELD_KEYS, "")
++    values["FYearPeriod"] = "2026.09"
++    values["FMATERIALBASEID"] = material
++    values["FSTOCKId"] = stock
++    values["FENDQty"] = end_qty
++    values["FENDPrice"] = end_price
++    values["FENDAmount"] = end_amount
++    return [values[key] for key in seed.FIELD_KEYS]
++
++
++def test_aggregate_skips_subtotal_and_empty_stock_rows():
++    rows = [
++        _row("BCP0000605", "机箱成品仓", "10", "2.825", "28.25"),
++        _row("BCP0000605", "海柔仓", "5", "1", "5"),
++        _row("BCP0000605-总计", "", "", "", "33.25"),  # 小计行：跳过
++        _row("BCP0000606", "", "3", "1", "3"),  # 无仓库行：跳过
++    ]
++    stat = check.aggregate(rows, seed.FIELD_KEYS)
++    assert stat["rows"] == 4
++    assert stat["detail_rows"] == 2
++    assert stat["subtotal_rows"] == 1
++    assert stat["rows_without_stock"] == 1
++    assert stat["totals"]["FENDAmount"] == pytest.approx(33.25)
++    assert stat["totals"]["FENDQty"] == pytest.approx(15)
++    assert stat["non_null"]["FENDPrice"] == 2
++
++
++def test_aggregate_treats_blank_and_bad_values_as_zero():
++    rows = [
++        _row("A", "仓1", "", "", "161.7"),  # 数量/单价为空、金额有值（实测存在）
++        _row("B", "仓2", "2", "abc", ""),  # 脏值按 0 计，不抛异常
++    ]
++    stat = check.aggregate(rows, seed.FIELD_KEYS)
++    assert stat["totals"]["FENDAmount"] == pytest.approx(161.7)
++    assert stat["totals"]["FENDQty"] == pytest.approx(2)
++    # 非空行数按「字符串非空」统计：第二行单价是脏值 "abc"（计入非空、按 0 参与合计）
++    assert stat["non_null"]["FENDPrice"] == 1
+diff --git a/deploy/inventory-inout-summary/ROLLBACK.sh b/deploy/inventory-inout-summary/ROLLBACK.sh
+new file mode 100644
+index 00000000..ee68925f
+--- /dev/null
++++ b/deploy/inventory-inout-summary/ROLLBACK.sh
+@@ -0,0 +1,33 @@
++#!/bin/bash
++# 回滚「存货收发存汇总表（全仓·全物料）」数据接入（幂等）：删除数据源、标准实体、字段映射与同步任务。
++#
++# 用法：
++#   bash deploy/inventory-inout-summary/ROLLBACK.sh                 # 回滚默认库（env/.env.dev 的 DATABASE_NAME）
++#   bash deploy/inventory-inout-summary/ROLLBACK.sh <数据库名>       # 回滚指定库（例如副本库上先验证一遍）
++#
++# 回滚范围（按业务键匹配，与运行次数无关）：
++#   meta_sync_run → meta_sync_job → meta_field_mapping → meta_source_field
++#   → meta_standard_field → meta_standard_entity → meta_source_object
++# 不影响既有的「存货收发存汇总表-组织100」（仓库区间 JXCPC）数据源与依赖它的指标。
++set -euo pipefail
++
++WORK_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
++cd "$WORK_DIR"
++
++PYTHON_BIN="${PYTHON_BIN:-}"
++if [ -z "$PYTHON_BIN" ]; then
++  if [ -x "backend/.venv/bin/python" ]; then
++    PYTHON_BIN="backend/.venv/bin/python"
++  elif [ -x "backend/.venv/Scripts/python.exe" ]; then
++    PYTHON_BIN="backend/.venv/Scripts/python.exe"
++  else
++    PYTHON_BIN="python"
++  fi
++fi
++
++cd backend
++if [ "$#" -gt 0 ]; then
++  "$PYTHON_BIN" scripts/seed_inventory_inout_summary_full.py --rollback --db-name "$1"
++else
++  "$PYTHON_BIN" scripts/seed_inventory_inout_summary_full.py --rollback
++fi
+diff --git "a/docs/\346\240\270\347\256\227\346\214\207\346\240\207\347\263\273\347\273\237\350\256\276\350\256\241.md" "b/docs/\346\240\270\347\256\227\346\214\207\346\240\207\347\263\273\347\273\237\350\256\276\350\256\241.md"
+index c287c23e..5332bb1b 100644
+--- "a/docs/\346\240\270\347\256\227\346\214\207\346\240\207\347\263\273\347\273\237\350\256\276\350\256\241.md"
++++ "b/docs/\346\240\270\347\256\227\346\214\207\346\240\207\347\263\273\347\273\237\350\256\276\350\256\241.md"
+@@ -370,6 +370,28 @@
+     `Org_AccountSystem`（`KJHSTX01_SYS`）、会计政策取自 `BD_AcctPolicy`（`KJZC01_SYS`）。
+     同步任务每天 02:00 取当期（组织 100）数据，指标每日 02:30 重算当月、次月 1 日重拉上月并重算
+     （2026-09 实测：机箱成品仓期末结存金额 38.29 万元、期末结存数量 25,971）
++  - **接入《存货收发存汇总表》全量数据源（组织 100 · 全仓 · 全物料）**：声明式维护在
++    `backend/scripts/seed_inventory_inout_summary_full.py`，来源对象 code =
++    `HS_INOUTSTOCKSUMMARYRPT_FULL`（数据源标识）、提交给金蝶的 FormId 由请求模板里的
++    `FormId = HS_INOUTSTOCKSUMMARYRPT` 指定，标准实体 `inventory_inout_summary_full`
++    （目标表 `dwd_inventory_inout_summary_full`），同步任务「存货收发存汇总表-组织100（全仓全物料）」
++    每天 05:00 取当期数据，落 `meta_sync_run.rows_json`。参数：核算体系 `KJHSTX01_SYS` +
++    核算组织 `100` + 会计政策 `KJZC01_SYS` + 会计期间 = 当期 + 单据状态 `C`（已审核），
++    **仓库不限、物料不限**（仓库区间留空 = 全部仓库）。返回 21 列：会计期间 `FYearPeriod` +
++    物料编码/名称/分组/规格型号/库存状态 + 仓库 `FSTOCKId` + 核算范围 + 期初结存/本期收入/
++    本期发出/期末结存 各 `数量·单价·金额`。两列成本口径：**库存结存的成本 = 期末结存金额
++    `FENDAmount`**（配套 `FENDQty` 数量）、**物料的成本 = 期末结存单价 `FENDPrice`**
++    （= 期末结存金额 ÷ 期末结存数量，实测相符）。校验脚本
++    `backend/scripts/check_inventory_inout_summary.py`（金蝶实时基线 vs 落库批次逐列比对，
++    2026-09 实测：46151 行（明细 28905 / 小计 17246）逐列差异 0，期末结存金额 150.94 万元、
++    期末结存数量 954,956.2281）。**WebAPI 要点**：① `FYearPeriod` 只有
++    `FIsDisplayPeriod = true`（显示各期间明细）时可查，值形如 `2026.09`，否则报
++    「标识为FYearPeriod的字段不存在」；② `FEXPENSEID` / `FEXPENSENAME`（费用项目）在该参数组合下
++    取不到，需要时置 `FCHXEXPENSE = true`；③ 报表同一批结果同时返回明细行与小计行
++    （物料编码以 `-总计` 结尾、仓库列为空），汇总时必须跳过小计行；④ 数据源 code 与金蝶 FormId
++    解耦后，两个不同口径的数据源（机箱成品仓 JXCPC / 全仓全物料）可分别声明，
++    避免共用 `meta_source_object.code` 时指标引擎按 code 反查来源对象出现歧义；
++    ⑤ 部分明细行「数量/单价为空、金额有值」（实测存在），成本类统计以金额口径为准
+   - 新增月指标「营销中心应收周转天数」（口径在
+     `backend/scripts/seed_marketing_ar_turnover_metric.py` 声明式维护）：公式为
+     **【(期初应收余额 + 期末应收余额) ÷ 2】÷ 对外出货未税净额 × 30（天）**，拆成 2 个指标——

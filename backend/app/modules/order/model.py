@@ -30,6 +30,9 @@ class OrderFullChainModel(ModelMixin, UserMixin):
     order_number: Mapped[str] = mapped_column(String(64), nullable=False, index=True, comment="CRM 订单号")
     period_value: Mapped[str] = mapped_column(String(16), nullable=False, index=True, comment="期间(接单月 YYYY-MM)")
     calc_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment="计算版本(重算递增)")
+    order_id: Mapped[int | None] = mapped_column(
+        Integer, default=None, nullable=True, index=True, comment="CRM 订单ID（orderAnalyze.id，发货明细靠它关联）"
+    )
 
     # ---- 订单属性 ----
     trade_type: Mapped[str | None] = mapped_column(
@@ -51,6 +54,9 @@ class OrderFullChainModel(ModelMixin, UserMixin):
     qty: Mapped[float | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="数量")
     intake_untaxed: Mapped[float | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="接单未税")
     ship_untaxed: Mapped[float | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="出货未税")
+    ship_qty: Mapped[float | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="出货数量（发货明细 send_qty 汇总，发货时间口径优先）"
+    )
     net_shipment: Mapped[float | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="净出货")
 
     # ---- 可变字段区 ----

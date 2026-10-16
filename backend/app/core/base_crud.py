@@ -143,10 +143,17 @@ class CRUDBase[ModelType: ModelMixin, CreateSchemaType, UpdateSchemaType]:
         preload: list[str | Any] | None = None,
         load_columns: list | None = None,
         include_deleted: bool = False,
+        extra_conditions: list[Any] | None = None,
     ) -> PageResultSchema[OutSchemaType] | PageResultSchema:
-        """分页查询。COUNT + 数据分两趟查，COUNT 复用 WHERE 但不带 loading options。"""
+        """分页查询。COUNT + 数据分两趟查，COUNT 复用 WHERE 但不带 loading options。
+
+        ``extra_conditions`` 用于 search 字典表达不了的复杂条件（如 ``OR`` 组合），
+        追加在 search 条件之后；缺省为 None，不影响既有调用。
+        """
         try:
             conditions = await self._build_conditions(include_deleted=include_deleted, **(search or {}))
+            if extra_conditions:
+                conditions.extend(extra_conditions)
             order = order_by or [{"id": "asc"}]
 
             pk = self._get_pk_col()  # COUNT 用主键列更精确

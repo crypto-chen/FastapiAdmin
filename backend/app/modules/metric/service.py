@@ -83,18 +83,38 @@ class MetricService:
     async def page_value(
         self, search: MetricValueQueryParam | None, page_no: int, page_size: int
     ) -> PageResultSchema[MetricValueOutSchema]:
-        """分页查询指标结果；未指定 ``calc_version`` 时默认取最新计算版本。"""
+        """分页查询指标结果；未指定 ``calc_version`` 时按**每个期间各自的最新版本**取值。
+
+        ``calc_version`` 是按期间独立递增的（重算哪个期间就加哪个期间的版本）。若只按
+        指标的全局最大版本过滤，版本号较小的其余期间会被整段丢掉——典型表现是列表里
+        只剩最近重算过的那一个期间。
+        """
+        extra_conditions: list = []
         if search is not None and search.calc_version is None and search.metric_id:
             conditions = [MetricValueModel.metric_id == search.metric_id]
             if search.period_type:
                 conditions.append(MetricValueModel.period_type == search.period_type)
             if search.period_value:
                 conditions.append(MetricValueModel.period_value == search.period_value)
-            latest = (
-                await self.db.execute(select(func.max(MetricValueModel.calc_version)).where(*conditions))
-            ).scalars().first()
-            if latest:
-                search.calc_version = int(latest)
+            versions = (
+                await self.db.execute(
+                    select(MetricValueModel.period_value, func.max(MetricValueModel.calc_version))
+                    .where(*conditions)
+                    .group_by(MetricValueModel.period_value)
+                )
+            ).all()
+            if versions:
+                extra_conditions.append(
+                    or_(
+                        *[
+                            and_(
+                                MetricValueModel.period_value == period_value,
+                                MetricValueModel.calc_version == int(calc_version),
+                            )
+                            for period_value, calc_version in versions
+                        ]
+                    )
+                )
 
         search_dict = search_to_dict(search) or {}
         # level 由服务层翻译成「核算维度编码」的 IS NULL / IS NOT NULL 条件：
@@ -116,6 +136,7 @@ class MetricService:
             order_by=[{"org_id": "asc"}, {"dept_id": "asc"}],
             search=search_dict,
             out_schema=MetricValueOutSchema,
+            extra_conditions=extra_conditions,
         )
         await self._fill_master_names(result.items)
         return result
@@ -155,6 +176,8 @@ class MetricService:
         """指标表单查询：多个指标在同一期间 / 组织维度上并排展示，一次看全。
 
         - 每个指标各取自己的**最新计算版本**（版本号各指标独立递增，不能共用一个值）。
+        - 行按「组织 × 核算维度」聚合，所以**同一时刻只展示一个期间**：不传 ``period_value``
+          时取所选指标里最新的可用期间（否则会因版本号差异只随机命中某一期）。
         - 组织合计行（``dept_code`` 为空）与核算维度明细行按 ``level`` 过滤。
         - 行按「组织 → 组织合计行 → 明细行」排序；公司整体口径指标（无 ``org_id``）排在最后。
         """
@@ -191,21 +214,44 @@ class MetricService:
             raise CustomException(msg="选择的指标不存在或已删除")
 
         period_value = (search.period_value or "").strip() or None
-        # 每个指标按自身期间类型 + 自身最新计算版本取值
-        version_map: dict[int, tuple[str, int]] = {}
-        for column in columns:
-            period_type = str(search.period_type or column.period_type)
-            conditions = [
-                MetricValueModel.metric_id == column.metric_id,
-                MetricValueModel.period_type == period_type,
-            ]
-            if period_value:
-                conditions.append(MetricValueModel.period_value == period_value)
-            latest = (
-                await self.db.execute(select(func.max(MetricValueModel.calc_version)).where(*conditions))
+        if period_value is None:
+            latest_period = (
+                await self.db.execute(
+                    select(func.max(MetricValueModel.period_value)).where(
+                        MetricValueModel.metric_id.in_([column.metric_id for column in columns])
+                    )
+                )
             ).scalars().first()
-            if latest:
-                version_map[column.metric_id] = (period_type, int(latest))
+            period_value = str(latest_period) if latest_period else None
+        period_type_map = {
+            column.metric_id: str(search.period_type or column.period_type) for column in columns
+        }
+        # 每个「指标 × 期间」各自取最新计算版本
+        version_conditions = [MetricValueModel.metric_id.in_([column.metric_id for column in columns])]
+        if period_value:
+            version_conditions.append(MetricValueModel.period_value == period_value)
+        version_rows = (
+            await self.db.execute(
+                select(
+                    MetricValueModel.metric_id,
+                    MetricValueModel.period_type,
+                    MetricValueModel.period_value,
+                    func.max(MetricValueModel.calc_version).label("calc_version"),
+                )
+                .where(*version_conditions)
+                .group_by(
+                    MetricValueModel.metric_id,
+                    MetricValueModel.period_type,
+                    MetricValueModel.period_value,
+                )
+            )
+        ).all()
+        # 同一指标若存在多种期间类型的行，优先采用指标定义声明的 period_type
+        version_map: dict[tuple[int, str], int] = {}
+        for metric_id, period_type, value_period, calc_version in version_rows:
+            key = (int(metric_id), str(value_period))
+            if key not in version_map or str(period_type) == period_type_map.get(int(metric_id)):
+                version_map[key] = int(calc_version)
 
         page_no = max(int(search.page_no or 1), 1)
         page_size = max(int(search.page_size or 500), 1)
@@ -219,15 +265,14 @@ class MetricService:
                 *[
                     and_(
                         MetricValueModel.metric_id == metric_id,
-                        MetricValueModel.period_type == period_type,
+                        MetricValueModel.period_type == period_type_map.get(metric_id, "month"),
+                        MetricValueModel.period_value == value_period,
                         MetricValueModel.calc_version == calc_version,
                     )
-                    for metric_id, (period_type, calc_version) in version_map.items()
+                    for (metric_id, value_period), calc_version in version_map.items()
                 ]
             )
         ]
-        if period_value:
-            filters.append(MetricValueModel.period_value == period_value)
         if search.org_id:
             filters.append(MetricValueModel.org_id == search.org_id)
         if search.level == "org":

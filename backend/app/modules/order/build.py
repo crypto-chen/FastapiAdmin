@@ -48,6 +48,8 @@ ORDER_OBJECT_DOMESTIC = "/hs/order/orderAnalyze?type=1"
 ORDER_OBJECT_EXPORT = "/hs/order/orderAnalyze?type=2"
 SHIPMENT_OBJECT_DOMESTIC = "/hs/order/orderShipments?type=1"
 SHIPMENT_OBJECT_EXPORT = "/hs/order/orderShipments?type=2"
+# 发货明细（发货时间口径，2026-10-16 接入）：按 order_id 关联，用于出货数量
+SHIPMENT_DETAIL_OBJECT = "/hs/shipments/getShipmentsDetail"
 CUSTOMER_OBJECT = "/hs/customer/getCusotmerList"
 PRODUCT_CATEGORY_OBJECT = "/hs/product/getProductCategory"
 PRODUCT_MODEL_OBJECT = "/hs/product/getProductModel"
@@ -343,9 +345,11 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
         # 发货明细按「该期间及之后」取：跨月发货（9 月接单、10 月发货）才算得到
         shipment_rows_domestic = await forward_rows(db, SHIPMENT_OBJECT_DOMESTIC, period_value)
         shipment_rows_export = await forward_rows(db, SHIPMENT_OBJECT_EXPORT, period_value)
+        shipment_detail_rows = await forward_rows(db, SHIPMENT_DETAIL_OBJECT, period_value)
         batches["shipment_periods"] = {
             "domestic": len(shipment_rows_domestic),
             "export": len(shipment_rows_export),
+            "detail": len(shipment_detail_rows),
         }
         _, customer_rows = await latest_batch(db, CUSTOMER_OBJECT, None)
         # 退货/退款同样可能发生在接单之后的月份
@@ -394,6 +398,16 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
             qty = to_number(row.get("send_qty"))
             if number and qty:
                 shipments_by_order[number] = shipments_by_order.get(number, 0.0) + qty
+        # 发货明细（发货时间口径）：key = CRM 订单ID，一张订单多张发货单要相加
+        ship_qty_by_order_id: dict[int, float] = {}
+        for row in shipment_detail_rows:
+            try:
+                order_id = int(row.get("order_id"))
+            except (TypeError, ValueError):
+                continue
+            qty = to_number(row.get("send_qty"))
+            if qty:
+                ship_qty_by_order_id[order_id] = ship_qty_by_order_id.get(order_id, 0.0) + qty
         mo_by_order: dict[str, list[dict]] = {}
         for row in mo_rows:
             key = base_order_number(row.get("FSaleOrderNo"))
@@ -423,6 +437,7 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
                     customer_map,
                     person_index,
                     shipments_by_order,
+                    ship_qty_by_order_id,
                     return_by_order,
                     mo_by_order,
                     model_names,
@@ -483,6 +498,7 @@ def build_record(
     customer_map: dict[int, dict],
     person_index: dict[str, dict],
     shipments_by_order: dict[str, float],
+    ship_qty_by_order_id: dict[int, float],
     return_by_order: dict[str, float],
     mo_by_order: dict[str, list[dict]],
     model_names: dict[int, str],
@@ -578,6 +594,23 @@ def build_record(
 
     send_qty = shipments_by_order.get(number)
     ship_untaxed = money(send_qty * (intake / qty)) if (send_qty and qty and intake) else None
+    # 出货数量：优先取「发货明细」（发货时间口径，按 CRM 订单ID 关联），
+    # 未命中时回退「发货明细 orderShipments」（审核日期口径，按订单号关联）
+    order_id = to_number(row.get("id"))
+    order_id = int(order_id) if order_id else None
+    ship_qty_detail = ship_qty_by_order_id.get(order_id) if order_id else None
+    if ship_qty_detail:
+        ship_qty = money(ship_qty_detail)
+        ship_qty_source = "shipment_detail"
+    elif send_qty:
+        ship_qty = money(send_qty)
+        ship_qty_source = "order_shipments"
+    else:
+        ship_qty = None
+        ship_qty_source = "none"
+    extra["order_id"] = order_id
+    extra["ship_qty"] = ship_qty
+    extra["ship_qty_source"] = ship_qty_source
     return_refund = return_by_order.get(number)
     design_service_income = to_number(pick(row, ["design_remove_taxes_freight", "design_cost"]))
     if ship_untaxed is None and send_qty is None:
@@ -667,6 +700,7 @@ def build_record(
         order_number=number,
         period_value=period_value,
         calc_version=calc_version,
+        order_id=order_id,
         trade_type=trade_type,
         order_type=str(pick(row, SOURCE_KEYS["order_type"])) if pick(row, SOURCE_KEYS["order_type"]) is not None else None,
         customer_id=int(customer_id) if customer_id is not None else None,
@@ -678,6 +712,7 @@ def build_record(
         qty=Decimal(str(qty)) if qty is not None else None,
         intake_untaxed=Decimal(str(money(intake))) if intake is not None else None,
         ship_untaxed=Decimal(str(ship_untaxed)) if ship_untaxed is not None else None,
+        ship_qty=Decimal(str(ship_qty)) if ship_qty is not None else None,
         net_shipment=Decimal(str(net_shipment)) if net_shipment is not None else None,
         extra=extra,
         data_quality_flag=quality_flag,

@@ -49,11 +49,44 @@ PRODUCT_CATEGORY_OBJECT = "/hs/product/getProductCategory"  # 系列字典｜上
 ORDER_ANALYZE_DOMESTIC_OBJECT = "/hs/order/orderAnalyze?type=1"  # 订单分析（内贸）
 ORDER_ANALYZE_EXPORT_OBJECT = "/hs/order/orderAnalyze?type=2"  # 订单分析（外贸）
 
+# 实际成本来源：金蝶「成本计算单」（2026-10-16 业务更正 —— 实际成本取 ERP 成本计算单，按订单取）
+COST_BILL_OBJECT = "CB_CostCalBill"  # GetSysReportData 的 formid
+
+# 已实测打通的取数参数（2026-10-16，业务给定模板，原样透传见
+# exports/cost_bill/request_cb_org100_2026-09.json）
+COST_BILL_CONFIRMED_PARAMS: dict[str, str] = {
+    "FACCTGORGID.FNumber": "100",  # 核算组织编码（成本计算在主体组织；101~113 均返回 0 行）
+    "FACCTPOLICYID.FNumber": "KJZC01_SYS",  # 会计政策编码（中国准则会计政策）
+    "FACCTGSYSTEMID.FNumber": "KJHSTX01_SYS",  # 核算体系编码
+    "FSHOWWAY": "2",  # 显示方式
+    "FCurrencyID.FNumber": "PRE001",  # 币别（人民币）
+    # 实测（2026-09，组织 100，2000 行抽样）：
+    #   FOrderBillNo     1999/2000 有值（= 销售订单号-产品编码 拼接）
+    #   FPRODUCTNO       2000/2000 有值（= 工单编号，纯单号）
+    #   FSumProductUseCost 1892/2000 有值（累计单位成本，按订单取实际成本用这列）
+    #   FProductUseCost      2/2000 有值（本期单位成本，仅当期完工的行有）
+    #   FCOSTITEMID_FNAME / FEXPENSEITEMFIELD_FNAME / FMATERIALFIELD_FNAME 恒空；
+    #   FSHOWWAY=3/4 + 明细开关都为空，FSHOWWAY=1 时报表超重（360s 读超时）
+}
+COST_BILL_REQUIRED_PARAMS: tuple[str, ...] = tuple(COST_BILL_CONFIRMED_PARAMS)
+
+# 底稿指标 → 成本计算单显示列（FieldKeys）
+COST_BILL_FIELDS: dict[str, str] = {
+    "PRD-05": "FBOMNUMBERFIELD_FNUMBER",
+    "PRD-06": "FProductUseCost / FSumProductUseCost",
+    "PRD-08": "FCOSTITEMID_FNAME + FCurrInputAmount / FCompleteAmount",
+    "PRD-09": "FEXPENSEITEMFIELD_FNAME + FCurrInputAmount",
+    "PRD-10": "FEXPENSEITEMFIELD_FNAME + FCurrInputAmount",
+}
+
+# 成本计算单的订单关联列（按订单取实际成本）
+COST_BILL_ORDER_KEYS: tuple[str, ...] = ("FOrderBillNo", "FOrderBillSeq", "FPRODUCTNO", "FPRODUCTID_FNUMBER")
+
 # 底稿来源列 → 系统实际取数来源（构建时按此取数）
 DATA_SOURCES: dict[str, str] = {
     "系统": "本系统期间字段（dwd_order_full_chain.period_value）",
     "ERP": "CRM 型号字典 / 聚水潭销售出库 / 金蝶单据（按字段分派）",
-    "ERP/BOM": "CRM 订单行成本字段（ERP/BOM 成本表未接入）",
+    "ERP/BOM": "金蝶成本计算单 CB_CostCalBill（按销售订单号取实际成本；取数参数已打通，2026-10-16）",
     "CRM": "CRM 开放接口（orderAnalyze 等 /hs/*）",
     "平台后台": "CRM 基础分类字典 /hs/base/getBaseCategoryList（编码转名称）",
     "银行收款单": "未接入",
@@ -66,6 +99,7 @@ DATA_SOURCES: dict[str, str] = {
 # 取数可出性状态
 STATUS_READY = "ready"  # 现用数据源可直接出数
 STATUS_PENDING_FIELD = "pending_field"  # 来源已有、未落库，需补字段
+STATUS_SOURCE_FOUND = "source_found"  # 来源已定位，待打通取数（参数/映射未定）
 STATUS_PENDING_CALIBER = "pending_caliber"  # 口径/维度待定，现为替代口径或公司级
 STATUS_MISSING = "missing"  # 无来源，出不了
 STATUS_DROPPED = "dropped"  # 底稿已划掉
@@ -73,6 +107,7 @@ STATUS_DROPPED = "dropped"  # 底稿已划掉
 STATUS_LABELS: dict[str, str] = {
     STATUS_READY: "现用可出",
     STATUS_PENDING_FIELD: "需补字段",
+    STATUS_SOURCE_FOUND: "来源已定位",
     STATUS_PENDING_CALIBER: "待定口径",
     STATUS_MISSING: "缺数据",
     STATUS_DROPPED: "底稿划掉",
@@ -108,20 +143,20 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str, str, str]] = [
     ("PRD-03", "产品名称", "string", "维度", False, "ERP", STATUS_DROPPED, "底稿已划掉，2026-10-15 业务确认不做；型号字典无名称字段，仍无来源"),
     ("PRD-04", "规格", "string", "维度", False, "ERP", STATUS_DROPPED, "底稿已划掉，2026-10-15 业务确认不做；型号字典的 width/length/height（482/523 有值）本报表不取"),
     # ---- 成本构成 ----
-    ("PRD-05", "BOM版本", "string", "成本", False, "ERP/BOM", STATUS_MISSING, "无 BOM 来源对象，金蝶侧未接入 BOM 单据"),
-    ("PRD-06", "实际单位成本", "number", "成本", True, "ERP/BOM", STATUS_PENDING_CALIBER, "现取 extra.unit_cost（CRM 订单行 material_cost_total + process_cost），非底稿要求的 ERP/BOM 标准成本版本"),
-    ("PRD-07", "实际材料单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "extra.material_cost_unit，覆盖 98,580/167,673（58.8%）"),
-    ("PRD-08", "实际人工单位成本", "number", "成本", True, "ERP/BOM", STATUS_MISSING, "订单行无人工拆分，金蝶侧无成本表来源对象"),
-    ("PRD-09", "实际制造费用-变动单位", "number", "成本", True, "ERP/BOM", STATUS_MISSING, "订单行无制造费用拆分，金蝶侧无成本表来源对象"),
-    ("PRD-10", "实际制造费用-固定单位", "number", "成本", True, "ERP/BOM", STATUS_MISSING, "订单行无制造费用拆分，金蝶侧无成本表来源对象"),
+    ("PRD-05", "BOM版本", "string", "成本", False, "ERP/BOM", STATUS_PENDING_FIELD, "来源已打通：金蝶成本计算单 CB_CostCalBill 显示列 FBOMNUMBERFIELD_FNUMBER（实测 50/50 有值，样例 1758682432-2 / BCP1054918_V1.0）；待建来源对象与同步任务"),
+    ("PRD-06", "实际单位成本", "number", "成本", True, "ERP/BOM", STATUS_PENDING_FIELD, "来源已打通：成本计算单 FSumProductUseCost（累计单位成本，实测 1892/2000 有值，样例 67.12075）为主列；FProductUseCost（本期，样例 54.9968）仅当期完工行有（2/2000）。按订单列 FOrderBillNo（1999/2000）关联；待建同步任务"),
+    ("PRD-07", "实际材料单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "extra.material_cost_unit（CRM 销售订单行 material_cost_total，覆盖 58.8%）；口径待确认：ERP 实际口径应从成本计算单取"),
+    ("PRD-08", "实际人工单位成本", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "来源已定位：成本计算单按成本项目 FCOSTITEMID_FNAME（人工）配 FCurrInputAmount / FCompleteAmount 拆；当前 FSHOWWAY=2 下成本项目列返回空，需另调显示方式（子项明细展开会显著变慢）"),
+    ("PRD-09", "实际制造费用-变动单位", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "来源已定位：成本计算单按费用项目 FEXPENSEITEMFIELD_FNAME 拆分；同上，拆分列待显示方式打通"),
+    ("PRD-10", "实际制造费用-固定单位", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "来源已定位：成本计算单按费用项目 FEXPENSEITEMFIELD_FNAME 拆分；同上，拆分列待显示方式打通"),
     # ---- 数量与标准成本 ----
-    ("PRD-11", "出货数量", "number", "数量", False, "ERP", STATUS_PENDING_FIELD, "源已有：CRM 发货明细 orderShipments.send_qty、聚水潭销售出库 qty；dwd_order_full_chain 未落库，需补 ship_qty"),
-    ("PRD-12", "标准材料成本", "number", "成本", True, "计算", STATUS_PENDING_FIELD, "= PRD-07 × PRD-11；材料单位成本已就绪，阻塞于 PRD-11"),
-    ("PRD-13", "标准人工成本", "number", "成本", True, "计算", STATUS_MISSING, "= PRD-08 × PRD-11；依赖 PRD-08"),
-    ("PRD-14", "标准制造费用-变动", "number", "成本", True, "计算", STATUS_MISSING, "= PRD-09 × PRD-11；依赖 PRD-09"),
-    ("PRD-15", "标准制造费用-固定", "number", "成本", True, "计算", STATUS_MISSING, "= PRD-10 × PRD-11；依赖 PRD-10"),
-    ("PRD-16", "标准成本小计", "number", "成本", True, "计算", STATUS_MISSING, "= PRD-13 + PRD-14 + PRD-15 + PRD-16；依赖 PRD-13~16"),
-    ("PRD-17", "单位标准成本", "number", "成本", True, "计算", STATUS_PENDING_CALIBER, "底稿 = PRD-16 ÷ PRD-11；现可用 extra.unit_cost 作替代口径"),
+    ("PRD-11", "出货数量", "number", "数量", False, "ERP", STATUS_READY, "CRM 发货明细 /hs/shipments/getShipmentsDetail（发货时间口径，按 order_id 关联）优先，未命中回退 orderShipments.send_qty；已落 dwd_order_full_chain.ship_qty，2026-09 覆盖 989/1419 单"),
+    ("PRD-12", "标准材料成本", "number", "成本", True, "计算", STATUS_READY, "标准成本取 CRM 销售订单：= extra.material_cost_unit × PRD-11；2026-09 覆盖 163/192 明细行"),
+    ("PRD-13", "标准人工成本", "number", "成本", True, "计算", STATUS_PENDING_FIELD, "标准成本取 CRM 销售订单：= 订单人工单位成本 × PRD-11；CRM 订单行暂未拆分人工，待上游补字段"),
+    ("PRD-14", "标准制造费用-变动", "number", "成本", True, "计算", STATUS_PENDING_FIELD, "标准成本取 CRM 销售订单：= 订单制造费用变动单位成本 × PRD-11；待上游补字段"),
+    ("PRD-15", "标准制造费用-固定", "number", "成本", True, "计算", STATUS_PENDING_FIELD, "标准成本取 CRM 销售订单：= 订单制造费用固定单位成本 × PRD-11；待上游补字段"),
+    ("PRD-16", "标准成本小计", "number", "成本", True, "计算", STATUS_READY, "标准成本取 CRM 销售订单：= extra.unit_cost × PRD-11；2026-09 覆盖 165/192 明细行"),
+    ("PRD-17", "单位标准成本", "number", "成本", True, "CRM", STATUS_READY, "标准成本取 CRM 销售订单：extra.unit_cost（订单行 material_cost_total + process_cost ÷ 数量），按数量加权平均；覆盖 98,580/167,673（58.8%）"),
     # ---- 维度：组织与渠道 ----
     ("PRD-18", "业务员", "string", "维度", False, "CRM", STATUS_READY, "salesman_code + salesman_name（master_person 已同步）"),
     ("PRD-19", "订单类型", "string", "维度", False, "CRM", STATUS_READY, "extra.order_type_code → 批量/打样/零售/备货"),
@@ -157,7 +192,7 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str, str, str]] = [
     # ---- 底稿无编码：明细/派生项（按底稿出现顺序补编码） ----
     ("PRD-X01", "订单数量", "number", "数量", False, "CRM", STATUS_READY, "底稿无编码；CRM getOrderCount + orderAnalyze 按订单号去重"),
     ("PRD-X02", "客单价", "number", "数量", False, "计算", STATUS_READY, "底稿无编码；= PRD-27 ÷ PRD-X01"),
-    ("PRD-X03", "平均产品单价", "number", "数量", False, "计算", STATUS_PENDING_FIELD, "底稿无编码；= PRD-27 ÷ PRD-11（阻塞于 PRD-11）"),
+    ("PRD-X03", "平均产品单价", "number", "数量", False, "计算", STATUS_READY, "底稿无编码；= PRD-26 对外出货净额 ÷ PRD-11 出货数量，2026-09 合计 51.6798"),
     ("PRD-X04", "打样金额", "number", "金额", False, "CRM", STATUS_READY, "底稿无编码；order_type=打样 的 intake_untaxed 汇总"),
     ("PRD-X05", "打样数量", "number", "数量", False, "CRM", STATUS_READY, "底稿无编码；order_type=打样 的 qty 汇总"),
     ("PRD-X06", "打样平均单价", "number", "数量", False, "CRM", STATUS_READY, "底稿无编码；= PRD-X04 ÷ PRD-X05"),
@@ -167,15 +202,31 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str, str, str]] = [
     ("PRD-X10", "零售金额", "number", "金额", False, "CRM", STATUS_READY, "底稿无编码；order_type=零售 的 intake_untaxed 汇总"),
     ("PRD-X11", "零售数量", "number", "数量", False, "CRM", STATUS_READY, "底稿无编码；order_type=零售 的 qty 汇总"),
     ("PRD-X12", "零售平均单价", "number", "数量", False, "CRM", STATUS_READY, "底稿无编码；= PRD-X10 ÷ PRD-X11"),
+    # ---- 底稿无编码、2026-10-16 业务确认产品线报表**不做**的项 ----
+    ("PRD-X13", "总劳动时间", "number", "人工", False, "CRM", STATUS_DROPPED, "2026-10-16 业务确认产品线报表不做（公司级有 marketing_total_labor_hours，本报表不用）"),
+    ("PRD-X14", "人工成本", "number", "人工", True, "计算", STATUS_DROPPED, "2026-10-16 业务确认产品线报表不做"),
+    ("PRD-X15", "人工分摊", "number", "人工", True, "计算", STATUS_DROPPED, "2026-10-16 业务确认产品线报表不做"),
+    ("PRD-X16", "单位时间附加值", "number", "人工", True, "计算", STATUS_DROPPED, "2026-10-16 业务确认产品线报表不做（公司级有 marketing_value_added_per_hour）"),
+    ("PRD-X17", "单位时间人工成本", "number", "人工", True, "计算", STATUS_DROPPED, "2026-10-16 业务确认产品线报表不做"),
+    ("PRD-X18", "贡献率", "number", "贡献", False, "计算", STATUS_DROPPED, "2026-10-16 业务确认产品线报表不做"),
+    ("PRD-X19", "产品贡献", "number", "贡献", True, "计算", STATUS_DROPPED, "2026-10-16 业务确认产品线报表不做"),
+    ("PRD-X20", "产品贡献率", "number", "贡献", False, "计算", STATUS_DROPPED, "2026-10-16 业务确认产品线报表不做"),
 ]
 
 FIELD_BY_CODE: dict[str, tuple[str, str, str, str, bool, str, str, str]] = {
     item[0]: item for item in FIELD_DEFS
 }
 
-# 本期不做（挂起/待上游）的字段：构建时留空，只写口径说明
+# 本期未出数的字段：构建时留空，只写口径说明
 PENDING_CODES: frozenset[str] = frozenset(
-    code for code, *_rest in FIELD_DEFS if _rest[5] in (STATUS_PENDING_FIELD, STATUS_PENDING_CALIBER)
+    code
+    for code, *_rest in FIELD_DEFS
+    if _rest[5] in (STATUS_PENDING_FIELD, STATUS_SOURCE_FOUND, STATUS_PENDING_CALIBER)
+)
+
+# 来源已定位、待打通取数参数的字段（实际成本来自金蝶成本计算单）
+SOURCE_FOUND_CODES: frozenset[str] = frozenset(
+    code for code, *_rest in FIELD_DEFS if _rest[5] == STATUS_SOURCE_FOUND
 )
 
 # 无来源、出不了的字段
@@ -186,6 +237,20 @@ MISSING_CODES: frozenset[str] = frozenset(
 # 底稿已划掉
 DROPPED_CODES: frozenset[str] = frozenset(
     code for code, *_rest in FIELD_DEFS if _rest[5] == STATUS_DROPPED
+)
+
+# 2026-10-16 业务确认产品线报表不做的项（底稿无编码，补 PRD-X13 ~ PRD-X20）
+BUSINESS_EXCLUDED_CODES: frozenset[str] = frozenset(
+    {
+        "PRD-X13",  # 总劳动时间
+        "PRD-X14",  # 人工成本
+        "PRD-X15",  # 人工分摊
+        "PRD-X16",  # 单位时间附加值
+        "PRD-X17",  # 单位时间人工成本
+        "PRD-X18",  # 贡献率
+        "PRD-X19",  # 产品贡献
+        "PRD-X20",  # 产品贡献率
+    }
 )
 
 # 现用数据源可直接出数的字段

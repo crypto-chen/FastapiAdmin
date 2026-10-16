@@ -333,6 +333,24 @@ JUSHUITAN_CONNECTOR = "jushuitan"
 CRM_CONNECTOR = "crm"
 # 金蝶单据查询（ExecuteBillQuery）：来源对象 ``query_type = bill_query``
 KINGDEE_QUERY_TYPE_BILL = "bill_query"
+# 请求模板里显式声明提交给金蝶的业务对象（FormId）：同一个金蝶对象可能被多个口径的数据源查询
+# （如存货收发存汇总表：机箱成品仓一份、全仓全物料一份），而 ``meta_source_object.code``
+# 有 (system_id, code) 唯一约束不允许重名，故用模板里的 ``FormId`` 覆盖提交对象。
+REQUEST_FORM_ID_KEY = "FormId"
+
+
+def resolve_report_target(default_form_id: str, params: dict) -> tuple[str, dict]:
+    """解析报表取数目标：返回 ``(提交给金蝶的 FormId, 实际提交的参数)``。
+
+    模板未声明 ``FormId`` 时行为与历史一致（用来源对象 code 作 FormId、参数原样提交）；
+    声明了则以模板为准，并把该键从提交参数里摘掉，避免金蝶收到多余字段。
+    """
+    params = params or {}
+    if REQUEST_FORM_ID_KEY not in params:
+        return default_form_id, params
+    declared = str(params.get(REQUEST_FORM_ID_KEY) or "").strip()
+    clean = {key: value for key, value in params.items() if key != REQUEST_FORM_ID_KEY}
+    return declared or default_form_id, clean
 
 
 async def fetch_kingdee_bill_query(
@@ -440,7 +458,9 @@ async def fetch_source_payload(source_system: SourceSystemModel, source_object: 
     if str(source_object.query_type or "").strip() == KINGDEE_QUERY_TYPE_BILL:
         # 单据查询：一次取一页，按 StartRow 翻页
         return await fetch_kingdee_bill_query(client, source_object.code, params)
-    return await fetch_report_data(client, source_object.code, params)
+    # 系统报表：模板里的 FormId 优先（同一声明式数据源可查同一个金蝶对象）
+    form_id, report_params = resolve_report_target(source_object.code, params)
+    return await fetch_report_data(client, form_id, report_params)
 
 
 def extract_payload_rows(payload: dict) -> list:
