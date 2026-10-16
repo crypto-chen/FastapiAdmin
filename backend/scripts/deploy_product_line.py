@@ -194,6 +194,25 @@ def build_steps(args: argparse.Namespace, multi_head: bool) -> list[Step]:
 # --------------------------------------------------------------------------- #
 # 自检
 # --------------------------------------------------------------------------- #
+def _is_descendant_of(revision: str, ancestor: str) -> bool:
+    """判断 ``ancestor`` 是否是 ``revision`` 的祖先（用于容忍 merge revision 等拓扑差异）。
+
+    例如仓库里做过一次 ``alembic merge``，head 会变成一个合并 revision；
+    此时数据库版本不等于 ``EXPECTED_HEAD``，但 ``EXPECTED_HEAD`` 仍是它的祖先，属正常。
+    """
+    if not revision or revision == ancestor:
+        return True
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        script = ScriptDirectory.from_config(Config(file_="alembic.ini"))
+        ancestors = {rev.revision for rev in script.iterate_revisions(revision, "base")}
+        return ancestor in ancestors
+    except Exception:  # noqa: BLE001 - 取不到拓扑时退回严格判定
+        return False
+
+
 async def verify(periods: list[str]) -> None:
     from sqlalchemy import text
 
@@ -205,8 +224,13 @@ async def verify(periods: list[str]) -> None:
     banner("[8] 自检", "-")
     async with async_db_session() as db:
         version = (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar()
-        print(f"  alembic head：{version}（期望 {EXPECTED_HEAD}）"
-              f"{'  ✅' if version == EXPECTED_HEAD else '  ⚠️ 不一致'}")
+        if version == EXPECTED_HEAD:
+            print(f"  alembic 版本：{version}（= 期望 head {EXPECTED_HEAD}）  ✅")
+        elif _is_descendant_of(version, EXPECTED_HEAD):
+            print(f"  alembic 版本：{version}（是 {EXPECTED_HEAD} 的后代，属正常拓扑）  ✅")
+        else:
+            print(f"  alembic 版本：{version}（期望 {EXPECTED_HEAD}）  ⚠️ 不一致")
+            print(f"            若产品线表/列均已存在，可忽略；否则先跑 fix_product_line_schema.py --apply")
         tables = (await db.execute(text("SHOW TABLES LIKE 'dwd_product_line%'"))).scalars().all()
         print(f"  产品线表：{list(tables)}")
         cols = (await db.execute(text("SHOW COLUMNS FROM dwd_order_full_chain LIKE 'ship_qty'"))).all()
