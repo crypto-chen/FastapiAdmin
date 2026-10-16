@@ -55,6 +55,7 @@ FILES=(
   docs/营销中心产品线分析报表方案.md
   docs/产品线上线部署说明.md
   docs/产品线指标开放接口对接说明.md
+  deploy/product-line/server_steps_conda.sh
   CHANGELOG.md
 )
 
