@@ -104,6 +104,61 @@ def backup_database(apply: bool, skip: bool) -> None:
     print(f"  已备份：{target}（{target.stat().st_size / 1024:.1f} KB）")
 
 
+def preflight_alembic() -> None:
+    """迁移前自检：多个 head（常见于本地另生成了同内容的迁移）会直接给出修复步骤。
+
+    ``alembic upgrade head`` 在有多个 head 时会抛 300 行堆栈，这里提前拦下来，把
+    「是哪几个 head / 哪些文件不在 git 里 / 怎么修」讲清楚。
+    """
+    banner("[1-前] 迁移自检", "-")
+    argv = [sys.executable, "-m", "alembic", "heads"]
+    print(f"$ {' '.join(argv)}")
+    result = subprocess.run(argv, cwd=str(PROJECT_ROOT), capture_output=True, text=True)
+    output = (result.stdout or "") + (result.stderr or "")
+    for line in output.strip().splitlines()[-12:]:
+        print(f"  {line}")
+    if result.returncode != 0:
+        print("\n  ⚠️ alembic 无法解析迁移目录（看上面的报错），请先修复后再跑本脚本。")
+        raise SystemExit(result.returncode)
+    heads = [line.split()[0] for line in output.splitlines() if "(head)" in line]
+    if len(heads) <= 1:
+        print(f"  单一 head：{heads[0] if heads else '（无）'}  ✅")
+        return
+
+    print(f"\n  ❌ 检测到 {len(heads)} 个 head：{heads}")
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all", "--", "app/alembic/versions"],
+        cwd=str(PROJECT_ROOT), capture_output=True, text=True,
+    )
+    dirty = [line for line in status.stdout.splitlines() if line.strip()]
+    print(
+        "  迁移目录里未提交/未跟踪的文件（大概率就是多出来的 head）："
+        if dirty else "  迁移目录里没有未提交/未跟踪的文件（两个 head 都在 git 里，走第 ④ 步合并）"
+    )
+    for line in dirty:
+        print(f"    {line}")
+    print(
+        "\n  修复步骤（按顺序做，任一步不确定就先停）：\n"
+        "    ① 看有哪些 head、分别来自哪个文件：\n"
+        "         python -m alembic heads\n"
+        "         git status --porcelain backend/app/alembic/versions\n"
+        "    ② 若多出来的 head 是**本机自动生成的重复迁移**（内容与其他迁移相同、且未在 git 中）：\n"
+        "         git clean -fd backend/app/alembic/versions        # 或手工删掉那个文件\n"
+        "       删完再 `python -m alembic heads` 应只剩一个。\n"
+        "    ③ 若该重复迁移**已经跑进数据库**（alembic_version 里是它）：\n"
+        "         python -m alembic stamp <要保留的那个 head>\n"
+        "       再删掉多余的文件。\n"
+        "    ③b 删掉重复文件后直接 `python main.py upgrade --env=dev`；\n"
+        "       若报 `Table 'dwd_product_line_analysis' already exists`，说明表已由重复迁移建过，\n"
+        "       此时改为 `python -m alembic stamp 27578c7b66b6` 对齐版本即可。\n"
+        "    ④ 若两个 head 都想保留（真的两条独立分支），做一次合并迁移：\n"
+        "         python -m alembic merge -m 'merge heads' <head1> <head2>\n"
+        "    ⑤ 迁移版本以数据库为准可先查：\n"
+        "         python -m alembic current\n"
+    )
+    raise SystemExit(2)
+
+
 def build_steps(args: argparse.Namespace) -> list[Step]:
     py = sys.executable
     periods = args.periods
@@ -243,6 +298,7 @@ def main() -> None:
 
     apply = not args.dry_run
     backup_database(apply, args.skip_backup)
+    preflight_alembic()
     for step in build_steps(args):
         run_step(step, apply)
 
