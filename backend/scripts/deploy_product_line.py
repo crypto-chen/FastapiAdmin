@@ -104,7 +104,7 @@ def backup_database(apply: bool, skip: bool) -> None:
     print(f"  已备份：{target}（{target.stat().st_size / 1024:.1f} KB）")
 
 
-def preflight_alembic() -> None:
+def preflight_alembic() -> tuple[list[str], bool]:
     """迁移前自检：多个 head（常见于本地另生成了同内容的迁移）会直接给出修复步骤。
 
     ``alembic upgrade head`` 在有多个 head 时会抛 300 行堆栈，这里提前拦下来，把
@@ -123,9 +123,11 @@ def preflight_alembic() -> None:
     heads = [line.split()[0] for line in output.splitlines() if "(head)" in line]
     if len(heads) <= 1:
         print(f"  单一 head：{heads[0] if heads else '（无）'}  ✅")
-        return
+        return heads, False
 
     print(f"\n  ❌ 检测到 {len(heads)} 个 head：{heads}")
+    print(f"  本脚本将改用**显式版本**升级（alembic upgrade {EXPECTED_HEAD}），绕过 head 解析继续往下跑；")
+    print("  但建议顺手把 head 收成一个（否则 `main.py upgrade` / 自动迁移都会再遇到这个问题）。")
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=all", "--", "app/alembic/versions"],
         cwd=str(PROJECT_ROOT), capture_output=True, text=True,
@@ -156,15 +158,17 @@ def preflight_alembic() -> None:
         "    ⑤ 迁移版本以数据库为准可先查：\n"
         "         python -m alembic current\n"
     )
-    raise SystemExit(2)
+    return heads, True
 
 
-def build_steps(args: argparse.Namespace) -> list[Step]:
+def build_steps(args: argparse.Namespace, multi_head: bool) -> list[Step]:
     py = sys.executable
     periods = args.periods
+    # 多 head 时用显式版本升级：`upgrade <rev>` 不需要解析 'head'，因此不会被多个 head 卡住
+    upgrade_target = EXPECTED_HEAD if multi_head else "head"
     steps = [
-        Step("1", f"数据库迁移（alembic upgrade head，期望 {EXPECTED_HEAD}）",
-             [py, "main.py", "upgrade", f"--env={args.env}"]),
+        Step("1", f"数据库迁移（alembic upgrade {upgrade_target}，期望 {EXPECTED_HEAD}）",
+             [py, "-m", "alembic", "upgrade", upgrade_target]),
         Step("2", "建 CRM 发货明细来源对象与同步任务",
              [py, "scripts/seed_crm_shipment_detail.py"]),
         Step("3", "建标准实体 / 65 个字段 / 菜单 / 角色授权",
@@ -298,8 +302,8 @@ def main() -> None:
 
     apply = not args.dry_run
     backup_database(apply, args.skip_backup)
-    preflight_alembic()
-    for step in build_steps(args):
+    _heads, multi_head = preflight_alembic()
+    for step in build_steps(args, multi_head):
         run_step(step, apply)
 
     if args.dry_run:
