@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 # 系列字典根节点（产品分类）与容器节点（其子类才是真正的产品线大类）
 PRODUCT_CATEGORY_ROOT_ID = 1
 CONTAINER_PRODUCT_NAMES = {"未知", "其它", "新产品"}
+COST_BILL_OBJECT = "CB_CostCalBill"  # 金蝶成本计算单（按销售订单号关联，取本期完工单位成本）
 
 ORDER_TYPE_NAMES = {"1": "批量", "2": "打样", "3": "零售", "4": "备货"}
 SETTLEMENT_RATE = 0.10  # PRD-27 营销结算收入 10%
@@ -236,6 +237,98 @@ async def _load_previous_inventory(
         line[row.product_line_code or ""] = line.get(row.product_line_code or "", 0.0) + value
         total += value
     return detail, line, total
+
+
+async def _load_cost_bill_unit_cost(
+    db: AsyncSession, period_value: str, work_order_to_bucket: dict[str, tuple[str, str]]
+) -> tuple[dict[tuple[str, str], float], dict[str, Any]]:
+    """成本计算单 → 各「产品线×SKU」的本期完工单位成本平均值。
+
+    关联：成本计算单 ``FPRODUCTNO``（工单号，形如 ``MO043786``）↔ 订单全链路 ``extra.push_no``
+    （CRM 单号与 ERP 销售订单号是两套编号，没有共同字段，工单号是唯一可靠的公共键）；
+    只取本期完工行（``FCompleteQty > 0``），单位成本取 ``FProductUseCost``，按 SKU 做**简单平均**。
+    """
+    run_id = (
+        await db.execute(
+            select(MetaSyncRunModel.id)
+            .join(MetaSyncJobModel, MetaSyncJobModel.id == MetaSyncRunModel.job_id)
+            .join(SourceObjectModel, SourceObjectModel.id == MetaSyncJobModel.source_object_id)
+            .where(
+                SourceObjectModel.code == COST_BILL_OBJECT,
+                MetaSyncRunModel.status == "success",
+                MetaSyncRunModel.period_value == period_value,
+            )
+            .order_by(MetaSyncRunModel.id.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if run_id is None:
+        return {}, {"source": "none", "rows": 0, "completed": 0, "matched": 0, "skus": 0}
+
+    payload = (
+        await db.execute(select(MetaSyncRunModel.rows_json).where(MetaSyncRunModel.id == run_id))
+    ).scalars().first()
+    rows = payload.get("Rows") if isinstance(payload, dict) else None
+    rows = rows if isinstance(rows, list) else []
+
+    source_object = (
+        await db.execute(select(SourceObjectModel).where(SourceObjectModel.code == COST_BILL_OBJECT))
+    ).scalars().first()
+    field_keys = ((source_object.request_template or {}) if source_object else {}).get("FieldKeys") or ""
+    fields = [item.strip() for item in str(field_keys).split(",") if item.strip()]
+    index = {name: i for i, name in enumerate(fields)}
+
+    def cell(row: list, name: str) -> Any:
+        i = index.get(name)
+        if i is None or not isinstance(row, list) or i >= len(row):
+            return None
+        return row[i]
+
+    totals: dict[tuple[str, str], float] = {}
+    counts: dict[tuple[str, str], int] = {}
+    bom_counter: dict[tuple[str, str], dict[str, int]] = {}
+    completed = 0
+    matched = 0
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        # BOM 版本：不要求完工，只要有工单归属就统计（取出现次数最多的版本）
+        work_order = str(cell(row, "FPRODUCTNO") or "").strip()
+        if not work_order:
+            bill_no = str(cell(row, "FOrderBillNo") or "").strip()
+            work_order = bill_no.rsplit("-", 1)[0] if "-" in bill_no else bill_no
+        bucket = work_order_to_bucket.get(work_order)
+        if bucket is not None:
+            bom = str(cell(row, "FBOMNUMBERFIELD_FNUMBER") or "").strip().strip('"')
+            if bom:
+                counter = bom_counter.setdefault(bucket, {})
+                counter[bom] = counter.get(bom, 0) + 1
+        if to_number(cell(row, "FCompleteQty")) <= 0:
+            continue
+        unit_cost = to_number(cell(row, "FProductUseCost"))
+        if unit_cost <= 0:
+            continue
+        completed += 1
+        if bucket is None:
+            continue
+        matched += 1
+        totals[bucket] = totals.get(bucket, 0.0) + unit_cost
+        counts[bucket] = counts.get(bucket, 0) + 1
+
+    averages = {key: round(totals[key] / counts[key], 4) for key in totals if counts[key]}
+    bom_by_bucket = {
+        key: max(counter.items(), key=lambda kv: (kv[1], kv[0]))[0]
+        for key, counter in bom_counter.items()
+    }
+    return averages, {
+        "source": "cost_bill",
+        "rows": len(rows),
+        "completed": completed,
+        "matched": matched,
+        "skus": len(averages),
+        "bom_skus": len(bom_by_bucket),
+        "bom": bom_by_bucket,
+    }
 
 
 def _empty_bucket(product_line: str, sku: str) -> dict[str, Any]:
@@ -501,6 +594,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     await db.flush()
 
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
+    work_order_to_bucket: dict[str, tuple[str, str]] = {}
     matched = 0
     unmatched = 0
     for row in order_rows:
@@ -534,7 +628,15 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
 
         key = (product_line, sku)
         store = buckets.setdefault(key, _empty_bucket(product_line, sku))
+        push_no = str(extra.get("push_no") or "").strip()
+        if push_no:
+            work_order_to_bucket[push_no] = key
         _add(store, row, period_end)
+
+    cost_bill_units, cost_bill_stats = await _load_cost_bill_unit_cost(
+        db, period_value, work_order_to_bucket
+    )
+    bom_by_bucket: dict[tuple[str, str], str] = cost_bill_stats.pop("bom", {})
 
     # 小计（每个产品线大类）与合计
     line_totals: dict[str, dict[str, Any]] = {}
@@ -547,6 +649,28 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
         extra = _extra_of(store)
         if is_aggregate == 2:
             extra["PRD-01"] = "全部产品线"
+        # PRD-06 实际单位成本 = 成本计算单「本期完工」单位成本平均值（按 SKU 关联）
+        if is_aggregate == 0:
+            extra["PRD-06"] = cost_bill_units.get((store["product_line_code"] or "", store["sku"] or ""))
+            extra["PRD-05"] = bom_by_bucket.get((store["product_line_code"] or "", store["sku"] or ""))
+        elif cost_bill_units:
+            weighted = 0.0
+            weight = 0.0
+            for (bucket_line, bucket_sku), bucket in buckets.items():
+                if is_aggregate == 1 and bucket_line != store["product_line_code"]:
+                    continue
+                value = cost_bill_units.get((bucket_line, bucket_sku))
+                if value is None:
+                    continue
+                qty = to_number(bucket["ship_qty"])
+                if qty:
+                    weighted += value * qty
+                    weight += qty
+            extra["PRD-06"] = round(weighted / weight, 4) if weight else None
+            extra["PRD-05"] = None  # BOM 版本是维度属性，小计/合计行不拼接
+        else:
+            extra["PRD-06"] = None
+            extra["PRD-05"] = None
         # PRD-40 库存周转天数 = 平均库存（(上期+本期)÷2）÷ 本期销售成本 × 30
         current_inventory = to_number(extra.get("PRD-36"))
         sales_cost = to_number(extra.get("PRD-16"))
@@ -612,6 +736,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
         "order_source_version": order_version,
         "model_count": len(models),
         "category_count": len(lines),
+        "cost_bill": cost_bill_stats,
         "warnings": list(PENDING_NOTES),
     }
     logger.info(
