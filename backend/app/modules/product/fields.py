@@ -145,7 +145,7 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str, str, str]] = [
     # ---- 成本构成 ----
     ("PRD-05", "BOM版本", "string", "成本", False, "ERP/BOM", STATUS_READY, "金蝶成本计算单 CB_CostCalBill 的 FBOMNUMBERFIELD_FNUMBER；按工单号（FPRODUCTNO）关联订单全链路 extra.push_no，同 SKU 取出现次数最多的版本；2026-09 覆盖 174/192 明细行"),
     ("PRD-06", "实际单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "成本计算单按工单号关联订单，取本期完工行（FCompleteQty>0）的 FProductUseCost 按 SKU 简单平均；2026-09 覆盖 166/192 明细行"),
-    ("PRD-07", "实际材料单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "2026-10-17 改取成本计算单：工单材料成本（成本项目=直接材料）÷ 本期完工数量，按 SKU 简单平均；2026-09 覆盖 164/192 明细行"),
+    ("PRD-07", "实际材料单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "暂用 CRM 订单材料单位成本兜底（58.8%）；成本计算单口径待打通——「直接材料」行不带单据号/完工数量，按工单汇总会累加多张单据（实测材料 116 > 总成本 49），需先拿到单据维度按「单据材料÷单据产量」汇总"),
     ("PRD-08", "实际人工单位成本", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "来源已定位：成本计算单按成本项目 FCOSTITEMID_FNAME（人工）配 FCurrInputAmount / FCompleteAmount 拆；当前 FSHOWWAY=2 下成本项目列返回空，需另调显示方式（子项明细展开会显著变慢）"),
     ("PRD-09", "实际制造费用-变动单位", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "来源已定位：成本计算单按费用项目 FEXPENSEITEMFIELD_FNAME 拆分；同上，拆分列待显示方式打通"),
     ("PRD-10", "实际制造费用-固定单位", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "来源已定位：成本计算单按费用项目 FEXPENSEITEMFIELD_FNAME 拆分；同上，拆分列待显示方式打通"),

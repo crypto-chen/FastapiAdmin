@@ -684,7 +684,10 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
         if is_aggregate == 0:
             extra["PRD-06"] = cost_bill_units.get((store["product_line_code"] or "", store["sku"] or ""))
             extra["PRD-05"] = bom_by_bucket.get((store["product_line_code"] or "", store["sku"] or ""))
-            extra["PRD-07"] = material_units.get((store["product_line_code"] or "", store["sku"] or ""))
+            # PRD-07 暂用 CRM 订单材料单位成本兜底：成本计算单「直接材料」行不带单据号与完工数量，
+            # 按工单汇总会把多张单据加总再除以单张完工量（实测材料单位成本 116 > 实际单位成本 49）。
+            # 待拿到单据号维度（按单据 material/qty 汇总）后再切成本计算单。
+            extra["PRD-07"] = extra.get("PRD-07")
         elif cost_bill_units:
             weighted = 0.0
             weight = 0.0
@@ -703,7 +706,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                     material_weighted += material_value * qty
                     material_weight += qty
             extra["PRD-06"] = round(weighted / weight, 4) if weight else None
-            extra["PRD-07"] = round(material_weighted / material_weight, 4) if material_weight else None
+            extra["PRD-07"] = extra.get("PRD-07")
             extra["PRD-05"] = None  # BOM 版本是维度属性，小计/合计行不拼接
         else:
             extra["PRD-06"] = None
