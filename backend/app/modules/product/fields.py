@@ -153,9 +153,9 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str, str, str]] = [
     ("PRD-11", "出货数量", "number", "数量", False, "ERP", STATUS_READY, "CRM 发货明细 /hs/shipments/getShipmentsDetail（发货时间口径，按 order_id 关联）优先，未命中回退 orderShipments.send_qty；已落 dwd_order_full_chain.ship_qty，2026-09 覆盖 989/1419 单"),
     ("PRD-12", "标准材料成本", "number", "成本", True, "计算", STATUS_READY, "标准成本取 CRM 销售订单：= extra.material_cost_unit × PRD-11；2026-09 覆盖 163/192 明细行"),
         ("PRD-13", "标准人工成本", "number", "成本", True, "计算", STATUS_DROPPED, "2026-10-17 业务确认去掉人工指标，不做"),
-        ("PRD-14", "标准制造费用", "number", "成本", True, "计算", STATUS_PENDING_FIELD, "2026-10-17 业务确认合并为一个制造费用指标（不再分变动/固定）；= PRD-09 实际制造费用单位成本 × PRD-11 出货数量，待 PRD-09 打通"),
+            ("PRD-14", "标准制造费用", "number", "成本", True, "CRM", STATUS_READY, "取 CRM 订单分析接口的加工费（process_cost_total ÷ 数量 × PRD-11 出货数量）；2026-09 覆盖 165/192 明细行"),
         ("PRD-15", "标准制造费用-固定", "number", "成本", True, "计算", STATUS_DROPPED, "2026-10-17 业务确认并入 PRD-14（制造费用不再分变动/固定），本编码不做"),
-        ("PRD-16", "标准成本小计", "number", "成本", True, "计算", STATUS_PENDING_FIELD, "2026-10-17 口径调整（人工去掉、制造费用合并）：= PRD-12 标准材料成本 + PRD-14 标准制造费用；待 PRD-14 打通"),
+            ("PRD-16", "标准成本小计", "number", "成本", True, "计算", STATUS_READY, "= PRD-12 标准材料成本 + PRD-14 标准制造费用（两项缺一时回退标准单位成本 × 出货量）"),
     ("PRD-17", "单位标准成本", "number", "成本", True, "CRM", STATUS_READY, "标准成本取 CRM 销售订单：extra.unit_cost（订单行 material_cost_total + process_cost ÷ 数量），按数量加权平均；覆盖 98,580/167,673（58.8%）"),
     # ---- 维度：组织与渠道 ----
     ("PRD-18", "业务员", "string", "维度", False, "CRM", STATUS_READY, "salesman_code + salesman_name（master_person 已同步）"),
@@ -187,8 +187,8 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str, str, str]] = [
     # ---- 毛利 ----
     ("PRD-41", "毛利", "number", "成本", True, "计算", STATUS_READY, "底稿口径（2026-10-17 业务确认不采用替代口径）：= PRD-26 对外出货净额 − PRD-16 标准成本小计"),
     ("PRD-42", "毛利率", "number", "成本", False, "计算", STATUS_READY, "底稿 = PRD-41 ÷ PRD-26（百分数）"),
-        ("PRD-43", "标准成本边际贡献", "number", "成本", True, "计算", STATUS_PENDING_FIELD, "底稿 = PRD-26 − PRD-12 标准材料成本 − PRD-14 标准制造费用；依赖 PRD-14"),
-    ("PRD-44", "标准成本边际贡献率", "number", "成本", False, "计算", STATUS_PENDING_FIELD, "底稿 = PRD-43 ÷ PRD-26（百分数）；依赖 PRD-43"),
+            ("PRD-43", "标准成本边际贡献", "number", "成本", True, "计算", STATUS_READY, "= PRD-26 对外出货净额 − PRD-12 标准材料成本 − PRD-14 标准制造费用"),
+        ("PRD-44", "标准成本边际贡献率", "number", "成本", False, "计算", STATUS_READY, "= PRD-43 ÷ PRD-26（百分数）"),
     # ---- 底稿无编码：明细/派生项（按底稿出现顺序补编码） ----
     ("PRD-X01", "订单数量", "number", "数量", False, "CRM", STATUS_READY, "底稿无编码；CRM getOrderCount + orderAnalyze 按订单号去重"),
     ("PRD-X02", "客单价", "number", "数量", False, "计算", STATUS_READY, "底稿无编码；= PRD-27 ÷ PRD-X01"),

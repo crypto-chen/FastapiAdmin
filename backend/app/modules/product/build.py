@@ -513,12 +513,12 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
     standard_unit_cost = (
         money(store["unit_cost_amount"] / store["unit_cost_qty"]) if store["unit_cost_qty"] else None
     )
-    # 标准材料成本（PRD-12）= 材料单位成本 × 出货数量；标准人工成本（PRD-13）= 加工费单位成本 × 出货数量
+    # PRD-12 标准材料成本 = 材料单位成本 × 出货数量
     material_cost_total = money(material_unit * ship_qty) if (material_unit and ship_qty) else None
-    labor_cost_total = money(process_unit * ship_qty) if (process_unit and ship_qty) else None
-    # PRD-16 标准成本小计：2026-10-17 口径调整后 = PRD-12 标准材料成本 + PRD-14 标准制造费用；
-    # PRD-14 未接入时回退到「标准单位成本 × 出货数量」（含材料与加工费，保持毛利口径可用）。
-    overhead_total = None  # PRD-14 待打通
+    # PRD-14 标准制造费用 = CRM 订单加工费（process_cost）单位成本 × 出货数量（2026-10-17 业务指定）
+    overhead_total = money(process_unit * ship_qty) if (process_unit and ship_qty) else None
+    # PRD-16 标准成本小计 = PRD-12 标准材料成本 + PRD-14 标准制造费用；
+    # 两项缺一时回退「标准单位成本 × 出货数量」（与 12+14 等价）
     if material_cost_total is not None and overhead_total is not None:
         standard_cost_total = money(material_cost_total + overhead_total)
     elif standard_unit_cost and ship_qty:
@@ -528,6 +528,15 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
     # 底稿口径（2026-10-17 业务确认不接受替代口径）：毛利 = 对外出货净额 − 标准成本小计
     gross_profit = money(net_shipment - standard_cost_total) if standard_cost_total is not None else None
     gross_profit_rate = percent(gross_profit, net_shipment) if gross_profit is not None else None
+    # PRD-43 标准成本边际贡献 = PRD-26 − PRD-12 − PRD-14；PRD-44 = PRD-43 ÷ PRD-26
+    standard_contribution = (
+        money(net_shipment - material_cost_total - overhead_total)
+        if (material_cost_total is not None and overhead_total is not None)
+        else None
+    )
+    standard_contribution_rate = (
+        percent(standard_contribution, net_shipment) if standard_contribution is not None else None
+    )
     # 库存（成本口径）：PRD-36 = 接单余额 + 在制 + 完工齐套未出货；37/38 为两段明细，39 为 >90 天呆滞
     inventory = money(store["inv_order_balance"] + store["inv_wip"] + store["inv_finished"])
     types = store["order_type_amount"]
@@ -571,6 +580,9 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         "PRD-39": money(store["inv_stagnant"]),
         "PRD-41": gross_profit,
         "PRD-42": gross_profit_rate,
+        "PRD-14": overhead_total,
+        "PRD-43": standard_contribution,
+        "PRD-44": standard_contribution_rate,
         "PRD-X01": order_count,
         "PRD-X02": money(settlement_income / order_count) if order_count else None,
         "PRD-X03": money(net_shipment / ship_qty) if ship_qty else None,
@@ -584,7 +596,6 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         "PRD-X11": qtys.get("零售") or None,
         "PRD-X12": avg("零售"),
         # 缺项：留空，口径见 warnings
-        "PRD-14": None,
         "PRD-15": None,
     }
 
