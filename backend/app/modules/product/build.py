@@ -516,10 +516,11 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
     # 标准材料成本（PRD-12）= 材料单位成本 × 出货数量；标准人工成本（PRD-13）= 加工费单位成本 × 出货数量
     material_cost_total = money(material_unit * ship_qty) if (material_unit and ship_qty) else None
     labor_cost_total = money(process_unit * ship_qty) if (process_unit and ship_qty) else None
-    # PRD-16 标准成本小计 = PRD-12 + PRD-13（PRD-14/15 的制造费用拆分未接入前按 0 计）；
-    # 两项缺一时回退到「标准单位成本 × 出货数量」（与 12+13 等价）
-    if material_cost_total is not None and labor_cost_total is not None:
-        standard_cost_total = money(material_cost_total + labor_cost_total)
+    # PRD-16 标准成本小计：2026-10-17 口径调整后 = PRD-12 标准材料成本 + PRD-14 标准制造费用；
+    # PRD-14 未接入时回退到「标准单位成本 × 出货数量」（含材料与加工费，保持毛利口径可用）。
+    overhead_total = None  # PRD-14 待打通
+    if material_cost_total is not None and overhead_total is not None:
+        standard_cost_total = money(material_cost_total + overhead_total)
     elif standard_unit_cost and ship_qty:
         standard_cost_total = money(standard_unit_cost * ship_qty)
     else:
@@ -544,7 +545,6 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         "PRD-07": material_unit,
         "PRD-11": ship_qty or None,
         "PRD-12": material_cost_total,
-        "PRD-13": labor_cost_total,
         "PRD-16": standard_cost_total,
         "PRD-17": standard_unit_cost,  # 标准成本取 CRM 销售订单（按数量加权平均）
         "PRD-18": _concat(store["salesman_counter"]),
@@ -684,10 +684,8 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
         if is_aggregate == 0:
             extra["PRD-06"] = cost_bill_units.get((store["product_line_code"] or "", store["sku"] or ""))
             extra["PRD-05"] = bom_by_bucket.get((store["product_line_code"] or "", store["sku"] or ""))
-            # PRD-07 暂用 CRM 订单材料单位成本兜底：成本计算单「直接材料」行不带单据号与完工数量，
-            # 按工单汇总会把多张单据加总再除以单张完工量（实测材料单位成本 116 > 实际单位成本 49）。
-            # 待拿到单据号维度（按单据 material/qty 汇总）后再切成本计算单。
-            extra["PRD-07"] = extra.get("PRD-07")
+            # PRD-07 实际材料单位成本 = 工单材料成本 ÷ 工单完工数量（完工数量按单据累加）再按 SKU 平均
+            extra["PRD-07"] = material_units.get((store["product_line_code"] or "", store["sku"] or ""))
         elif cost_bill_units:
             weighted = 0.0
             weight = 0.0
@@ -706,7 +704,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                     material_weighted += material_value * qty
                     material_weight += qty
             extra["PRD-06"] = round(weighted / weight, 4) if weight else None
-            extra["PRD-07"] = extra.get("PRD-07")
+            extra["PRD-07"] = round(material_weighted / material_weight, 4) if material_weight else None
             extra["PRD-05"] = None  # BOM 版本是维度属性，小计/合计行不拼接
         else:
             extra["PRD-06"] = None

@@ -210,7 +210,9 @@ async def main() -> None:
                 def cell(name: str):
                     j = index.get(name)
                     return row[j] if j is not None and j < len(row) else None
-                complete_qty = max(complete_qty, num(cell("FCompleteQty")))
+                # 同工单下有多张成本计算单，每张各带完工数量 —— 必须**累加**，
+                # 用 max 会把多张单据的材料金额加总后除以单张产量（实测材料 116 > 总成本 49）
+                complete_qty += num(cell("FCompleteQty"))
                 amount = num(cell("FCompleteAmount"))
                 cost_item = str(cell("FCOSTITEMID_FNAME") or "").strip()
                 expense = str(cell("FEXPENSEITEMFIELD_FNAME") or "").strip()
