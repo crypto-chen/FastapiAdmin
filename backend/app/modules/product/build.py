@@ -16,7 +16,7 @@ P0 只落「现用可出」的 26 项；出货数量（PRD-11/12、X03）与成�
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -45,6 +45,8 @@ SETTLEMENT_RATE = 0.10  # PRD-27 营销结算收入 10%
 HQ_ALLOCATION_RATE = 0.02  # PRD-33 总部分摊 2.00%（底稿 27×2%）
 VARIABLE_EXPENSE_RATE = 0.28  # PRD-29 变动费用分摊 28%（2026-10-17 业务确认：按净额比例分摊列示）
 FIXED_EXPENSE_RATE = 0.06  # PRD-32 固定费用分摊 6%（同上）
+STAGNANT_DAYS = 90  # PRD-39 呆滞库存：入库后超过该天数仍未出货
+TURNOVER_DAYS = 30  # PRD-40 库存周转天数按 30 天折算
 
 PENDING_NOTES: list[str] = [
     "标准成本组取 CRM 销售订单：PRD-11/12/16/17 与平均产品单价已出；PRD-13/14/15 阻塞于订单行缺人工与制造费用拆分字段",
@@ -76,6 +78,20 @@ def percent(numerator: float, denominator: float) -> float | None:
     if not denominator:
         return None
     return round(float(numerator) / float(denominator) * 100, 4)
+
+
+def period_end_date(period_value: str) -> date:
+    """``YYYY-MM`` → 期间末日（呆滞库龄的截止日）。"""
+    year, month = (int(part) for part in period_value.split("-")[:2])
+    leap = 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28
+    last_day = [31, leap, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+    return date(year, month, last_day)
+
+
+def previous_period_value(period_value: str) -> str:
+    year, month = (int(part) for part in period_value.split("-")[:2])
+    year, month = (year - 1, 12) if month == 1 else (year, month - 1)
+    return f"{year}-{month:02d}"
 
 
 def _concat(counter: dict[str, float]) -> str:
@@ -185,6 +201,43 @@ async def _latest_order_rows(db: AsyncSession, period_value: str) -> tuple[list[
     return list(rows), int(version)
 
 
+async def _load_previous_inventory(
+    db: AsyncSession, period_value: str
+) -> tuple[dict[tuple[str, str], float], dict[str, float], float]:
+    """取上一期最新版本的产品线库存（PRD-36），用于 PRD-40 的平均库存。
+
+    返回：明细映射 (产品线, SKU)→库存、产品线小计映射、全表合计。
+    """
+    previous = previous_period_value(period_value)
+    version = (
+        await db.execute(
+            select(func.max(ProductLineAnalysisModel.calc_version)).where(
+                ProductLineAnalysisModel.period_value == previous
+            )
+        )
+    ).scalar()
+    if version is None:
+        return {}, {}, 0.0
+    rows = (
+        await db.execute(
+            select(ProductLineAnalysisModel).where(
+                ProductLineAnalysisModel.period_value == previous,
+                ProductLineAnalysisModel.calc_version == version,
+                ProductLineAnalysisModel.is_aggregate == 0,
+            )
+        )
+    ).scalars().all()
+    detail: dict[tuple[str, str], float] = {}
+    line: dict[str, float] = {}
+    total = 0.0
+    for row in rows:
+        value = to_number((row.extra or {}).get("PRD-36"))
+        detail[(row.product_line_code or "", row.sku or "")] = value
+        line[row.product_line_code or ""] = line.get(row.product_line_code or "", 0.0) + value
+        total += value
+    return detail, line, total
+
+
 def _empty_bucket(product_line: str, sku: str) -> dict[str, Any]:
     return {
         "product_line_code": product_line or None,
@@ -203,6 +256,11 @@ def _empty_bucket(product_line: str, sku: str) -> dict[str, Any]:
         "material_cost_qty": 0.0,
         "unit_cost_amount": 0.0,
         "unit_cost_qty": 0.0,
+        # 库存（成本口径）：接单余额 / 在制 / 完工齐套未出货 / 呆滞（>90 天）
+        "inv_order_balance": 0.0,
+        "inv_wip": 0.0,
+        "inv_finished": 0.0,
+        "inv_stagnant": 0.0,
         "order_type_counter": {},
         "order_type_amount": {},
         "order_type_qty": {},
@@ -212,7 +270,7 @@ def _empty_bucket(product_line: str, sku: str) -> dict[str, Any]:
     }
 
 
-def _add(store: dict[str, Any], row: OrderFullChainModel) -> None:
+def _add(store: dict[str, Any], row: OrderFullChainModel, period_end: date) -> None:
     """把一张订单行累加进某个桶。"""
     extra = row.extra or {}
     store["order_count"] += 1
@@ -235,6 +293,19 @@ def _add(store: dict[str, Any], row: OrderFullChainModel) -> None:
     if unit_cost and qty:
         store["unit_cost_amount"] += unit_cost * qty
         store["unit_cost_qty"] += qty
+
+    # 库存（成本口径，取 CRM 订单）：未出货数量 × 标准单位成本，按节点分三段
+    unsold = qty - to_number(row.ship_qty)
+    if unsold > 0 and unit_cost:
+        cost = unit_cost * unsold
+        if row.push_date is None:
+            store["inv_order_balance"] += cost  # 接单余额：已接单未下推
+        elif row.finish_date is None:
+            store["inv_wip"] += cost  # 在制：已下推未齐套
+        else:
+            store["inv_finished"] += cost  # 完工齐套未出货
+            if row.finish_date.date() <= period_end - timedelta(days=STAGNANT_DAYS):
+                store["inv_stagnant"] += cost  # 呆滞：入库超 90 天仍未出库
 
     amount = to_number(row.intake_untaxed)
     order_type = ORDER_TYPE_NAMES.get(str(extra.get("order_type_code") or "").strip(), "")
@@ -270,6 +341,10 @@ def _merge(target: dict[str, Any], source: dict[str, Any]) -> None:
         "material_cost_qty",
         "unit_cost_amount",
         "unit_cost_qty",
+        "inv_order_balance",
+        "inv_wip",
+        "inv_finished",
+        "inv_stagnant",
     ):
         target[key] += source[key]
     for counter_key in ("order_type_counter", "order_type_amount", "order_type_qty", "salesman_counter", "platform_counter", "shop_counter"):
@@ -288,8 +363,9 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
     variable_allocation = money(net_shipment * VARIABLE_EXPENSE_RATE)  # PRD-29
     fixed_allocation = money(net_shipment * FIXED_EXPENSE_RATE)  # PRD-32
     hq_allocation = money(net_shipment * HQ_ALLOCATION_RATE)  # PRD-33
-    contribution = money(settlement_income - variable_allocation)  # PRD-30 = 28行 − 30行
-    contribution_rate = percent(contribution, settlement_income)  # PRD-31 = 31÷28
+    # 2026-10-17 业务确认：边际贡献 = 对外出货净额 − 变动费用分摊（不是营销结算收入 10% − 变动费用）
+    contribution = money(net_shipment - variable_allocation)  # PRD-30
+    contribution_rate = percent(contribution, net_shipment)  # PRD-31 = 边际贡献率（分母为净额）
     settlement = money(contribution - fixed_allocation - hq_allocation)  # PRD-34 = 31−33−34
     settlement_rate = percent(settlement, net_shipment)  # PRD-35 = 35÷27
     material_unit = (
@@ -304,6 +380,8 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
     # 底稿口径（2026-10-17 业务确认不接受替代口径）：毛利 = 对外出货净额 − 标准成本小计
     gross_profit = money(net_shipment - standard_cost_total) if standard_cost_total is not None else None
     gross_profit_rate = percent(gross_profit, net_shipment) if gross_profit is not None else None
+    # 库存（成本口径）：PRD-36 = 接单余额 + 在制 + 完工齐套未出货；37/38 为两段明细，39 为 >90 天呆滞
+    inventory = money(store["inv_order_balance"] + store["inv_wip"] + store["inv_finished"])
     types = store["order_type_amount"]
     qtys = store["order_type_qty"]
     type_counters = store["order_type_counter"]
@@ -338,6 +416,11 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         "PRD-33": hq_allocation,
         "PRD-34": settlement,
         "PRD-35": settlement_rate,
+        # 库存类统一输出数值（0 表示没有库存，便于小计/合计直接相加）
+        "PRD-36": inventory,
+        "PRD-37": money(store["inv_wip"]),
+        "PRD-38": money(store["inv_finished"]),
+        "PRD-39": money(store["inv_stagnant"]),
         "PRD-41": gross_profit,
         "PRD-42": gross_profit_rate,
         "PRD-X01": order_count,
@@ -367,6 +450,10 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     category_rows = await _latest_run_rows(db, PRODUCT_CATEGORY_OBJECT)
     models = model_index(model_rows)
     lines = category_line_map(category_rows)
+    period_end = period_end_date(period_value)
+    prev_inventory, prev_line_inventory, prev_total_inventory = await _load_previous_inventory(
+        db, period_value
+    )
 
     version = int(
         (
@@ -423,7 +510,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
 
         key = (product_line, sku)
         store = buckets.setdefault(key, _empty_bucket(product_line, sku))
-        _add(store, row)
+        _add(store, row, period_end)
 
     # 小计（每个产品线大类）与合计
     line_totals: dict[str, dict[str, Any]] = {}
@@ -436,6 +523,20 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
         extra = _extra_of(store)
         if is_aggregate == 2:
             extra["PRD-01"] = "全部产品线"
+        # PRD-40 库存周转天数 = 平均库存（(上期+本期)÷2）÷ 本期销售成本 × 30
+        current_inventory = to_number(extra.get("PRD-36"))
+        sales_cost = to_number(extra.get("PRD-16"))
+        if is_aggregate == 0:
+            previous_inventory = prev_inventory.get((store["product_line_code"] or "", store["sku"] or ""), 0.0)
+        elif is_aggregate == 1:
+            previous_inventory = prev_line_inventory.get(store["product_line_code"] or "", 0.0)
+        else:
+            previous_inventory = prev_total_inventory
+        extra["PRD-40"] = (
+            round(((previous_inventory + current_inventory) / 2) / sales_cost * TURNOVER_DAYS, 4)
+            if sales_cost
+            else None
+        )
         db.add(
             ProductLineAnalysisModel(
                 period_value=period_value,
