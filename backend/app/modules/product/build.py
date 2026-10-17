@@ -254,6 +254,8 @@ def _empty_bucket(product_line: str, sku: str) -> dict[str, Any]:
         "contribution_margin": 0.0,
         "material_cost_amount": 0.0,
         "material_cost_qty": 0.0,
+        "process_cost_amount": 0.0,
+        "process_cost_qty": 0.0,
         "unit_cost_amount": 0.0,
         "unit_cost_qty": 0.0,
         # 库存（成本口径）：接单余额 / 在制 / 完工齐套未出货 / 呆滞（>90 天）
@@ -293,6 +295,11 @@ def _add(store: dict[str, Any], row: OrderFullChainModel, period_end: date) -> N
     if unit_cost and qty:
         store["unit_cost_amount"] += unit_cost * qty
         store["unit_cost_qty"] += qty
+    # 人工成本 = CRM 订单行的 process_cost（加工费）
+    unit_process = to_number(extra.get("process_cost_unit"))
+    if unit_process and qty:
+        store["process_cost_amount"] += unit_process * qty
+        store["process_cost_qty"] += qty
 
     # 库存（成本口径，取 CRM 订单）：未出货数量 × 标准单位成本，按节点分三段
     unsold = qty - to_number(row.ship_qty)
@@ -339,6 +346,8 @@ def _merge(target: dict[str, Any], source: dict[str, Any]) -> None:
         "contribution_margin",
         "material_cost_amount",
         "material_cost_qty",
+        "process_cost_amount",
+        "process_cost_qty",
         "unit_cost_amount",
         "unit_cost_qty",
         "inv_order_balance",
@@ -373,10 +382,25 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         if store["material_cost_qty"]
         else None
     )
+    process_unit = (
+        money(store["process_cost_amount"] / store["process_cost_qty"])
+        if store["process_cost_qty"]
+        else None
+    )
     standard_unit_cost = (
         money(store["unit_cost_amount"] / store["unit_cost_qty"]) if store["unit_cost_qty"] else None
     )
-    standard_cost_total = money(standard_unit_cost * ship_qty) if (standard_unit_cost and ship_qty) else None  # PRD-16
+    # 标准材料成本（PRD-12）= 材料单位成本 × 出货数量；标准人工成本（PRD-13）= 加工费单位成本 × 出货数量
+    material_cost_total = money(material_unit * ship_qty) if (material_unit and ship_qty) else None
+    labor_cost_total = money(process_unit * ship_qty) if (process_unit and ship_qty) else None
+    # PRD-16 标准成本小计 = PRD-12 + PRD-13（PRD-14/15 的制造费用拆分未接入前按 0 计）；
+    # 两项缺一时回退到「标准单位成本 × 出货数量」（与 12+13 等价）
+    if material_cost_total is not None and labor_cost_total is not None:
+        standard_cost_total = money(material_cost_total + labor_cost_total)
+    elif standard_unit_cost and ship_qty:
+        standard_cost_total = money(standard_unit_cost * ship_qty)
+    else:
+        standard_cost_total = None
     # 底稿口径（2026-10-17 业务确认不接受替代口径）：毛利 = 对外出货净额 − 标准成本小计
     gross_profit = money(net_shipment - standard_cost_total) if standard_cost_total is not None else None
     gross_profit_rate = percent(gross_profit, net_shipment) if gross_profit is not None else None
@@ -396,7 +420,8 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         "PRD-02": store["sku"],
         "PRD-07": material_unit,
         "PRD-11": ship_qty or None,
-        "PRD-12": money(material_unit * ship_qty) if (material_unit and ship_qty) else None,
+        "PRD-12": material_cost_total,
+        "PRD-13": labor_cost_total,
         "PRD-16": standard_cost_total,
         "PRD-17": standard_unit_cost,  # 标准成本取 CRM 销售订单（按数量加权平均）
         "PRD-18": _concat(store["salesman_counter"]),
@@ -436,7 +461,6 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         "PRD-X11": qtys.get("零售") or None,
         "PRD-X12": avg("零售"),
         # 缺项：留空，口径见 warnings
-        "PRD-13": None,
         "PRD-14": None,
         "PRD-15": None,
     }

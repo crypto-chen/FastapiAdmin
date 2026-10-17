@@ -550,12 +550,17 @@ def build_record(
     total_cost = (material_cost or 0.0) + (process_cost or 0.0) if has_cost else None
     unit_cost = None
     material_cost_unit = None
+    process_cost_unit = None
     if has_cost and qty:
         total_cost = money(total_cost)
         unit_cost = money(total_cost / qty)
         material_cost_unit = money((material_cost or 0.0) / qty)
+        # 加工费（process_cost）即 CRM 口径的人工成本，单独落单位值供产品线 PRD-13 取数
+        process_cost_unit = money((process_cost or 0.0) / qty)
     extra["unit_cost"] = unit_cost
     extra["material_cost_unit"] = material_cost_unit
+    extra["process_cost_unit"] = process_cost_unit
+    extra["process_cost_total"] = money(process_cost) if process_cost is not None else None
     extra["total_cost"] = total_cost
     extra["cost_source"] = "order" if has_cost else "none"
     if not has_cost:
