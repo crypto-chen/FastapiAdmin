@@ -144,19 +144,20 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str, str, str]] = [
     ("PRD-04", "规格", "string", "维度", False, "ERP", STATUS_DROPPED, "底稿已划掉，2026-10-15 业务确认不做；型号字典的 width/length/height（482/523 有值）本报表不取"),
     # ---- 成本构成 ----
     ("PRD-05", "BOM版本", "string", "成本", False, "ERP/BOM", STATUS_PENDING_FIELD, "来源已打通：金蝶成本计算单 CB_CostCalBill 显示列 FBOMNUMBERFIELD_FNUMBER（实测 50/50 有值，样例 1758682432-2 / BCP1054918_V1.0）；待建来源对象与同步任务"),
-    ("PRD-06", "实际单位成本", "number", "成本", True, "ERP/BOM", STATUS_PENDING_FIELD, "来源已打通：成本计算单 FSumProductUseCost（累计单位成本，实测 1892/2000 有值，样例 67.12075）为主列；FProductUseCost（本期，样例 54.9968）仅当期完工行有（2/2000）。按订单列 FOrderBillNo（1999/2000）关联；待建同步任务"),
-    ("PRD-07", "实际材料单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "extra.material_cost_unit（CRM 销售订单行 material_cost_total，覆盖 58.8%）；口径待确认：ERP 实际口径应从成本计算单取"),
-    ("PRD-08", "实际人工单位成本", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "来源已定位：成本计算单按成本项目 FCOSTITEMID_FNAME（人工）配 FCurrInputAmount / FCompleteAmount 拆；当前 FSHOWWAY=2 下成本项目列返回空，需另调显示方式（子项明细展开会显著变慢）"),
-    ("PRD-09", "实际制造费用-变动单位", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "来源已定位：成本计算单按费用项目 FEXPENSEITEMFIELD_FNAME 拆分；同上，拆分列待显示方式打通"),
-    ("PRD-10", "实际制造费用-固定单位", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "来源已定位：成本计算单按费用项目 FEXPENSEITEMFIELD_FNAME 拆分；同上，拆分列待显示方式打通"),
+    # 2026-10-17 底稿修订：PRD-06~10 明确为「标准成本」的五个分项（按 SKU 取标准成本版本），不是实际成本
+    ("PRD-06", "标准单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "按 SKU 取标准成本版本 = 本期订单行标准单位成本（material_cost_total + process_cost ÷ 数量）按数量加权平均；与 PRD-16 ÷ PRD-11 同值"),
+    ("PRD-07", "标准材料单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "标准成本中的材料部分：extra.material_cost_unit（CRM 订单行 material_cost_total ÷ 数量）按数量加权；覆盖 58.8%"),
+    ("PRD-08", "标准人工单位成本", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "标准成本中的人工部分：需成本计算单按成本项目 FCOSTITEMID_FNAME（人工）拆分；当前 FSHOWWAY=2 下拆分列为空，待显示方式打通"),
+    ("PRD-09", "标准制造费用-变动单位", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "标准成本中的制造变动部分：需成本计算单按费用项目 FEXPENSEITEMFIELD_FNAME 拆分；同上"),
+    ("PRD-10", "标准制造费用-固定单位", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "标准成本中的制造固定部分：需成本计算单按费用项目 FEXPENSEITEMFIELD_FNAME 拆分；同上"),
     # ---- 数量与标准成本 ----
     ("PRD-11", "出货数量", "number", "数量", False, "ERP", STATUS_READY, "CRM 发货明细 /hs/shipments/getShipmentsDetail（发货时间口径，按 order_id 关联）优先，未命中回退 orderShipments.send_qty；已落 dwd_order_full_chain.ship_qty，2026-09 覆盖 989/1419 单"),
     ("PRD-12", "标准材料成本", "number", "成本", True, "计算", STATUS_READY, "标准成本取 CRM 销售订单：= extra.material_cost_unit × PRD-11；2026-09 覆盖 163/192 明细行"),
     ("PRD-13", "标准人工成本", "number", "成本", True, "计算", STATUS_PENDING_FIELD, "标准成本取 CRM 销售订单：= 订单人工单位成本 × PRD-11；CRM 订单行暂未拆分人工，待上游补字段"),
     ("PRD-14", "标准制造费用-变动", "number", "成本", True, "计算", STATUS_PENDING_FIELD, "标准成本取 CRM 销售订单：= 订单制造费用变动单位成本 × PRD-11；待上游补字段"),
     ("PRD-15", "标准制造费用-固定", "number", "成本", True, "计算", STATUS_PENDING_FIELD, "标准成本取 CRM 销售订单：= 订单制造费用固定单位成本 × PRD-11；待上游补字段"),
-    ("PRD-16", "标准成本小计", "number", "成本", True, "计算", STATUS_READY, "标准成本取 CRM 销售订单：= extra.unit_cost × PRD-11；2026-09 覆盖 165/192 明细行"),
-    ("PRD-17", "单位标准成本", "number", "成本", True, "CRM", STATUS_READY, "标准成本取 CRM 销售订单：extra.unit_cost（订单行 material_cost_total + process_cost ÷ 数量），按数量加权平均；覆盖 98,580/167,673（58.8%）"),
+    ("PRD-16", "标准成本小计", "number", "成本", True, "计算", STATUS_READY, "底稿 = PRD-13 + PRD-14 + PRD-15 + PRD-16；当前口径 = PRD-06 标准单位成本 × PRD-11 出货数量；2026-09 覆盖 165/192 明细行"),
+    ("PRD-17", "单位标准成本", "number", "成本", True, "计算", STATUS_READY, "底稿 = PRD-16 标准成本小计 ÷ PRD-11 出货数量；与 PRD-06 同源同值，无出货量时回退按数量加权平均"),
     # ---- 维度：组织与渠道 ----
     ("PRD-18", "业务员", "string", "维度", False, "CRM", STATUS_READY, "salesman_code + salesman_name（master_person 已同步）"),
     ("PRD-19", "订单类型", "string", "维度", False, "CRM", STATUS_READY, "extra.order_type_code → 批量/打样/零售/备货"),

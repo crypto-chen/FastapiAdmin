@@ -377,6 +377,10 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         money(store["unit_cost_amount"] / store["unit_cost_qty"]) if store["unit_cost_qty"] else None
     )
     standard_cost_total = money(standard_unit_cost * ship_qty) if (standard_unit_cost and ship_qty) else None  # PRD-16
+    # PRD-17 底稿 = PRD-16 ÷ PRD-11；无出货量时回退到按数量加权平均的标准单位成本
+    unit_standard_cost = (
+        money(standard_cost_total / ship_qty) if (standard_cost_total and ship_qty) else standard_unit_cost
+    )
     # 底稿口径（2026-10-17 业务确认不接受替代口径）：毛利 = 对外出货净额 − 标准成本小计
     gross_profit = money(net_shipment - standard_cost_total) if standard_cost_total is not None else None
     gross_profit_rate = percent(gross_profit, net_shipment) if gross_profit is not None else None
@@ -395,10 +399,11 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         "PRD-01": store["product_line_code"],
         "PRD-02": store["sku"],
         "PRD-07": material_unit,
+        "PRD-06": standard_unit_cost,  # 标准单位成本（按 SKU 的标准成本，数量加权）
         "PRD-11": ship_qty or None,
         "PRD-12": money(material_unit * ship_qty) if (material_unit and ship_qty) else None,
         "PRD-16": standard_cost_total,
-        "PRD-17": standard_unit_cost,  # 标准成本取 CRM 销售订单（按数量加权平均）
+        "PRD-17": unit_standard_cost,  # 底稿 = PRD-16 ÷ PRD-11
         "PRD-18": _concat(store["salesman_counter"]),
         "PRD-19": _concat(type_counters),
         "PRD-20": _concat(store["platform_counter"]),
