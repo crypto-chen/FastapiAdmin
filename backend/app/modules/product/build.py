@@ -43,9 +43,13 @@ CONTAINER_PRODUCT_NAMES = {"未知", "其它", "新产品"}
 ORDER_TYPE_NAMES = {"1": "批量", "2": "打样", "3": "零售", "4": "备货"}
 SETTLEMENT_RATE = 0.10  # PRD-27 营销结算收入 10%
 HQ_ALLOCATION_RATE = 0.02  # PRD-33 总部分摊 2.00%（底稿 27×2%）
+VARIABLE_EXPENSE_RATE = 0.28  # PRD-29 变动费用分摊 28%（2026-10-17 业务确认：按净额比例分摊列示）
+FIXED_EXPENSE_RATE = 0.06  # PRD-32 固定费用分摊 6%（同上）
 
 PENDING_NOTES: list[str] = [
     "标准成本组取 CRM 销售订单：PRD-11/12/16/17 与平均产品单价已出；PRD-13/14/15 阻塞于订单行缺人工与制造费用拆分字段",
+    "费用与收益（PRD-29~35）按 2026-10-17 确认的口径以净额固定比例分摊列示：变动 28%、固定 6%、总部 2%",
+    "毛利（PRD-41/42）按底稿口径 = 对外出货净额 − 标准成本小计（PRD-16）；PRD-43/44 仍缺标准制造费用变动",
     "实际成本组（PRD-06/08/09/10）取 ERP 成本计算单：参数已打通，待建来源对象与同步任务（拆分列还需另调显示方式）",
     "PRD-05 BOM版本取 ERP 成本计算单 FBOMNUMBERFIELD_FNUMBER：待建同步任务",
 ]
@@ -65,6 +69,13 @@ def to_number(value: Any) -> float:
 
 def money(value: float) -> float:
     return round(float(value or 0), 4)
+
+
+def percent(numerator: float, denominator: float) -> float | None:
+    """比率统一按百分数存储（如 37.8089 表示 37.8089%），分母为 0 返回 None。"""
+    if not denominator:
+        return None
+    return round(float(numerator) / float(denominator) * 100, 4)
 
 
 def _concat(counter: dict[str, float]) -> str:
@@ -273,6 +284,14 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
     ship_qty = money(store["ship_qty"])
     net_shipment = money(store["net_shipment"])
     settlement_income = money(net_shipment * SETTLEMENT_RATE)  # PRD-27
+    # 2026-10-17 业务确认：变动费用分摊 = 净额 × 28%，固定费用分摊 = 净额 × 6%（分摊列示，非实际发生额）
+    variable_allocation = money(net_shipment * VARIABLE_EXPENSE_RATE)  # PRD-29
+    fixed_allocation = money(net_shipment * FIXED_EXPENSE_RATE)  # PRD-32
+    hq_allocation = money(net_shipment * HQ_ALLOCATION_RATE)  # PRD-33
+    contribution = money(settlement_income - variable_allocation)  # PRD-30 = 28行 − 30行
+    contribution_rate = percent(contribution, settlement_income)  # PRD-31 = 31÷28
+    settlement = money(contribution - fixed_allocation - hq_allocation)  # PRD-34 = 31−33−34
+    settlement_rate = percent(settlement, net_shipment)  # PRD-35 = 35÷27
     material_unit = (
         money(store["material_cost_amount"] / store["material_cost_qty"])
         if store["material_cost_qty"]
@@ -281,6 +300,10 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
     standard_unit_cost = (
         money(store["unit_cost_amount"] / store["unit_cost_qty"]) if store["unit_cost_qty"] else None
     )
+    standard_cost_total = money(standard_unit_cost * ship_qty) if (standard_unit_cost and ship_qty) else None  # PRD-16
+    # 底稿口径（2026-10-17 业务确认不接受替代口径）：毛利 = 对外出货净额 − 标准成本小计
+    gross_profit = money(net_shipment - standard_cost_total) if standard_cost_total is not None else None
+    gross_profit_rate = percent(gross_profit, net_shipment) if gross_profit is not None else None
     types = store["order_type_amount"]
     qtys = store["order_type_qty"]
     type_counters = store["order_type_counter"]
@@ -296,7 +319,7 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         "PRD-07": material_unit,
         "PRD-11": ship_qty or None,
         "PRD-12": money(material_unit * ship_qty) if (material_unit and ship_qty) else None,
-        "PRD-16": money(standard_unit_cost * ship_qty) if (standard_unit_cost and ship_qty) else None,
+        "PRD-16": standard_cost_total,
         "PRD-17": standard_unit_cost,  # 标准成本取 CRM 销售订单（按数量加权平均）
         "PRD-18": _concat(store["salesman_counter"]),
         "PRD-19": _concat(type_counters),
@@ -308,7 +331,15 @@ def _extra_of(store: dict[str, Any]) -> dict[str, Any]:
         "PRD-25": money(store["return_refund"]),
         "PRD-26": net_shipment,
         "PRD-27": settlement_income,
-        "PRD-33": money(net_shipment * HQ_ALLOCATION_RATE),
+        "PRD-29": variable_allocation,
+        "PRD-30": contribution,
+        "PRD-31": contribution_rate,
+        "PRD-32": fixed_allocation,
+        "PRD-33": hq_allocation,
+        "PRD-34": settlement,
+        "PRD-35": settlement_rate,
+        "PRD-41": gross_profit,
+        "PRD-42": gross_profit_rate,
         "PRD-X01": order_count,
         "PRD-X02": money(settlement_income / order_count) if order_count else None,
         "PRD-X03": money(net_shipment / ship_qty) if ship_qty else None,
