@@ -105,3 +105,39 @@ class ProductLineBuildRunModel(ModelMixin, UserMixin):
     error: Mapped[str | None] = mapped_column(Text, default=None, nullable=True, comment="错误信息")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, nullable=True)
+
+
+class CostBillWorkOrderModel(ModelMixin, UserMixin):
+    """金蝶成本计算单 —— 工单级成本拆分（按工单拉取后落库，供产品线指标聚合）。
+
+    一次成本计算单查询只带一个工单（``FSTARTPROORDERID``）在 1~3 秒返回；
+    整月直查会被 ERP 中止，所以按工单分批抓取、按工单落一行。
+    """
+
+    __tablename__: str = "dwd_cost_bill_workorder"
+    __table_args__: tuple = (
+        UniqueConstraint("period_value", "work_order", name="uq_dwd_cost_bill_workorder"),
+        Index("ix_dwd_cost_bill_workorder_period", "period_value"),
+        {"comment": "成本计算单-工单级成本拆分"},
+    )
+    __data_scope_exempt__: bool = True
+
+    period_value: Mapped[str] = mapped_column(String(16), nullable=False, comment="期间(YYYY-MM)")
+    work_order: Mapped[str] = mapped_column(String(64), nullable=False, comment="工单号(FPRODUCTNO)")
+    product_code: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="产品编码")
+    complete_qty: Mapped[float | None] = mapped_column(
+        Numeric(20, 4), default=None, nullable=True, comment="本期完工数量(FCompleteQty)"
+    )
+    material_cost: Mapped[float | None] = mapped_column(
+        Numeric(20, 4), default=None, nullable=True, comment="材料成本(成本项目=直接材料)"
+    )
+    labor_cost: Mapped[float | None] = mapped_column(
+        Numeric(20, 4), default=None, nullable=True, comment="人工成本(费用项目=直接人工-* 等)"
+    )
+    other_cost: Mapped[float | None] = mapped_column(
+        Numeric(20, 4), default=None, nullable=True, comment="其余费用项目(制造费用等)"
+    )
+    total_cost: Mapped[float | None] = mapped_column(
+        Numeric(20, 4), default=None, nullable=True, comment="材料+人工+其余"
+    )
+    extra: Mapped[dict | None] = mapped_column(JSON, default=None, nullable=True, comment="明细摘要(JSON)")
