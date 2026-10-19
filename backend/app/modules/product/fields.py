@@ -147,7 +147,7 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str, str, str]] = [
     ("PRD-06", "实际单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "成本计算单按工单号关联订单，取本期完工行（FCompleteQty>0）的 FProductUseCost 按 SKU 简单平均；2026-09 覆盖 166/192 明细行"),
         ("PRD-07", "实际材料单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "成本计算单：工单材料成本（成本项目=直接材料）÷ 工单完工数量（按单据累加）→ 按 SKU 简单平均；2026-09 覆盖 164/192 明细行"),
         ("PRD-08", "实际人工单位成本", "number", "成本", True, "ERP/BOM", STATUS_DROPPED, "2026-10-17 业务确认去掉人工指标，不做"),
-        ("PRD-09", "实际制造费用单位成本", "number", "成本", True, "ERP/BOM", STATUS_SOURCE_FOUND, "2026-10-17 业务确认合并为一个制造费用指标（不再分变动/固定）；取成本计算单非材料成本项目 ÷ 完工数量，待按单据/数量口径打通"),
+                    ("PRD-09", "实际制造费用单位成本", "number", "成本", True, "ERP/BOM", STATUS_READY, "成本计算单 full 模式：工单制造费用（非材料、非直接人工的费用项目）÷ 工单完工数量（只取单据级汇总行并累加）→ 按 SKU 简单平均；2026-09 覆盖 842/1257 工单"),
         ("PRD-10", "实际制造费用-固定单位", "number", "成本", True, "ERP/BOM", STATUS_DROPPED, "2026-10-17 业务确认并入 PRD-09（制造费用不再分变动/固定），本编码不做"),
     # ---- 数量与标准成本 ----
     ("PRD-11", "出货数量", "number", "数量", False, "ERP", STATUS_READY, "CRM 发货明细 /hs/shipments/getShipmentsDetail（发货时间口径，按 order_id 关联）优先，未命中回退 orderShipments.send_qty；已落 dwd_order_full_chain.ship_qty，2026-09 覆盖 989/1419 单"),

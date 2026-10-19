@@ -361,6 +361,36 @@ async def _load_cost_bill_material_unit(
     return {key: round(totals[key] / counts[key], 4) for key in totals if counts[key]}
 
 
+async def _load_cost_bill_overhead_unit(
+    db: AsyncSession, period_value: str, work_order_to_bucket: dict[str, tuple[str, str]]
+) -> dict[tuple[str, str], float]:
+    """成本计算单（工单级表）→ 各「产品线×SKU」的实际制造费用单位成本平均值。
+
+    单位制造费用 = 工单制造费用（非材料、非直接人工的费用项目）÷ 工单完工数量，再按 SKU 简单平均。
+    """
+    rows = (
+        await db.execute(
+            select(CostBillWorkOrderModel).where(
+                CostBillWorkOrderModel.period_value == period_value,
+                CostBillWorkOrderModel.complete_qty > 0,
+                CostBillWorkOrderModel.other_cost > 0,
+            )
+        )
+    ).scalars().all()
+    totals: dict[tuple[str, str], float] = {}
+    counts: dict[tuple[str, str], int] = {}
+    for row in rows:
+        bucket = work_order_to_bucket.get(str(row.work_order or ""))
+        if bucket is None:
+            continue
+        unit = to_number(row.other_cost) / to_number(row.complete_qty)
+        if unit <= 0:
+            continue
+        totals[bucket] = totals.get(bucket, 0.0) + unit
+        counts[bucket] = counts.get(bucket, 0) + 1
+    return {key: round(totals[key] / counts[key], 4) for key in totals if counts[key]}
+
+
 def _empty_bucket(product_line: str, sku: str) -> dict[str, Any]:
     return {
         "product_line_code": product_line or None,
@@ -679,6 +709,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     )
     bom_by_bucket: dict[tuple[str, str], str] = cost_bill_stats.pop("bom", {})
     material_units = await _load_cost_bill_material_unit(db, period_value, work_order_to_bucket)
+    overhead_units = await _load_cost_bill_overhead_unit(db, period_value, work_order_to_bucket)
 
     # 小计（每个产品线大类）与合计
     line_totals: dict[str, dict[str, Any]] = {}
@@ -697,11 +728,14 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
             extra["PRD-05"] = bom_by_bucket.get((store["product_line_code"] or "", store["sku"] or ""))
             # PRD-07 实际材料单位成本 = 工单材料成本 ÷ 工单完工数量（完工数量按单据累加）再按 SKU 平均
             extra["PRD-07"] = material_units.get((store["product_line_code"] or "", store["sku"] or ""))
+            extra["PRD-09"] = overhead_units.get((store["product_line_code"] or "", store["sku"] or ""))
         elif cost_bill_units:
             weighted = 0.0
             weight = 0.0
             material_weighted = 0.0
             material_weight = 0.0
+            overhead_weighted = 0.0
+            overhead_weight = 0.0
             for (bucket_line, bucket_sku), bucket in buckets.items():
                 if is_aggregate == 1 and bucket_line != store["product_line_code"]:
                     continue
@@ -714,12 +748,18 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                 if material_value is not None and qty:
                     material_weighted += material_value * qty
                     material_weight += qty
+                overhead_value = overhead_units.get((bucket_line, bucket_sku))
+                if overhead_value is not None and qty:
+                    overhead_weighted += overhead_value * qty
+                    overhead_weight += qty
             extra["PRD-06"] = round(weighted / weight, 4) if weight else None
             extra["PRD-07"] = round(material_weighted / material_weight, 4) if material_weight else None
+            extra["PRD-09"] = round(overhead_weighted / overhead_weight, 4) if overhead_weight else None
             extra["PRD-05"] = None  # BOM 版本是维度属性，小计/合计行不拼接
         else:
             extra["PRD-06"] = None
             extra["PRD-07"] = None
+            extra["PRD-09"] = None
             extra["PRD-05"] = None
         # PRD-40 库存周转天数 = 平均库存（(上期+本期)÷2）÷ 本期销售成本 × 30
         current_inventory = to_number(extra.get("PRD-36"))

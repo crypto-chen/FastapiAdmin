@@ -210,9 +210,12 @@ async def main() -> None:
                 def cell(name: str):
                     j = index.get(name)
                     return row[j] if j is not None and j < len(row) else None
-                # 同工单下有多张成本计算单，每张各带完工数量 —— 必须**累加**，
-                # 用 max 会把多张单据的材料金额加总后除以单张产量（实测材料 116 > 总成本 49）
-                complete_qty += num(cell("FCompleteQty"))
+                # 完工数量只在「单据级汇总行」（成本项目/费用项目/子项物料三者都为空）上取，
+                # 同工单多张单据要累加；明细行也会带数量，直接全加会把分母放大十几倍
+                if not str(cell("FCOSTITEMID_FNAME") or "").strip() \
+                        and not str(cell("FEXPENSEITEMFIELD_FNAME") or "").strip() \
+                        and not str(cell("FMATERIALFIELD_FNAME") or "").strip():
+                    complete_qty += num(cell("FCompleteQty"))
                 amount = num(cell("FCompleteAmount"))
                 cost_item = str(cell("FCOSTITEMID_FNAME") or "").strip()
                 expense = str(cell("FEXPENSEITEMFIELD_FNAME") or "").strip()
