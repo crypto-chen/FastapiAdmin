@@ -1,0 +1,81 @@
+PUSH-01-a / PUSH-01-b 取数接口调整验证
+日期：2026-10-20
+分支：master
+基线提交：83b88f59
+
+变更字段：
+- 来源对象 code：/hs/push/getPush?scope=same_month -> /hs/push/getPush?type=1
+- 来源对象 code：/hs/push/getPush?scope=prior_month -> /hs/push/getPush?type=2
+- 请求参数：pushDateRange/createDateRange -> dateRange（整月，00:00:00 ~ 23:59:59）+ type
+- 指标定义：PUSH-01-a/PUSH-01-b 的 measures.source_object_code 同步改为 type=1/type=2
+
+修改文件：
+- backend/scripts/seed_crm_push_metrics.py
+- backend/scripts/crm_check.py
+- backend/app/modules/crm/client.py
+- backend/app/modules/metadata/sync.py
+- backend/tests/test_crm_push_amount_sources.py
+- docs/核算指标系统设计.md
+
+四件产物：
+- MODIFIED_FILE: deploy/push-type-20261020/MODIFIED_seed_crm_push_metrics.py
+- DIFF_FILE: deploy/push-type-20261020/CHANGES.diff
+- VERIFICATION: deploy/push-type-20261020/VERIFICATION.txt
+- ROLLBACK: deploy/push-type-20261020/ROLLBACK.sh
+
+BASELINE（现有回归测试，修改前基线行为）：
+$ python -m pytest tests/test_crm_order_push_period.py -q
+2 passed
+
+$ python -m pytest tests/test_metric_units.py -q
+4 passed
+
+MODIFIED（修改后）：
+$ python -m ruff check scripts/seed_crm_push_metrics.py scripts/crm_check.py tests/test_crm_push_amount_sources.py
+All checks passed!
+exit 0
+
+$ python -m pytest tests/test_crm_order_push_period.py tests/test_metric_units.py tests/test_crm_push_amount_sources.py -q
+9 passed
+
+$ python -m pytest -q
+104 passed, 2 errors（既有 SQLite 测试库 fixture 报 index ix_master_person_org_id already exists，与本次改动无关）
+
+$ python scripts/crm_check.py --period 2026-09
+本月接单本月下推（未税） = 7,469,553.97
+前期接单本月下推（未税） = 1,806,596.18
+下推金额合计（未税） = 9,276,150.15
+
+$ python scripts/seed_crm_push_metrics.py
+来源对象 code 迁移: /hs/push/getPush?scope=same_month -> /hs/push/getPush?type=1
+来源对象 code 迁移: /hs/push/getPush?scope=prior_month -> /hs/push/getPush?type=2
+CRM 连接 id=1，来源系统 id=3，同步任务 [55, 56, 32, 33, 34, 35, 36, 37, 38, 39, 40]
+营销中心 CRM 订单下推周期指标初始化完成
+
+$ python scripts/recalc_metrics_batch.py --code marketing_order_push_same_month --code marketing_order_push_prior_month --refresh --period-from 2025-08 --period-to 2026-10 --with-dependents
+2026-08 marketing_order_push_same_month -> 6492547.07
+2026-08 marketing_order_push_prior_month -> 1528911.26
+2026-08 marketing_order_push_untaxed -> 8021458.33
+2026-09 marketing_order_push_same_month -> 7469553.97
+2026-09 marketing_order_push_prior_month -> 1806596.18
+2026-09 marketing_order_push_untaxed -> 9276150.15
+2026-10 marketing_order_push_same_month -> 2900786.27
+2026-10 marketing_order_push_prior_month -> 1361966.40
+2026-10 marketing_order_push_untaxed -> 4262752.67
+
+库内最新 calc_version：
+- 2026-09 PUSH-01-a v10 = 7,469,553.97
+- 2026-09 PUSH-01-b v10 = 1,806,596.18
+- 2026-09 PUSH-01   v5  = 9,276,150.15
+- 2026-10 PUSH-01-a v4  = 2,900,786.27
+- 2026-10 PUSH-01-b v5  = 1,361,966.40
+- 2026-10 PUSH-01   v4  = 4,262,752.67
+
+ROLLBACK 验证：
+$ bash -n deploy/push-type-20261020/ROLLBACK.sh
+exit 0
+
+回滚后行为：
+- 代码恢复到基线提交的 ?scope=... + pushDateRange/createDateRange 版本
+- 新增测试文件被移除
+- 数据库定义需重新执行旧版 seed 脚本，或参考 backend/artifacts/push_type_20261020/before.json

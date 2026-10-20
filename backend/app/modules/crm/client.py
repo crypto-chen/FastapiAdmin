@@ -77,7 +77,7 @@ class CrmClient:
 
         ``date_range`` 按数组写法传 ``dateRange[]``；``extra_params`` 里的键原样透传
         （**列表值自动补 ``[]``**：CRM 是 PHP 应用，重复键不加 ``[]`` 只会保留最后一个值，
-        区间参数会退化成单点），用于 ``transformation``、``pushDateRange`` 等接口参数。
+        区间参数会退化成单点），用于 ``transformation``、``type`` 等接口参数。
         ``path`` 允许自带查询串（如 ``/hs/push/getPush?type=2``，用于同一接口按参数
         拆成多个来源对象）；无额外参数时传 ``params=None``，避免 httpx 用空序列覆盖掉
         路径里的查询串。

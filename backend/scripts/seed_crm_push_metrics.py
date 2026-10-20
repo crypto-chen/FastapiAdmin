@@ -10,20 +10,21 @@
 金额口径 vs 周期口径（**两套口径混在一个接口族里，取值前必须先看是哪种**）：
 
 - ``/hs/push/getPush``（「本月接单本月下推 / 前期接单本月下推」）取值为
-  **内贸 + 外贸未税金额合计**——上游 2026-09-28 二次调整后的口径，
-  入参由 ``type`` 改成两个范围 ``pushDateRange``（ERP 下推时间）+ ``createDateRange``（接单时间），
+  **内贸 + 外贸未税金额合计**，入参为 ``dateRange``（ERP 下推时间整月）+ ``type``：
+  ``type=1`` = 本月创建本月下推，``type=2`` = 非本月创建但本月下推；
   金额 = 内贸 ``SUM(receivable - taxes)`` + 外贸 ``SUM(receivable_CNY)``（元，保留 2 位小数）；
 - 其余 9 个 ``*PushPeriod`` 接口取值为**平均下推周期（天）**：
   平均「下单时间 ``createtime`` → ERP 下推时间 ``erp_push_date``」的耗时。
 
-12 个指标 = 10 个接口（``/hs/push/getPush`` 用两套日期范围区分出 2 个指标）
-  + 1 个汇总指标（**下推金额合计 = 上面两条相加**，不单独调接口）：
+13 个指标 = 11 个接口（``/hs/push/getPush`` 用 ``type=1`` / ``type=2`` 拆成 2 个指标）
+  + 1 个汇总指标（**下推金额合计 = 上面两条相加**，不单独调接口）
+  + 1 个比率指标（下推率，不单独调接口）：
 
 ======================  ============================================  ==================================
 指标                    接口                                          取值口径（服务端实测）
 ======================  ============================================  ==================================
-本月接单本月下推          ``/hs/push/getPush``（``scope=same_month``）   下推月 = 本月 且 接单月 = 本月
-前期接单本月下推          ``/hs/push/getPush``（``scope=prior_month``）  下推月 = 本月 且 接单时间 < 本月 1 日
+本月接单本月下推          ``/hs/push/getPush?type=1``                     下推月 = 本月 且 接单月 = 本月
+前期接单本月下推          ``/hs/push/getPush?type=2``                     下推月 = 本月 且 接单时间 < 本月 1 日
 下推金额（未税）          ——（``kind=metric_sum``，合计上面两条）          下推月 = 本月（不区分接单月）
 下推周期（天）            ``/hs/push/getPushPeriod``                    内贸 + 外贸合并
 批量下推周期              ``/hs/push/getBatchPushPeriod``               ``order_type=1``
@@ -38,12 +39,12 @@
 
 两条金额指标的取数范围（模板按期间渲染，``now`` = 取数时点，回补时为该期间 1 日）：
 
-- 本月接单本月下推：``pushDateRange`` = 本月 1 日 ~ 本月末，``createDateRange`` = 本月 1 日 ~ 本月末；
-- 前期接单本月下推：``pushDateRange`` = 本月 1 日 ~ 本月末，``createDateRange`` = ``2000-01-01`` ~ 上月末。
+- 本月接单本月下推：``dateRange`` = 本月 1 日 00:00:00 ~ 本月末 23:59:59，``type=1``；
+- 前期接单本月下推：``dateRange`` = 本月 1 日 00:00:00 ~ 本月末 23:59:59，``type=2``。
 
-实测校验（2026-09）：``same_month`` = 5239178.88、``prior_month`` = 1615751.08，
-两者相加 = 6854929.96 = **下推金额（未税）合计**，也等于「下推月为本月、接单时间 ≤ 本月末」的全量，口径自洽；
-历史月份同样可算（2026-06 → 5371528.66 / 1705670.89；2026-07 → 7023439.88 / 1369713.33），
+实测校验（2026-09，2026-10-20）：``type=1`` = 7469553.97、``type=2`` = 1806596.18，
+两者相加 = 9276150.15 = **下推金额（未税）合计**；
+历史月份同样可算（2026-08 → 6492547.07 / 1528911.26），
 **这两条和其余 9 条一样支持按月回补，不再是当月快照**。
 上游可回补的最早期间是 **2025-08**（2025-07 及更早各接口返回 0），
 回补即按期间逐个调用 ``execute_metric_calc(metric_id, period_value)``（同步任务会自动按期间取数）。
@@ -53,9 +54,8 @@
 **下推未税金额（元）**，本脚本按金额入库（既不是单数，也不是天数；未税口径由上游保证，
 本系统直接取值、不做二次折算）。
 
-接口路径即来源对象 ``code``；两条金额指标打在同一接口上，靠 ``code`` 里的静态标记
-``?scope=same_month`` / ``?scope=prior_month`` 区分（该标记服务端会忽略，仅用于拆出来源对象），
-真正的日期范围由请求模板 ``pushDateRange`` / ``createDateRange`` 传。
+接口路径即来源对象 ``code``；两条金额指标打在同一接口上，靠 ``code`` 里的
+``?type=1`` / ``?type=2`` 区分，``dateRange`` 由请求模板传（整月，含 00:00:00 / 23:59:59）。
 声明式维护：``SOURCE_OBJECTS`` 一个接口一条，``METRICS`` 一个指标一条。
 
 月指标，每日 02:30 重算当月；每月 1 日强制重拉上月并重算上月。
@@ -101,40 +101,39 @@ MONTH_START = "{{ now.replace(day=1).strftime('%Y-%m-%d') }}"
 MONTH_END = (
     "{{ ((now.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).strftime('%Y-%m-%d') }}"
 )
-LAST_MONTH_END = "{{ (now.replace(day=1) - timedelta(days=1)).strftime('%Y-%m-%d') }}"
-
 # 整月闭区间（其余 9 个 *PushPeriod 接口用）
 MONTH_DATE_RANGE: dict = {"dateRange": [MONTH_START, MONTH_END]}
 
-# 两条金额指标：下推月固定为本月，接单月分别取「本月」与「早于本月」（getPush 的两个范围参数）
-PUSH_AMOUNT_SAME_MONTH: dict = {
-    "pushDateRange": [MONTH_START, MONTH_END],
-    "createDateRange": [MONTH_START, MONTH_END],
-}
-PUSH_AMOUNT_PRIOR_MONTH: dict = {
-    "pushDateRange": [MONTH_START, MONTH_END],
-    "createDateRange": ["2000-01-01", LAST_MONTH_END],
+# 两条金额指标：dateRange 固定为「下推时间」整月，type=1 / type=2 由来源对象 code 区分。
+# 时间部分按接口文档写成 00:00:00 ~ 23:59:59，避免上游把日期解析成 00:00:00 时丢掉月末当天。
+PUSH_AMOUNT_PARAMS: dict = {
+    "dateRange": [
+        "{{ now.replace(day=1).strftime('%Y-%m-%d') }} 00:00:00",
+        "{{ ((now.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).strftime('%Y-%m-%d') }} 23:59:59",
+    ]
 }
 
-# 上游把 /hs/push/getPush 从 `type=1|2` 改成两个日期范围后，早期按 `?type=` 建的两个来源对象
-# 已失效（type 参数被服务端忽略，两条件都退化成默认的「本月接单本月下推」），建新的前先清掉。
-LEGACY_PUSH_AMOUNT_CODES = ["/hs/push/getPush?type=1", "/hs/push/getPush?type=2"]
+# 上一版来源对象 code（?scope=...）原地迁移到新版（?type=...），保留对象、同步任务和历史批次。
+LEGACY_SCOPE_CODE_MAP = {
+    "/hs/push/getPush?scope=same_month": "/hs/push/getPush?type=1",
+    "/hs/push/getPush?scope=prior_month": "/hs/push/getPush?type=2",
+}
 
 BASE_MEASURES = {"kind": "api_scalar_amount", "data_field": "data"}
 DIMENSIONS = {"org": False, "dept": False}
 
-# 一个接口一条。``date_range=False`` 表示该接口不接收 dateRange（仅 getPush 两条金额指标）。
+# 一个接口一条。``date_range=False`` 表示 dateRange 已写在 params 里（仅 getPush 两条金额指标）。
 SOURCE_OBJECTS = [
     {
-        "path": "/hs/push/getPush?scope=same_month",
+        "path": "/hs/push/getPush?type=1",
         "name": "营销中心本月接单本月下推（未税）",
-        "params": PUSH_AMOUNT_SAME_MONTH,
+        "params": PUSH_AMOUNT_PARAMS,
         "date_range": False,
     },
     {
-        "path": "/hs/push/getPush?scope=prior_month",
+        "path": "/hs/push/getPush?type=2",
         "name": "营销中心前期接单本月下推（未税）",
-        "params": PUSH_AMOUNT_PRIOR_MONTH,
+        "params": PUSH_AMOUNT_PARAMS,
         "date_range": False,
     },
     {"path": "/hs/push/getPushPeriod", "name": "营销中心下推周期（天）", "params": {}},
@@ -161,18 +160,18 @@ METRICS = [
     {
         "code": "marketing_order_push_same_month",
         "name": "营销中心本月接单本月下推（未税）",
-        "path": "/hs/push/getPush?scope=same_month",
+        "path": "/hs/push/getPush?type=1",
         "amount": True,
         "rule": "当月接单且当月下推（接单月 = 下推月）订单的**下推金额（未税，元）**，"
-        "即 pushDateRange = 本月 且 createDateRange = 本月。",
+        "即 dateRange = 本月（下推时间）且 type=1。",
     },
     {
         "code": "marketing_order_push_prior_month",
         "name": "营销中心前期接单本月下推（未税）",
-        "path": "/hs/push/getPush?scope=prior_month",
+        "path": "/hs/push/getPush?type=2",
         "amount": True,
         "rule": "前期接单（接单时间早于本月 1 日）但本月下推（接单月 < 下推月）订单的"
-        "**下推金额（未税，元）**，即 pushDateRange = 本月 且 createDateRange = 2000-01-01 ~ 上月末。",
+        "**下推金额（未税，元）**，即 dateRange = 本月（下推时间）且 type=2。",
     },
     {
         # 汇总指标：不取数，直接合计上面两条金额指标的当期结果
@@ -181,7 +180,7 @@ METRICS = [
         "path": None,
         "amount": True,
         "rule": "**下推金额（未税）合计** = 本月接单本月下推（未税）+ 前期接单本月下推（未税），"
-        "即「ERP 下推时间落在本月」的全部订单下推未税金额（不区分接单月份）。",
+        "即 type=1 + type=2，覆盖「ERP 下推时间落在本月」的全部订单（不区分接单月份）。",
         "measures": {
             "kind": "metric_sum",
             "component_metric_codes": [
@@ -277,7 +276,7 @@ async def get_or_create(db, model, match: dict, defaults: dict | None = None):
 
 
 def build_request_template(spec: dict) -> dict:
-    """按接口是否支持 dateRange 组装请求模板（getPush 两条不传 dateRange）。"""
+    """按接口是否支持 dateRange 组装请求模板（getPush 两条的 dateRange 已写在 params 里）。"""
     params = dict(spec.get("params") or {})
     if spec.get("date_range", True):
         return {**MONTH_DATE_RANGE, **params}
@@ -319,26 +318,32 @@ async def main() -> None:
         system.connection_id = connection.id
         system.connector_type = "crm"
 
-        # 清理上游改造前的旧来源对象（?type=1 / ?type=2）：type 参数已被服务端忽略，
-        # 留着只会按旧口径重复取数。删除来源对象前先删它的同步任务（meta_sync_run 随任务级联删除）。
-        legacy_objects = (
-            await db.execute(
-                select(SourceObjectModel).where(
-                    SourceObjectModel.system_id == system.id,
-                    SourceObjectModel.code.in_(LEGACY_PUSH_AMOUNT_CODES),
+        # 兼容上一版来源对象 code（?scope=...）：原地改名成 ?type=...，
+        # 保留来源对象 id、同步任务和历史同步批次，避免改口径时丢历史。
+        for old_code, new_code in LEGACY_SCOPE_CODE_MAP.items():
+            old_object = (
+                await db.execute(
+                    select(SourceObjectModel).where(
+                        SourceObjectModel.system_id == system.id,
+                        SourceObjectModel.code == old_code,
+                    )
                 )
-            )
-        ).scalars().all()
-        for legacy in legacy_objects:
-            legacy_jobs = (
-                await db.execute(select(MetaSyncJobModel).where(MetaSyncJobModel.source_object_id == legacy.id))
-            ).scalars().all()
-            for legacy_job in legacy_jobs:
-                print(f"清理旧同步任务: id={legacy_job.id} name={legacy_job.name}")
-                await db.delete(legacy_job)
-            print(f"清理旧来源对象: id={legacy.id} code={legacy.code}")
-            await db.delete(legacy)
-        if legacy_objects:
+            ).scalars().first()
+            if old_object is None:
+                continue
+            conflict = (
+                await db.execute(
+                    select(SourceObjectModel).where(
+                        SourceObjectModel.system_id == system.id,
+                        SourceObjectModel.code == new_code,
+                    )
+                )
+            ).scalars().first()
+            if conflict is not None and conflict.id != old_object.id:
+                print(f"来源对象已存在 {new_code}，跳过 {old_code} 改名")
+                continue
+            print(f"来源对象 code 迁移: {old_code} -> {new_code}")
+            old_object.code = new_code
             await db.flush()
 
         # 先建接口（来源对象 + 同步任务）
@@ -374,10 +379,10 @@ async def main() -> None:
             job.sync_mode = "full"
             job.status = 0
             if spec.get("date_range", True):
-                job.description = f"CRM 接口 {path}，按日期取整月（闭区间）"
+                job.description = f"CRM 接口 {path}，按 dateRange 取整月（闭区间）"
             else:
                 job.description = (
-                    f"CRM 接口 {path}（金额指标：pushDateRange = 本月，createDateRange 见请求参数；"
+                    f"CRM 接口 {path}（金额指标：dateRange = 本月下推时间，type 见来源对象 code；"
                     "按期间渲染，可回补历史月份）"
                 )
             await db.flush()

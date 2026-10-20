@@ -397,7 +397,7 @@ async def fetch_crm_amount_payload(connection_id: int, path: str, params: dict) 
     CRM 全部为 GET 接口、无需鉴权；``path`` 取自来源对象 ``code``（如
     ``/hs/order/getDtAmount``），参数由同步任务模板渲染——``dateRange`` 走
     ``dateRange[]``，其余键（如报价统计的 ``transformation``）原样透传；
-    **列表值参数**（如 ``pushDateRange`` / ``createDateRange``）由客户端统一补
+    **列表值参数**（如 ``dateRange``）由客户端统一补
     ``[]``（CRM 是 PHP 应用，重复键不加 ``[]`` 只会保留最后一个值，区间会退化成单点）。
 
     同一接口需要按不同参数各建来源对象时（如报价统计 ``transformation=0`` 取全部、

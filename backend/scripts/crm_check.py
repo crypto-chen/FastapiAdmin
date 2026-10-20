@@ -3,14 +3,14 @@
 接入前先跑这个脚本确认全部接口都能取到数，再执行
 ``scripts/seed_crm_marketing_metrics.py``（订单/报价 11 个指标）与
 ``scripts/seed_crm_shipment_metrics.py``（出货/设计服务/退款 4 个指标）、
-``scripts/seed_crm_push_metrics.py``（订单下推周期 11 个指标）、
+``scripts/seed_crm_push_metrics.py``（订单下推周期 13 个指标）、
 ``scripts/seed_crm_worktime_metrics.py``（工时 2 个指标）、
 ``scripts/seed_crm_kpi_metrics.py``（KPI 4 个指标：履约率/平台推广 ROI/复购率/退货率）、
 ``scripts/seed_crm_inventory_metrics.py``（库存 3 个指标：外部订单库存 / 呆滞库存 >90 天 / 海柔库存）
 落库成营销中心月指标。
 
-注意：``/hs/push/getPush`` 不接收 ``dateRange``，只按「ERP 下推时间落在当月」+
-``type`` 统计，传 ``--period`` 也不会改变其结果。
+注意：``/hs/push/getPush`` 接收 ``dateRange``（ERP 下推时间整月）+ ``type``：
+``type=1`` = 本月创建本月下推，``type=2`` = 非本月创建但本月下推。
 ``/hs/KPI/getRepurchaseRate`` 也不接收 ``dateRange``，只接收 ``month``（``YYYY-MM``）。
 
 用法：
@@ -23,7 +23,7 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -42,9 +42,9 @@ from app.modules.crm.client import (  # noqa: E402
 # 前 9 条与《订单未税金额接口文档》《报价单统计接口文档》一致，
 # 中间 4 条与《HASH 接口文档》（出货统计 / 设计费 / 退款）一致，
 # 其后的「正常工作时间 / 加班时间」同样来自《HASH 接口文档》（工时统计 QwApi，实时调企微打卡日报），
-# 最后 10 条与《订单下推周期接口文档》一致：``*PushPeriod`` 的 ``data`` 是平均下推周期天数，
-# ``getPush`` 已改口径为**下推未税金额（元）**——不再接收 ``type``，改成：下推时间 ``pushDateRange`` +
-# 接单时间 ``createDateRange``（「本月接单本月下推 / 前期接单本月下推」靠接单范围区分）。
+# 最后 11 条与《订单下推周期接口文档》一致：``*PushPeriod`` 的 ``data`` 是平均下推周期天数，
+# ``getPush`` 返回**下推未税金额（元）**——入参 ``dateRange``（下推时间整月）+ ``type``，
+# ``type=1`` = 本月创建本月下推，``type=2`` = 非本月创建但本月下推。
 ENDPOINTS = [
     ("内贸订单（未税）", "/hs/order/getDtAmount", {}),
     ("外贸订单（未税）", "/hs/order/getFtAmount", {}),
@@ -67,10 +67,9 @@ ENDPOINTS = [
     ("海柔库存", "/hs/getHaiRou", {"__nested_data__": True}),
     ("正常工作时间（小时）", "/hs/getWorkTime", {"__worktime__": "regularWorkHours"}),
     ("加班时间（小时）", "/hs/getWorkTime", {"__worktime__": "overtimeHours"}),
-    # getPush 金额指标：占位标记在 main() 里换成 pushDateRange / createDateRange
-    ("本月接单本月下推（未税）", "/hs/push/getPush", {"__push_amount__": "same_month"}),
-    ("前期接单本月下推（未税）", "/hs/push/getPush", {"__push_amount__": "prior_month"}),
-    ("下推金额合计（未税）", "/hs/push/getPush", {"__push_amount__": "total"}),
+    # getPush 金额指标：type 直接写在来源对象 code 里，dateRange 由 main() 传整月
+    ("本月接单本月下推（未税）", "/hs/push/getPush?type=1", {}),
+    ("前期接单本月下推（未税）", "/hs/push/getPush?type=2", {}),
     ("下推周期（天）", "/hs/push/getPushPeriod", {}),
     ("批量下推周期", "/hs/push/getBatchPushPeriod", {}),
     ("打样下推周期", "/hs/push/getSamplePushPeriod", {}),
@@ -97,19 +96,8 @@ async def main() -> None:
 
     # 不传 --period 时显式取当前月（等价于接口默认「本月」，但能让两个金额指标算出不同值）
     date_range = list(month_date_range(args.period or date.today()))
-
-    def push_amount_params(scope: str) -> dict:
-        """getPush 金额指标的两个范围：下推时间固定本月，接单时间按 scope 取本月 / 早于本月 / 全部。"""
-        if not date_range:
-            return {}  # 不传参数时由接口按默认本月返回
-        start, end = date_range
-        if scope == "same_month":
-            return {"pushDateRange": [start, end], "createDateRange": [start, end]}
-        if scope == "total":
-            # 合计 = 不限接单月（等价于「本月接单本月下推 + 前期接单本月下推」）
-            return {"pushDateRange": [start, end], "createDateRange": ["2000-01-01", end]}
-        prev_end = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-        return {"pushDateRange": [start, end], "createDateRange": ["2000-01-01", prev_end]}
+    # getPush 的 dateRange 用「下推时间」整月，时间部分与接口文档一致
+    push_range = [f"{date_range[0]} 00:00:00", f"{date_range[1]} 23:59:59"]
 
     # 复购率接口只接收 month（YYYY-MM），由期间范围的首日推出目标月份
     month_param = date_range[0][:7]
@@ -121,9 +109,8 @@ async def main() -> None:
             call_range = date_range
             worktime_field: str | None = None
             nested_data = False
-            if "__push_amount__" in extra:
-                extra = push_amount_params(str(extra["__push_amount__"]))
-                call_range = None  # getPush 不接收 dateRange
+            if path.startswith("/hs/push/getPush?"):
+                call_range = push_range
             elif extra.get("__month__"):
                 # 复购率接口不接收 dateRange，改传 month（YYYY-MM）
                 extra = {"month": month_param}
@@ -161,6 +148,13 @@ async def main() -> None:
                 print(f"FAIL {name:<16} {path:<28} {e}")
     finally:
         await client.aclose()
+
+    same_month = results.get("本月接单本月下推（未税）")
+    prior_month = results.get("前期接单本月下推（未税）")
+    if isinstance(same_month, (int, float)) and isinstance(prior_month, (int, float)):
+        total = float(same_month) + float(prior_month)
+        results["下推金额合计（未税）"] = total
+        print(f"OK   {'下推金额合计（未税）':<16} {'type=1 + type=2':<28} = {total:,.2f}")
 
     print()
     print(json.dumps({"期间": args.period or "本月", "结果": results}, ensure_ascii=False, indent=2))
