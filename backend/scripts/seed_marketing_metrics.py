@@ -326,7 +326,8 @@ async def main() -> None:
                 formula = str(item["formula"])
                 scope_text = str(item.get("scope_text") or "")
             else:
-                formula_condition = " AND ".join(f"核算维度名称 LIKE '%{word}%'" for word in keywords)
+                # 多个关键字是「任一命中即计入」（OR），不是同时命中
+                formula_condition = " OR ".join(f"核算维度名称 LIKE '%{word}%'" for word in keywords)
                 if len(keywords) > 1:
                     formula_condition = f"({formula_condition})"
                 for word in item.get("detail_name_exclude") or []:
