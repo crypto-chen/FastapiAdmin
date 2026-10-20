@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.base_model import ModelMixin, UserMixin
@@ -65,7 +65,12 @@ class MetricValueModel(ModelMixin, UserMixin):
     """指标结果。"""
 
     __tablename__: str = "metric_value"
-    __table_args__: dict[str, str] = {"comment": "指标结果表"}
+    __table_args__: tuple = (
+        # 「指标 + 期间 + 计算版本」是最常用过滤组合（页面查询、重算前取上一版本），
+        # 缺该复合索引时，百万级结果表上的 max(calc_version) 子查询会退化成全表扫描
+        Index("ix_metric_value_metric_period_ver", "metric_id", "period_type", "period_value", "calc_version"),
+        {"comment": "指标结果表"},
+    )
     __data_scope_exempt__: bool = True
 
     metric_id: Mapped[int] = mapped_column(

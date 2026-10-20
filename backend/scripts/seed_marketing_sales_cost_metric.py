@@ -59,7 +59,8 @@ MEASURES = {
     "account_prefix": ACCOUNT_PREFIX,
     "detail_code_field": "FDETAILNUMBER",
     "detail_name_field": "FDETAILNAME",
-    "amount_field": "FDEBIT",
+    # 综合本位币口径：原币列为空，金额取本位币列
+    "amount_field": "FDEBITLOCAL",
     # 跳过科目汇总行，只累加带核算维度的明细行，避免与科目行重复计入
     "require_detail": True,
     # 核算维度是客户，不作为部门拆分
@@ -69,10 +70,10 @@ MEASURES = {
 }
 DIMENSIONS = {"org": True, "dept": False}
 
-FORMULA = "SUM(FDEBIT) WHERE 组织=100 AND 科目=6401 主营业务成本 AND 核算维度非空（跳过科目汇总行）"
+FORMULA = "SUM(FDEBITLOCAL) WHERE 组织=100 AND 科目=6401 主营业务成本 AND 核算维度非空（跳过科目汇总行）"
 DESCRIPTION = (
     "营销中心销售成本 = 组织 100（营销中心）科目 6401 主营业务成本（含 6401.01 内销成本、"
-    "6401.03 集团内等下级科目）本期借方发生额 FDEBIT 汇总；取数时跳过科目汇总行，"
+    "6401.03 集团内等下级科目）本期借方发生额 FDEBITLOCAL（综合本位币）汇总；取数时跳过科目汇总行，"
     "只累加带核算维度的明细行，避免同一笔金额重复计入；本指标只取组织 100，"
     "组织 101-113 不参与。来源与「营销中心费用」系列同一张金蝶科目余额表"
     "（GL_RPT_AccountBalance，科目余额表-组织100 同步任务）。"

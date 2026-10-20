@@ -98,7 +98,9 @@ REQUEST_PARAMS = {
     "FilterString": [],
     "Model": {
         "FACCTBOOKID": {"FNumber": "{{org_code}}"},
-        "FCURRENCY": "1",
+        # 0 = 综合本位币：一次返回全部币种折算后的本位币金额（一维度一行）
+        # 注意 -1 = 全部币别，会按币种拆行并额外返回合计行，直接求和会翻倍
+        "FCURRENCY": "0",
         "FSTARTYEAR": "{{year}}",
         "FSTARTPERIOD": "{{month}}",
         "FENDYEAR": "{{year}}",

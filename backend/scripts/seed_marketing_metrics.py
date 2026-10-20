@@ -42,7 +42,8 @@ BASE_MEASURES = {
     "account_prefix": "6601",
     "detail_code_field": "FDETAILNUMBER",
     "detail_name_field": "FDETAILNAME",
-    "amount_field": "FDEBIT",
+    # 科目余额表按「综合本位币」(FCURRENCY=0) 取数：原币列为空，金额取本位币列
+    "amount_field": "FDEBITLOCAL",
 }
 DIMENSIONS = {"org": True, "dept": True}
 
@@ -199,7 +200,7 @@ METRIC_DEFS = [
         # 应收余额：科目 1122 应收账款，剔除组织 100-113 的内部客户，取期末余额（借方 - 贷方）
         "account_prefix": "1122",
         "formula": (
-            "SUM(FENDDEBIT - FENDCREDIT) WHERE 科目=1122 应收账款 "
+            "SUM(FENDDEBITLOCAL - FENDCREDITLOCAL) WHERE 科目=1122 应收账款 "
             "AND 客户编码 NOT IN (100,101,102,103,104,105,106,107,108,109,110,111,112,113)"
         ),
         "description": (
@@ -211,8 +212,8 @@ METRIC_DEFS = [
             "detail_is_department": False,
             "detail_code_exclude_in": [str(code) for code in range(100, 114)],
             "amount_terms": [
-                {"field": "FENDDEBIT", "sign": 1},
-                {"field": "FENDCREDIT", "sign": -1},
+                {"field": "FENDDEBITLOCAL", "sign": 1},
+                {"field": "FENDCREDITLOCAL", "sign": -1},
             ],
         },
     },
@@ -222,7 +223,7 @@ METRIC_DEFS = [
         # 应付余额：科目 2202 应付账款，剔除组织 100-113 的内部往来单位，取期末贷方余额（贷方 - 借方）
         "account_prefix": "2202",
         "formula": (
-            "SUM(FENDCREDIT - FENDDEBIT) WHERE 科目=2202 应付账款 "
+            "SUM(FENDCREDITLOCAL - FENDDEBITLOCAL) WHERE 科目=2202 应付账款 "
             "AND 往来单位编码 NOT IN (100,101,102,103,104,105,106,107,108,109,110,111,112,113)"
         ),
         "description": (
@@ -234,8 +235,8 @@ METRIC_DEFS = [
             "detail_is_department": False,
             "detail_code_exclude_in": [str(code) for code in range(100, 114)],
             "amount_terms": [
-                {"field": "FENDCREDIT", "sign": 1},
-                {"field": "FENDDEBIT", "sign": -1},
+                {"field": "FENDCREDITLOCAL", "sign": 1},
+                {"field": "FENDDEBITLOCAL", "sign": -1},
             ],
         },
     },

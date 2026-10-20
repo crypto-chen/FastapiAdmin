@@ -72,10 +72,10 @@ AVG_BALANCE_MEASURES = {
     "detail_is_department": False,
     "detail_code_exclude_in": [str(code) for code in range(100, 114)],
     "amount_terms": [
-        {"field": "FBEGINCREDIT", "sign": 0.5},
-        {"field": "FBEGINDEBIT", "sign": -0.5},
-        {"field": "FENDCREDIT", "sign": 0.5},
-        {"field": "FENDDEBIT", "sign": -0.5},
+        {"field": "FBEGINCREDITLOCAL", "sign": 0.5},
+        {"field": "FBEGINDEBITLOCAL", "sign": -0.5},
+        {"field": "FENDCREDITLOCAL", "sign": 0.5},
+        {"field": "FENDDEBITLOCAL", "sign": -0.5},
     ],
 }
 
@@ -85,7 +85,7 @@ METRICS = [
         "name": AVG_BALANCE_NAME,
         "measures": AVG_BALANCE_MEASURES,
         "formula": (
-            "SUM(0.5×(FBEGINCREDIT - FBEGINDEBIT) + 0.5×(FENDCREDIT - FENDDEBIT)) "
+            "SUM(0.5×(FBEGINCREDITLOCAL - FBEGINDEBITLOCAL) + 0.5×(FENDCREDITLOCAL - FENDDEBITLOCAL)) "
             "WHERE 科目=2202 应付账款 "
             "AND 往来单位编码 NOT IN (100,101,102,103,104,105,106,107,108,109,110,111,112,113)"
         ),
