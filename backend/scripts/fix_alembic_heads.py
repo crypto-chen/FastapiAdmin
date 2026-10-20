@@ -150,15 +150,22 @@ def main() -> None:
             print("\n  需要收敛：python scripts/fix_alembic_heads.py --apply")
         return
 
+    # 反复删未跟踪 head：删掉一个 merge 点会把它两侧的分支重新暴露成 head，
+    # 其中一侧可能又是未跟踪的重复迁移，所以循环到没有未跟踪 head 为止
     removed: list[str] = []
-    for rev, path, tracked in rows:
-        if not tracked and path is not None:
+    for _ in range(10):
+        rows = head_files(cfg)
+        untracked = [(rev, path) for rev, path, tracked in rows if not tracked and path is not None]
+        if not untracked:
+            break
+        for rev, path in untracked:
             path.unlink()
             removed.append(f"{rev} ({path.name})")
     for item in removed:
         print(f"  已删除未跟踪 head：{item}")
 
     rows = head_files(cfg)
+    print(f"  清理后 head：[{', '.join(rev for rev, _p, _t in rows)}]")
     if len(rows) > 1:
         heads = [rev for rev, _p, _t in rows]
         print(f"  仍有 {len(heads)} 个 head，执行 merge：{heads}")
@@ -174,8 +181,18 @@ def main() -> None:
         command.stamp(cfg, heads if len(heads) > 1 else heads[0])
         print(f"  alembic_version 已空，直接 stamp 到 {heads if len(heads) > 1 else heads[0]}")
 
-    command.upgrade(cfg, "heads")
-    print("  已执行 alembic upgrade heads")
+    try:
+        command.upgrade(cfg, "heads")
+        print("  已执行 alembic upgrade heads")
+    except Exception as exc:  # noqa: BLE001
+        message = str(exc)
+        if "1050" in message or "already exists" in message:
+            # 表早前被哨兵迁移/建表兜底建好了，DDL 不该再跑一遍：把版本号补到 head 即可
+            heads = [rev for rev, _p, _t in rows]
+            command.stamp(cfg, heads if len(heads) > 1 else heads[0])
+            print("  ⚠️ 目标表已存在（DDL 早前执行过），已改为 stamp 到 head，不重放建表语句")
+        else:
+            raise
     command.current(cfg)
     state = asyncio.run(
         report_tables(("dwd_product_line_analysis", "dwd_product_line_build_run", "dwd_cost_bill_workorder"))

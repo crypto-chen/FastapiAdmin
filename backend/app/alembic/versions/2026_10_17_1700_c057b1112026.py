@@ -21,6 +21,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # 表可能已由哨兵迁移或脚本的建表兜底建好（服务器真实出现过 1050 already exists）：
+    # 已存在就跳过建表，缺失的外键/索引交给 6233ad1c74ba 补
+    if sa.inspect(op.get_bind()).has_table('dwd_cost_bill_workorder'):
+        return
     op.create_table(
         'dwd_cost_bill_workorder',
         sa.Column('period_value', sa.String(length=16), nullable=False, comment='期间(YYYY-MM)'),
