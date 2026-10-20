@@ -399,12 +399,19 @@ async def fetch_crm_amount_payload(connection_id: int, path: str, params: dict) 
     ``dateRange[]``，其余键（如报价统计的 ``transformation``）原样透传；
     **列表值参数**（如 ``pushDateRange`` / ``createDateRange``）由客户端统一补
     ``[]``（CRM 是 PHP 应用，重复键不加 ``[]`` 只会保留最后一个值，区间会退化成单点）。
+
+    同一接口需要按不同参数各建来源对象时（如报价统计 ``transformation=0`` 取全部、
+    ``transformation=1`` 取已转订单），``code`` 必须唯一，可在参数模板里用
+    ``_path`` 指定真实接口路径；``_path`` 只用于改写路径，不会作为查询参数发给接口。
     """
     async with async_db_session() as db:
         connection = await db.get(CrmConnectionModel, connection_id)
     if connection is None:
         raise RuntimeError("CRM 连接配置不存在")
     params = params if isinstance(params, dict) else {}
+    override_path = str(params.get("_path") or "").strip()
+    if override_path:
+        path = override_path
     raw = params.get("dateRange") if isinstance(params, dict) else None
     if isinstance(raw, str):
         date_range: list[str] | None = [item.strip() for item in raw.replace("~", ",").split(",") if item.strip()]
@@ -412,7 +419,9 @@ async def fetch_crm_amount_payload(connection_id: int, path: str, params: dict) 
         date_range = [str(item) for item in raw if item]
     else:
         date_range = None
-    extra_params = {key: value for key, value in params.items() if key != "dateRange"}
+    extra_params = {
+        key: value for key, value in params.items() if key not in {"dateRange", "_path"}
+    }
     async with build_crm_client(connection) as client:
         payload = await client.call(path, date_range, extra_params)
     result = dict(payload) if isinstance(payload, dict) else {}

@@ -1,0 +1,17 @@
+# 营销中心「接单金额（未税）」主表：ORD-01-a ~ ORD-01-g 共 7 个订单类指标
+# 用法：python scripts/recalc_metrics_batch.py \
+#         --code-file scripts/metric_groups/order_intake.txt \
+#         --with-dependents --refresh \
+#         --period-from 2026-01 --period-to 2026-10
+# 说明：
+#   --refresh         先强制重拉 CRM 取数批次（源单补录/修正后必须加）
+#   --with-dependents 自动带上依赖它们的「接单金额（未税）」
+#                      （依赖其中 5 个：零售/批量/打样/备货/设计费）
+#   不加 --refresh    只重算口径，复用库里已存的批次
+marketing_domestic_order_untaxed
+marketing_export_order_untaxed
+marketing_retail_order_untaxed
+marketing_batch_order_untaxed
+marketing_sample_order_untaxed
+marketing_stockup_order_untaxed
+marketing_design_income_untaxed

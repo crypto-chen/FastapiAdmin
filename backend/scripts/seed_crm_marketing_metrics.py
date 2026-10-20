@@ -9,7 +9,9 @@
   **备货订单**接口不按 ``status=384`` 过滤，仅按日期统计 ``order_stock`` 表；
   各接口 ``data`` 即已算好的未税金额，本系统直接取值、不再二次折算。
 - 报价类：报价次数取「全部报价单」（``transformation=0``）的 ``quoteCount``；
-  报价成功率 = ``orderCount`` ÷ ``quoteCount`` ×100%；报价毛利率直接取接口
+  报价成功率 = 已转订单报价数 ÷ 报价次数 ×100%——分子取 ``transformation=1`` 的
+  ``quoteCount``（已转订单的报价单数，``kind = metric_ratio`` 引用内部停用指标
+  ``marketing_quote_converted_count``），分母即报价次数；报价毛利率直接取接口
   ``grossProfitRate``（接口已是百分数）。
 - 汇总类：接单金额（未税）= 零售/批量/打样/备货订单（未税）+ 设计费收入（未税）当期结果合计
   （``kind = metric_sum``，不单独调接口，计算时先补齐缺结果的组成指标）。**内贸/外贸订单不计入**：
@@ -84,6 +86,12 @@ SOURCE_OBJECTS = [
     {"path": "/hs/order/getDesignAmount", "name": "营销中心设计费收入（未税）", "params": {}},
     # 报价单统计：transformation=0（全部报价单），成功率与次数共用同一份取数
     {"path": "/hs/quote/getQuoteStatistics", "name": "报价单统计", "params": {"transformation": 0}},
+    # 同一接口按 transformation=1（已转订单）再建一个取数点，作为报价成功率的分子
+    {
+        "path": "quote_statistics_converted",
+        "name": "报价单统计-已转订单",
+        "params": {"_path": "/hs/quote/getQuoteStatistics", "transformation": 1},
+    },
     {"path": "/hs/quote/getQuoteProfitRate", "name": "报价单毛利率", "params": {}},
     # 订单数量统计（XcOrder/getOrderCount）：客单价的分母
     {"path": "/hs/getOrderCount", "name": "营销中心订单数", "params": {}},
@@ -147,15 +155,25 @@ METRICS = [
     {
         "code": "marketing_quote_success_rate",
         "name": "营销中心报价成功率",
-        "path": "/hs/quote/getQuoteStatistics",
-        "rule": "报价转接单次数 ÷ 报价次数 ×100% = orderCount ÷ quoteCount（同一份 transformation=0 取数）。",
+        "path": None,
+        "rule": "报价成功率 = 已转订单报价数 ÷ 报价次数 ×100%，"
+        "即「已转订单的报价单数（transformation=1 的 quoteCount）÷ 全部报价单数」。",
         "measures": {
-            "data_field": "data.quoteCount",
-            "numerator_field": "data.orderCount",
-            "denominator_field": "data.quoteCount",
+            "kind": "metric_ratio",
+            "numerator_metric_codes": ["marketing_quote_converted_count"],
+            "denominator_metric_codes": ["marketing_quote_count"],
             "ratio_scale": 100,
             "unit": "%",
         },
+    },
+    {
+        # 报价成功率的分子：内部组成指标，停用（不在指标目录显示），由比率指标按需计算
+        "code": "marketing_quote_converted_count",
+        "name": "营销中心已转订单报价数",
+        "path": "quote_statistics_converted",
+        "rule": "已转订单的报价单数 = quoteCount（transformation=1），仅作为报价成功率的分子。",
+        "measures": {"data_field": "data.quoteCount", "unit": "单"},
+        "status": 1,
     },
     {
         "code": "marketing_quote_profit_rate",
@@ -347,7 +365,8 @@ async def main() -> None:
                     )
             metric.measures = measures
             metric.source_entity_id = None
-            metric.status = 0
+            # 默认启用；内部组成指标（如报价成功率的分子）可显式停用，不出现在指标目录
+            metric.status = int(spec.get("status", 0))
             metric.description = (
                 f"{spec['rule']} {source_text}"
                 "月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
