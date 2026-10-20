@@ -118,6 +118,7 @@ class CostBillWorkOrderModel(ModelMixin, UserMixin):
     __table_args__: tuple = (
         UniqueConstraint("period_value", "work_order", name="uq_dwd_cost_bill_workorder"),
         Index("ix_dwd_cost_bill_workorder_period", "period_value"),
+        Index("ix_dwd_cost_bill_workorder_work_order", "work_order"),
         {"comment": "成本计算单-工单级成本拆分"},
     )
     __data_scope_exempt__: bool = True

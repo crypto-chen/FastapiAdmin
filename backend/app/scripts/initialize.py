@@ -74,7 +74,7 @@ class InitializeData:
             await create_tables()
             if any(p.name != "__init__.py" for p in ALEMBIC_VERSION_DIR.glob("*.py")):
                 # 仓库已有迁移历史：标记为 head，保证后续增量迁移能对自举库正确应用
-                await asyncio.to_thread(command.stamp, alembic_cfg, "head")
+                await asyncio.to_thread(command.stamp, alembic_cfg, "heads")
                 logger.info("✅ 空库：已按模型创建全表结构，并标记迁移历史为 head")
             else:
                 logger.info("✅ 空库：已按模型创建全表结构（仓库暂无迁移历史，跳过 stamp）")
@@ -82,19 +82,37 @@ class InitializeData:
             # 先把数据库带到最新版本，否则 autogenerate 会因
             # "Target database is not up to date" 无法对比模型与库结构
             await InitializeData.__clear_unresolvable_alembic_version(alembic_cfg)
-            await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
-            logger.info("✅ 数据库迁移已应用（alembic upgrade head）")
+            await asyncio.to_thread(InitializeData.__merge_heads_if_needed, alembic_cfg)
+            await asyncio.to_thread(command.upgrade, alembic_cfg, "heads")
+            logger.info("✅ 数据库迁移已应用（alembic upgrade heads）")
 
         # dev 环境：模型有变更时自动生成迁移文件（无变更时 env.py 的 process_revision_directives 会拦截，不产出文件）
         if settings.ENVIRONMENT == EnvironmentEnum.DEV:
             autogen = await asyncio.to_thread(InitializeData.__autogen_migration, alembic_cfg)
             if autogen:
                 # 生成了新的迁移文件，应用之
-                await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
+                await asyncio.to_thread(command.upgrade, alembic_cfg, "heads")
                 logger.info("✅ dev 自动生成的迁移已应用（检测到模型变更）")
             elif autogen is False:
                 # 仅"无模型变更"才打此日志；失败/拦截（None）已由 warning/error 说明，不再输出易误导的 info
                 logger.info("✅ dev 环境自动迁移检查完成（模型无变更）")
+
+    @staticmethod
+    def __merge_heads_if_needed(alembic_cfg) -> None:
+        """多个 head 时 ``upgrade head`` 会抛 MultipleHeads，导致后端起不来。
+
+        dev 自动迁移会产出未跟踪的迁移文件，和仓库既有迁移链并存就分叉；
+        启动时先 merge 一次，把 head 收敛回单个（合并文件是 alembic 标准做法）。
+        """
+        from alembic import command
+        from alembic.script import ScriptDirectory
+
+        heads = ScriptDirectory.from_config(alembic_cfg).get_heads()
+        if len(heads) <= 1:
+            return
+        logger.warning(f"⚠️ 检测到 {len(heads)} 个 alembic head：{heads}，自动合并")
+        command.merge(alembic_cfg, heads, message="自动合并多头")
+        logger.info("✅ 多头已合并，数据库版本收敛为单 head")
 
     @staticmethod
     async def __clear_unresolvable_alembic_version(alembic_cfg) -> None:
@@ -108,7 +126,9 @@ class InitializeData:
         from alembic.script import ScriptDirectory
         from sqlalchemy import text
 
-        known = {script.revision for script in ScriptDirectory.from_config(alembic_cfg).walk_revisions()}
+        script_dir = ScriptDirectory.from_config(alembic_cfg)
+        known = {script.revision for script in script_dir.walk_revisions()}
+        needs_stamp: list[str] = []
         async with async_engine.begin() as conn:
             has_version_table = await conn.run_sync(lambda sync_conn: inspect(sync_conn).has_table("alembic_version"))
             if not has_version_table:
@@ -119,8 +139,25 @@ class InitializeData:
                 return
             for rev in stale:
                 await conn.execute(text("delete from alembic_version where version_num = :rev"), {"rev": rev})
+            remaining = len(current - stale)
+            heads = script_dir.get_heads()
+            if remaining == 0 and heads:
+                # 版本历史被清空后若直接 upgrade，会从 base 重放全部迁移 → 建表冲突；
+                # 表结构本来就在（走到这里说明不是空库），stamp 到当前 head 才是正确落点
+                needs_stamp = heads
             hint = "；仓库存在迁移历史时请手动核对是否需要 alembic stamp" if known else ""
             logger.warning(f"⚠️ 已清理无法解析的迁移版本记录 {sorted(stale)}（对应脚本已不存在）{hint}")
+
+        # 必须在事务外 stamp：alembic 会用自己的连接跑 env.py
+        if needs_stamp:
+            await asyncio.to_thread(InitializeData.__stamp_head, alembic_cfg, needs_stamp)
+            logger.warning(f"⚠️ alembic_version 已空，已直接 stamp 到 {needs_stamp}")
+
+    @staticmethod
+    def __stamp_head(alembic_cfg, heads: list[str]) -> None:
+        from alembic import command
+
+        command.stamp(alembic_cfg, heads if len(heads) > 1 else heads[0])
 
     @staticmethod
     def __autogen_migration(alembic_cfg) -> bool | None:

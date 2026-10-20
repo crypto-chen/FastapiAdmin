@@ -84,7 +84,7 @@ def upgrade(
     - None
     """
     os.environ["ENVIRONMENT"] = env.value
-    command.upgrade(config=alembic_cfg, revision="head")
+    command.upgrade(config=alembic_cfg, revision="heads")
     typer.echo(message="所有迁移已应用。")
 
 
