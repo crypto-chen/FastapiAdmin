@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from app.core.base_model import MappedBase  # noqa: E402
 from app.core.database import async_db_session, async_engine  # noqa: E402
 from app.modules.product.build import build_period  # noqa: E402
+from app.modules.product.schema_guard import ensure_tables  # noqa: E402
 from app.utils.import_util import ImportUtil  # noqa: E402
 
 ImportUtil.find_models(MappedBase)
@@ -26,6 +27,10 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="产品线分析宽表构建")
     parser.add_argument("--period", required=True, help="期间，逗号分隔，如 2026-08,2026-09")
     args = parser.parse_args()
+
+    created = await ensure_tables(async_engine)
+    if created:
+        print(f"补建缺失表：{', '.join(created)}")
 
     for period in [item.strip() for item in args.period.split(",") if item.strip()]:
         async with async_db_session() as db, db.begin():

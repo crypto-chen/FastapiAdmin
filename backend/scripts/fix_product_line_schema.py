@@ -30,7 +30,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-EXPECTED_HEAD = "27578c7b66b6"
+# Windows 控制台默认 GBK，打印 ✅/❌ 会 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 ORDER_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("order_id", "INT NULL", "CRM 订单ID（orderAnalyze.id，发货明细靠它关联）"),
@@ -84,7 +87,11 @@ async def inspect_and_fix(apply: bool) -> None:
 
     from app.core.base_model import MappedBase
     from app.core.database import async_engine
-    from app.modules.product.model import ProductLineAnalysisModel, ProductLineBuildRunModel
+    from app.modules.product.model import (
+        CostBillWorkOrderModel,
+        ProductLineAnalysisModel,
+        ProductLineBuildRunModel,
+    )
     from app.utils.import_util import ImportUtil
 
     ImportUtil.find_models(MappedBase)
@@ -96,7 +103,11 @@ async def inspect_and_fix(apply: bool) -> None:
     async with async_engine.begin() as conn:
         names = await conn.run_sync(lambda c: set(inspect(c).get_table_names()))
         print("  ① 产品线表：")
-        for table in (ProductLineAnalysisModel.__table__, ProductLineBuildRunModel.__table__):
+        for table in (
+            ProductLineAnalysisModel.__table__,
+            ProductLineBuildRunModel.__table__,
+            CostBillWorkOrderModel.__table__,
+        ):
             exists = table.name in names
             print(f"     {table.name:<32} {'存在 ✅' if exists else '缺失 ❌'}")
             if not exists:

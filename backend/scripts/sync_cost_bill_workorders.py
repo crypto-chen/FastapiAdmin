@@ -37,6 +37,7 @@ from app.core.database import async_db_session, async_engine  # noqa: E402
 from app.modules.erp.kingdee.model import KingdeeConnectionModel  # noqa: E402
 from app.modules.order.model import OrderFullChainModel  # noqa: E402
 from app.modules.product.model import CostBillWorkOrderModel  # noqa: E402
+from app.modules.product.schema_guard import ensure_cost_bill_table  # noqa: E402
 from app.utils.crypto_util import CryptoUtil  # noqa: E402
 from app.utils.import_util import ImportUtil  # noqa: E402
 
@@ -144,19 +145,25 @@ async def main() -> None:
     fields = field_keys.split(",")
     index = {name: i for i, name in enumerate(fields)}
 
+    # 迁移没跑（多 head / 被 stamp 跳过）时，这里自动补表，避免 1146 直接中断
+    created = await ensure_cost_bill_table(async_engine)
+    if created:
+        print(f"补建缺失表：{', '.join(created)}（建议随后跑一次 alembic upgrade head 对齐版本号）")
+
     async with async_db_session() as db:
         if args.reset:
             await db.execute(delete(CostBillWorkOrderModel).where(CostBillWorkOrderModel.period_value == args.period))
             await db.commit()
-        existing = {
-            row[0]
-            for row in (
-                await db.execute(
-                    select(CostBillWorkOrderModel.work_order).where(
-                        CostBillWorkOrderModel.period_value == args.period
-                    )
+        existing_rows = (
+            await db.execute(
+                select(CostBillWorkOrderModel.work_order, CostBillWorkOrderModel.extra).where(
+                    CostBillWorkOrderModel.period_value == args.period
                 )
-            ).all()
+            )
+        ).all()
+        existing = {
+            row[0]: ((row[1] or {}).get("mode") if isinstance(row[1], dict) else None)
+            for row in existing_rows
         }
         orders = await work_orders_of(db, args.period)
         obj = (
@@ -170,10 +177,19 @@ async def main() -> None:
             "lcid": obj.lcid, "org_num": obj.org_num,
         }
 
-    todo = [(wo, code) for wo, code in orders if wo not in existing]
+    # full 模式下，之前 light 抓的行（没有费用项目字段，制造费用必为 0）要重抓升级
+    todo = [
+        (wo, code)
+        for wo, code in orders
+        if wo not in existing or (detail and existing[wo] != "full")
+    ]
     if args.limit:
         todo = todo[: args.limit]
-    print(f"期间 {args.period}｜模式 {args.mode}｜工单总数 {len(orders)}｜已完成 {len(existing)}｜本次待抓 {len(todo)}")
+    upgrade = sum(1 for wo, _ in todo if wo in existing)
+    print(
+        f"期间 {args.period}｜模式 {args.mode}｜工单总数 {len(orders)}｜已完成 {len(existing)}"
+        f"｜本次待抓 {len(todo)}（其中 light 升级 {upgrade}）"
+    )
     if not todo:
         return
 
@@ -227,6 +243,14 @@ async def main() -> None:
                     else:
                         other += amount
 
+            if work_order in existing:
+                # 重抓升级：先删旧行，避免唯一键 (period_value, work_order) 冲突
+                await db.execute(
+                    delete(CostBillWorkOrderModel).where(
+                        CostBillWorkOrderModel.period_value == args.period,
+                        CostBillWorkOrderModel.work_order == work_order,
+                    )
+                )
             db.add(
                 CostBillWorkOrderModel(
                     period_value=args.period,
@@ -237,7 +261,7 @@ async def main() -> None:
                     labor_cost=round(labor, 4),
                     other_cost=round(other, 4),
                     total_cost=round(material + labor + other, 4),
-                    extra={"rows": len(rows)},
+                    extra={"rows": len(rows), "mode": args.mode},
                 )
             )
             ok += 1
