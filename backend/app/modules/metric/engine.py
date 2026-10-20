@@ -686,7 +686,13 @@ def _row_status_allowed(row: Any, fields: list[str], config: dict) -> bool:
 # --------------------------------------------------------------------------- #
 # 业务员维度取数执行器（CRM 订单 / 发货明细）
 # --------------------------------------------------------------------------- #
-def extract_person_amount(rows: list, fields: list[str], config: dict) -> dict:
+def extract_person_amount(
+    rows: list,
+    fields: list[str],
+    config: dict,
+    period_type: str | None = None,
+    period: str | None = None,
+) -> dict:
     """把 CRM 订单明细按业务员（下单人）分组汇总金额。
 
     配置项（``measures`` 或 component）:
@@ -699,11 +705,14 @@ def extract_person_amount(rows: list, fields: list[str], config: dict) -> dict:
     - ``status_field`` / ``status_allow``：有效状态过滤，默认 ``status`` ∈ ``["384"]``（剔除作废 522）。
     - ``row_filters``：行过滤条件（``[{field, op, value|values}]``，见 :func:`_row_matches_filters`），
       用于订单类型（``order_type=1/2``）或新老客户（``is_new=1/2``）等口径拆分。
+    - ``period_field``：可选，按该日期字段归属期间（如 ``collectiontime`` 收款日期）；
+      设置后只统计落在 ``period`` 的行，调用方需按 ``lookback_periods`` 加载回看批次。
     - ``omit_zero_persons``：为真（默认）时丢弃合计为 0 的业务员，只保留有业绩的人。
 
     返回 ``{"persons": {业务员ID: {"value": 金额, "rows": 行数}}, "total": 合计, "matched_rows": 命中行数}``。
     """
     person_field = str(config.get("person_field") or "create_id")
+    period_field = str(config.get("period_field") or "")
     terms = _amount_terms(config)
     value_mode = str(config.get("value_mode") or "amount")
     customer_field = str(config.get("customer_field") or "customer")
@@ -716,6 +725,10 @@ def extract_person_amount(rows: list, fields: list[str], config: dict) -> dict:
             continue
         if not _row_matches_filters(row, fields, config.get("row_filters")):
             continue
+        if period_field:
+            moment = _parse_datetime_value(_cell(row, fields, period_field))
+            if not _datetime_in_period(moment, period_type or "month", period or ""):
+                continue
         person = _text(_cell(row, fields, person_field))
         if exclude_empty_person and not person:
             continue
@@ -951,8 +964,10 @@ def extract_push_person_stat(
     - ``push_status_field`` / ``push_status_allow``：下推状态，默认 ``erp_push_status`` ∈ ``["1"]``（已下推）；
       传空数组表示不做该过滤（如「未出货订单库存」不按下推状态过滤）。
     - ``push_date_field``：下推时间字段，默认 ``erp_push_date``。
-    - ``period_filter``：是否按 ``push_date_field`` 落在当期过滤，默认 ``True``；传 ``False``
-      表示只看 ``row_filters``（存量类指标：未出货订单不看时间）。
+    - ``period_field``：可选，按该日期字段归属期间（如 ``collectiontime`` 收款日期）；
+      设置后金额按该字段落在当期过滤，下推时间仍用于计算下推周期。
+    - ``period_filter``：是否按 ``period_field``（未设置时用 ``push_date_field``）落在当期过滤，
+      默认 ``True``；传 ``False`` 表示只看 ``row_filters``（存量类指标：未出货订单不看时间）。
     - ``cycle_start_field``：建单时间字段，默认 ``createtime``（Unix 秒）。
     - ``amount_terms`` / ``amount_field``：下推金额取值项。
     - ``stat``：``amount`` = 下推金额合计；``period_days`` = 下推周期（天）
@@ -964,6 +979,7 @@ def extract_push_person_stat(
     raw_allow = config.get("push_status_allow", ["1"])
     allowed = {_text(item) for item in (raw_allow if isinstance(raw_allow, list) else [raw_allow]) if _text(item)}
     push_date_field = str(config.get("push_date_field") or "erp_push_date")
+    period_field = str(config.get("period_field") or "")
     cycle_start_field = str(config.get("cycle_start_field") or "createtime")
     person_field = str(config.get("person_field") or "create_id")
     stat = str(config.get("stat") or "amount")
@@ -980,7 +996,8 @@ def extract_push_person_stat(
         if allowed and _text(_cell(row, fields, push_status_field)) not in allowed:
             continue
         push_at = _parse_datetime_value(_cell(row, fields, push_date_field))
-        if period_filter and not _datetime_in_period(push_at, period_type, period):
+        period_at = _parse_datetime_value(_cell(row, fields, period_field)) if period_field else push_at
+        if period_filter and not _datetime_in_period(period_at, period_type, period):
             continue
         matched_rows += 1
         amount = sum(sign * _parse_amount(_cell(row, fields, field)) for field, sign in terms)
@@ -2081,6 +2098,7 @@ async def _aggregate_crm_person_amount(context: dict) -> dict:
     period = context["period"]
     period_type = context["period_type"]
     lookback = max(int(config.get("lookback_periods") or 1), 1)
+    forward = max(int(config.get("forward_periods") or 0), 0)
     backfill_lookback = bool(config.get("backfill_lookback", True))
     is_push_kind = kind == CRM_ORDER_PUSH_PERSON_KIND
     is_quote_kind = kind == CRM_QUOTE_PERSON_KIND
@@ -2132,19 +2150,28 @@ async def _aggregate_crm_person_amount(context: dict) -> dict:
         cfg = comp["config"]
         jobs_by_key = comp["jobs_by_key"]
         if kind == CRM_PERSON_AMOUNT_KIND:
-            for job_id, _org_code, params, _variables in jobs_by_key.get("source_object_code") or []:
-                rows = await load_rows(job_id, period, False)
-                if not rows:
-                    continue
-                extracted = extract_person_amount(rows, _field_order(params), cfg)
-                matched_rows += int(extracted["matched_rows"])
-                merge(extracted["persons"])
+            period_field = str(cfg.get("period_field") or "")
+            offsets = range(-forward, lookback) if period_field else (0,)
+            for offset in offsets:
+                lookback_period = shift_period(period_type, period, -offset) if offset else period
+                for job_id, _org_code, params, _variables in jobs_by_key.get("source_object_code") or []:
+                    rows = await load_rows(job_id, lookback_period, offset > 0)
+                    if not rows:
+                        continue
+                    extracted = extract_person_amount(
+                        rows, _field_order(params), cfg, period_type, period
+                    )
+                    matched_rows += int(extracted["matched_rows"])
+                    merge(extracted["persons"])
             continue
         if is_push_kind:
             # 下推指标：订单按「下推时间落在当期」过滤，需要回看建单月（通常早于下推月）
             order_jobs = jobs_by_key.get("source_object_code") or []
-            for offset in range(lookback):
+            for offset in range(-forward, lookback):
                 lookback_period = shift_period(period_type, period, -offset) if offset else period
+                # 按收款日期归期时，订单可能先收款后建单；向前看时不要取未来期间
+                if offset < 0 and lookback_period > current_period_value(period_type):
+                    continue
                 for job_id, _org_code, params, _variables in order_jobs:
                     rows = await load_rows(job_id, lookback_period, offset > 0)
                     if not rows:

@@ -94,6 +94,10 @@ def register_metric_calc_job() -> None:
         replace_existing=True,
         coalesce=True,
         max_instances=1,
+        # 服务在 02:30 前未启动或当天重启时，APScheduler 默认 1 秒的 misfire
+        # 容忍度会把当天的批次直接跳过，指标就会一直停在前一天。这里不设容忍
+        # 上限：启动后补跑一次（coalesce 保证只跑一次，max_instances 防叠加）。
+        misfire_grace_time=None,
     )
 
 

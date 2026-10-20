@@ -8,14 +8,19 @@
 - 业务员 = 订单**下单人** ``create_id``；映射链
   ``create_id`` → ``source_person``（``source_type='crm'``，``raw_json.id``）
   → 工号（``raw_json.number``）→ ``master_person.code``（标准人员）。
-- 接单月 = 订单创建月 ``createtime``；出货月 = 发货单审核月 ``check_date``。
+- 接单未税（STF-13）归属月 = 收款日期 ``collectiontime`` 所在月（订单明细按建单月
+  回看 12 期、前看 1 期，覆盖收款月与建单月错位的订单）；业务员下推金额（STF-23）
+  同样按收款日期 ``collectiontime`` 所在月归期，并按建单月前看 2 期；
+  其他接单类指标仍按订单创建月 ``createtime``；
+  出货月 = 发货单审核月 ``check_date``。
 - 金额：内贸 ``remove_taxes_freight``（未税不含运费）、外贸 ``receivable_CNY``。
 - 只统计有效订单 ``status=384``，作废（``status=522``）剔除；
   离职业务员的历史数据保留（不按人员在职状态过滤）。
 
 三个指标（STF 为财务底稿科目编码，写入 ``metric_def.excel_code``）：
 - ``marketing_person_order_intake_untaxed`` **接单未税** STF-13
-  = Σ(内贸 ``remove_taxes_freight`` + 外贸 ``receivable_CNY``)，按 ``create_id`` 分组。
+  = Σ(内贸 ``remove_taxes_freight`` + 外贸 ``receivable_CNY``)，按 ``create_id`` 分组；
+  按收款日期 ``collectiontime`` 所在月归期，订单明细回看 12 期、前看 1 期。
 - ``marketing_person_goods_shipment_untaxed`` **货物出货未税** STF-14
   = Σ(发货数量 × 该订单未税单价)，发货明细按 ``order_number`` 关联订单明细取业务员与单价；
   订单明细按 ``lookback_periods``（默认 12 期）回看，因为部分订单在发货月之前创建。
@@ -157,14 +162,19 @@ METRICS = [
         "name": "营销中心业务员接单未税",
         "excel_code": "STF-13",
         "rule": "接单未税（元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，"
-        "只统计有效订单 status=384（剔除作废 522），按订单创建月 createtime 落到当期，"
-        "按业务员（下单人 create_id）分组。",
+        "只统计有效订单 status=384（剔除作废 522），按收款日期 collectiontime 所在月落到当期，"
+        "按业务员（下单人 create_id）分组；订单明细按建单月回看 12 期、前看 1 期，"
+        "覆盖收款月与建单月错位的订单。",
         "measures": {
             "kind": "crm_person_amount",
             "group_by": "person",
             "person_field": "create_id",
             "unit": "元",
             **VALID_ORDER,
+            "period_field": "collectiontime",
+            "lookback_periods": 12,
+            "forward_periods": 1,
+            "backfill_lookback": True,
             "components": [
                 {
                     "label": "内贸",
@@ -276,9 +286,9 @@ METRICS = [
         "name": "营销中心业务员下推金额",
         "excel_code": "STF-23",
         "rule": "下推金额（元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，"
-        "取已下推订单（erp_push_status=1）且 **下推时间 erp_push_date 落在当期**，"
+        "取已下推订单（erp_push_status=1），按 **收款日期 collectiontime 所在月落到当期**，"
         "只统计有效订单 status=384，按业务员（下单人 create_id）分组；"
-        "订单明细按 12 期回看（下推月通常晚于建单月）。",
+        "订单明细按 12 期回看、向前看 2 期（覆盖收款月早于/晚于建单月的订单）。",
         "measures": {
             "kind": "crm_order_push_person",
             "group_by": "person",
@@ -287,8 +297,10 @@ METRICS = [
             "push_status_field": "erp_push_status",
             "push_status_allow": ["1"],
             "push_date_field": "erp_push_date",
+            "period_field": "collectiontime",
             "cycle_start_field": "createtime",
             "lookback_periods": 12,
+            "forward_periods": 2,
             "backfill_lookback": True,
             "unit": "元",
             **VALID_ORDER,
@@ -647,15 +659,15 @@ METRICS = [
     },
     {
         "code": "marketing_person_settlement_income",
-        "name": "营销中心业务员营销结算收入10%",
+        "name": "营销中心业务员营销结算收入18%",
         "excel_code": "STF-18",
-        "rule": "营销结算收入10%（元）= 对外出货净额（STF-17）× 10%，**按业务员分别折算**"
-        "（kind=metric_sum_person + scale=0.1，逐个业务员取当期净额乘 10%）；公司合计 = Σ各业务员；"
-        "与公司口径「营销中心总收益（营销结算收入）」= 对外出货未税净额 × 10% 一致。",
+        "rule": "营销结算收入18%（元）= 对外出货净额（STF-17）× 18%，**按业务员分别折算**"
+        "（kind=metric_sum_person + scale=0.18，逐个业务员取当期净额乘 18%）；公司合计 = Σ各业务员；"
+        "与公司口径「营销中心总收益（营销结算收入）」= 对外出货未税净额 × 18% 一致。",
         "measures": {
             "kind": "metric_sum_person",
             "component_metric_codes": ["marketing_person_external_shipment_net_untaxed"],
-            "scale": 0.1,
+            "scale": 0.18,
             "unit": "元",
         },
     },
@@ -663,7 +675,7 @@ METRICS = [
         "code": "marketing_person_variable_expense_allocation",
         "name": "营销中心业务员变动费用分摊",
         "excel_code": "STF-26",
-        "rule": "变动费用分摊（元）= 业务员收入（STF-18 营销结算收入10%）÷ 总收入（ORD-01 营销中心接单金额·未税）"
+        "rule": "变动费用分摊（元）= 业务员收入（STF-18 营销结算收入18%）÷ 总收入（ORD-01 营销中心接单金额·未税）"
         "× 变动费用合计（CM-01），按业务员分别计算（kind=metric_alloc_person）；"
         "分母与费用池都取公司口径指标的当期合计行；"
         "**口径已确认（业务确认保持 ORD-01 作分母）**：各业务员分摊额合计小于 CM-01 变动费用合计属预期，"
@@ -681,7 +693,7 @@ METRICS = [
         "code": "marketing_person_fixed_expense_allocation",
         "name": "营销中心业务员固定费用分摊",
         "excel_code": "STF-28",
-        "rule": "固定费用分摊（元）= 业务员收入（STF-18 营销结算收入10%）÷ 总收入（ORD-01 营销中心接单金额·未税）"
+        "rule": "固定费用分摊（元）= 业务员收入（STF-18 营销结算收入18%）÷ 总收入（ORD-01 营销中心接单金额·未税）"
         "× 固定费用合计（CM-04），按业务员分别计算（kind=metric_alloc_person）；"
         "分母与费用池都取公司口径指标的当期合计行，口径与 STF-26 变动费用分摊保持一致"
         "（**已确认以 ORD-01 作分母**：各业务员分摊额合计小于固定费用合计属预期，差额不参与业务员分摊）。",
@@ -697,7 +709,7 @@ METRICS = [
         "code": "marketing_person_contribution_margin",
         "name": "营销中心业务员边际贡献",
         "excel_code": "STF-27",
-        "rule": "边际贡献（元）= 营销结算收入10%（STF-18）− 变动费用分摊（STF-26），"
+        "rule": "边际贡献（元）= 营销结算收入18%（STF-18）− 变动费用分摊（STF-26），"
         "按业务员分别相减（kind=metric_diff_person，加项 − 减项，缺失项按 0）；公司合计 = Σ各业务员；"
         "与公司口径「营销中心边际贡献」= 总收益（营销结算收入）− 变动费用合计 同思路。",
         "measures": {
@@ -726,7 +738,7 @@ METRICS = [
         "excel_code": "STF-30",
         "rule": "结算收益（元）= 边际贡献（STF-27）− 固定费用分摊（STF-28）− 总部分摊（STF-29），"
         "按业务员分别相减（kind=metric_diff_person，加项 1 个、减项 2 个，缺失项按 0）；"
-        "公司合计 = Σ各业务员。",
+        "公司合计 = Σ各业务员；其中 STF-18 营销结算收入按对外出货净额的 18% 折算。",
         "measures": {
             "kind": "metric_diff_person",
             "addend_metric_codes": ["marketing_person_contribution_margin"],

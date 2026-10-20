@@ -6,7 +6,7 @@
 # 说明：
 #   --refresh         先强制重拉 CRM 取数批次（源单补录/修正后必须加）
 #   --with-dependents 自动带上依赖它们的「接单金额（未税）」
-#                      （依赖其中 5 个：零售/批量/打样/备货/设计费）
+#                      （依赖其中 3 个：内贸/外贸/零售）
 #   不加 --refresh    只重算口径，复用库里已存的批次
 marketing_domestic_order_untaxed
 marketing_export_order_untaxed

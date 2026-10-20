@@ -33,9 +33,14 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app.core.base_model import MappedBase  # noqa: E402
 from app.core.database import async_db_session, async_engine  # noqa: E402
-from app.modules.metric.engine import execute_metric_calc, refresh_period_batches  # noqa: E402
-from app.modules.metric.model import MetricDefModel  # noqa: E402
 from app.modules.metadata.model import MetaSyncRunModel  # noqa: E402
+from app.modules.metric.batch import build_metric_layers  # noqa: E402
+from app.modules.metric.engine import (  # noqa: E402
+    execute_metric_calc,
+    metric_dependency_codes,
+    refresh_period_batches,
+)
+from app.modules.metric.model import MetricDefModel  # noqa: E402
 from app.utils.import_util import ImportUtil  # noqa: E402
 
 ImportUtil.find_models(MappedBase)
@@ -77,23 +82,36 @@ async def with_dependents(codes: list[str]) -> list[str]:
     async with async_db_session() as db:
         rows = (await db.execute(select(MetricDefModel.code, MetricDefModel.measures))).all()
     depends: dict[str, set[str]] = {}
+    metrics: list[dict] = []
     for code, measures in rows:
         config = json.loads(measures) if isinstance(measures, str) else (measures or {})
-        used: set[str] = set()
-        for key in ("component_metric_codes", "numerator_metric_codes", "denominator_metric_codes"):
-            used |= {str(item) for item in (config.get(key) or [])}
-        depends[str(code)] = used
+        # 与调度/运行期共用同一套依赖字段解析：差额的加项/减项、
+        # 比率的分子/分母减项都算依赖，避免「重算了上游、下游没跟着重算」
+        depends[str(code)] = set(metric_dependency_codes(config))
+        metrics.append(
+            {
+                "id": len(metrics) + 1,
+                "code": str(code),
+                "name": str(code),
+                "period_type": "month",
+                "measures": config,
+            }
+        )
 
-    ordered: list[str] = []
-    seen: set[str] = set()
-    layer = [code for code in codes if code not in seen]
-    while layer:
-        for code in layer:
-            if code not in seen:
-                seen.add(code)
-                ordered.append(code)
-        layer = [code for code, deps in depends.items() if code not in seen and (deps & set(layer))]
-    return ordered
+    # 先取「这些指标 + 所有下游」的闭包，再按依赖拓扑分层；
+    # 不能只按 BFS 层序输出，否则一个指标同时依赖多个上游时，
+    # 可能在本轮其它上游算完前就执行（如安全边际率先于盈亏平衡点）。
+    selected = set(codes)
+    changed = True
+    while changed:
+        changed = False
+        for code, deps in depends.items():
+            if code not in selected and deps & selected:
+                selected.add(code)
+                changed = True
+    subset = [item for item in metrics if item["code"] in selected]
+    layers, _problems = build_metric_layers(subset)
+    return [item["code"] for layer in layers for item in layer]
 
 
 async def main() -> None:

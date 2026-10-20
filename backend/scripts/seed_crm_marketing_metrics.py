@@ -13,9 +13,9 @@
   ``quoteCount``（已转订单的报价单数，``kind = metric_ratio`` 引用内部停用指标
   ``marketing_quote_converted_count``），分母即报价次数；报价毛利率直接取接口
   ``grossProfitRate``（接口已是百分数）。
-- 汇总类：接单金额（未税）= 零售/批量/打样/备货订单（未税）+ 设计费收入（未税）当期结果合计
-  （``kind = metric_sum``，不单独调接口，计算时先补齐缺结果的组成指标）。**内贸/外贸订单不计入**：
-  它们是「该方向全部订单」的总计，与按 ``order_type`` 拆分的零售/批量/打样重复。
+- 汇总类：接单金额（未税）= 内贸订单（未税）+ 外贸订单（未税）+ 零售订单（未税）当期结果合计
+  （``kind = metric_sum``，不单独调接口，计算时先补齐缺结果的组成指标），即
+  ORD-01 = ORD-01-a + ORD-01-b + ORD-01-c。
 - 订单数：``/hs/getOrderCount``（控制器 ``app\\api\\controller\\accounting\\v1\\XcOrder``）
   返回内贸 + 外贸 + 零售三类有效订单（``status=384``）的条数合计，取值路径 ``data.count``；
   客单价 = 接单金额（未税）÷ 订单数（``kind = metric_ratio``，分母为 0 时取 0）。
@@ -183,22 +183,19 @@ METRICS = [
         "measures": {"data_field": "data.grossProfitRate", "unit": "%"},
     },
     {
-        # 汇总指标：不取数，直接合计下面 5 个订单类指标当期结果
-        # 注意：内贸/外贸是「该方向全部订单」的总计，零售/批量/打样是按 order_type 的明细切分，
-        # 属于内贸+外贸的子集，两者同时计入会重复约 86%~94%，因此只取明细侧（零售/批量/打样）。
+        # 汇总指标：不取数，直接合计下面 3 个订单类指标当期结果
+        # 业务口径：ORD-01 = ORD-01-a（内贸）+ ORD-01-b（外贸）+ ORD-01-c（零售）。
         "code": "marketing_order_intake_untaxed",
         "name": "营销中心接单金额（未税）",
         "path": None,
-        "rule": "接单金额（未税）= 零售订单 + 批量订单 + 打样订单 + 备货订单 + 设计费收入（均未税）；"
-        "内贸/外贸订单是全部订单的总计，已由前三项按 order_type 拆分覆盖，不重复计入。",
+        "rule": "接单金额（未税）= 内贸订单 + 外贸订单 + 零售订单（均未税），"
+        "即 ORD-01 = ORD-01-a + ORD-01-b + ORD-01-c。",
         "measures": {
             "kind": "metric_sum",
             "component_metric_codes": [
+                "marketing_domestic_order_untaxed",
+                "marketing_export_order_untaxed",
                 "marketing_retail_order_untaxed",
-                "marketing_batch_order_untaxed",
-                "marketing_sample_order_untaxed",
-                "marketing_stockup_order_untaxed",
-                "marketing_design_income_untaxed",
             ],
         },
     },
@@ -221,7 +218,7 @@ METRICS = [
         "name": "营销中心客单价",
         "path": None,
         "rule": "**客单价** = 接单金额（未税）÷ 订单数（元/单，分母为 0 时取 0）："
-        "分子取「营销中心接单金额（未税）」（= 零售/批量/打样/备货订单（未税）+ 设计费收入（未税）），"
+        "分子取「营销中心接单金额（未税）」（= 内贸订单（未税）+ 外贸订单（未税）+ 零售订单（未税）），"
         "分母取「营销中心订单数」（= 内贸 + 外贸 + 零售三类有效订单 status=384 的条数合计），"
         "两者同为当月、同口径。",
         "measures": {

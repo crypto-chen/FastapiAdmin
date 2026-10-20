@@ -154,7 +154,7 @@ METRICS = [
             "库存与接单比 = 营销中心库存合计（未税）÷ 营销中心接单金额（未税）："
             "分子 marketing_inventory_total_untaxed（= 外部订单库存 + 海柔库存 + 机箱成品仓，"
             "期时点口径），分母 marketing_order_intake_untaxed"
-            "（= 零售/批量/打样/备货订单（未税）+ 设计费收入（未税），见 seed_crm_marketing_metrics.py）；"
+            "（= 内贸订单（未税）+ 外贸订单（未税）+ 零售订单（未税），见 seed_crm_marketing_metrics.py）；"
             "取数类型 kind=metric_ratio，ratio_scale=1 输出**倍数**（如 0.87 表示库存相当于当月接单的 0.87 倍；"
             "若要看百分数，把 ratio_scale 改成 100 即可），分母为 0 时取 0。"
             "公司整体口径，组成指标缺当期结果时由引擎先补齐，仍缺则按 0 计入并告警。"
