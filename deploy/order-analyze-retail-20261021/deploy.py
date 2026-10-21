@@ -115,6 +115,11 @@ def run_step(label: str, args: list[str], python: str, env_name: str, apply: boo
             handle.write(line + "\n")
     code = process.wait()
     if code != 0:
+        log(
+            "\n提示：若出现 MySQL 1045 / Access denied，请检查 "
+            f"backend/env/.env.{env_name} 是否存在且 DATABASE_PASSWORD 已填写；"
+            "也可以直接设置 DATABASE_PASSWORD 环境变量后重跑。"
+        )
         raise SystemExit(f"步骤失败：{label}，退出码 {code}")
 
 
@@ -138,7 +143,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="CRM orderAnalyze type=3（零售）一键更新")
     parser.add_argument("--apply", action="store_true", help="真正执行（默认只预演）")
     parser.add_argument("--service", default="", help="服务名；Windows 用 Restart-Service，Linux 用 systemctl")
-    parser.add_argument("--env", default="prod", help="后端环境名，默认 prod")
+    parser.add_argument(
+        "--env",
+        default=os.getenv("ENVIRONMENT", "dev"),
+        help="后端环境名，默认取 ENVIRONMENT，未设置时用 dev；生产库请传 --env prod",
+    )
     parser.add_argument("--python", default=sys.executable, help="Python 解释器，默认当前解释器")
     args = parser.parse_args()
 
