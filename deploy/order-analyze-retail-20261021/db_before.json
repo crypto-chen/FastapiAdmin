@@ -1,0 +1,1175 @@
+{
+  "metric_def": [
+    {
+      "id": 123,
+      "code": "marketing_person_order_intake_untaxed",
+      "name": "营销中心业务员接单未税",
+      "formula": "接单未税（元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，只统计有效订单 status=384（剔除作废 522），按收款日期 collectiontime 所在月落到当期，按业务员（下单人 create_id）分组；订单明细按建单月回看 12 期、前看 1 期，覆盖收款月与建单月错位的订单。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "元",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "period_field": "collectiontime",
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status",
+        "forward_periods": 1,
+        "lookback_periods": 12,
+        "backfill_lookback": true
+      },
+      "excel_code": "STF-13",
+      "category": "营销中心-业务员",
+      "description": "接单未税（元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，只统计有效订单 status=384（剔除作废 522），按收款日期 collectiontime 所在月落到当期，按业务员（下单人 create_id）分组；订单明细按建单月回看 12 期、前看 1 期，覆盖收款月与建单月错位的订单。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 124,
+      "code": "marketing_person_goods_shipment_untaxed",
+      "name": "营销中心业务员货物出货未税",
+      "formula": "货物出货未税（元）= Σ(发货数量 send_qty × 该订单未税单价)，未税单价 = 订单未税金额 ÷ 订单数量（内贸 remove_taxes_freight、外贸 receivable_CNY，status=384）；发货月按发货单审核月 check_date，业务员取所属订单的下单人 create_id；订单明细按 12 期回看，覆盖发货月之前创建的订单。",
+      "measures": {
+        "kind": "crm_shipment_person_amount",
+        "unit": "元",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "status_allow": [
+              "384"
+            ],
+            "status_field": "status",
+            "order_source_object_code": "/hs/order/orderAnalyze?type=1",
+            "shipment_source_object_code": "/hs/order/orderShipments?type=1"
+          },
+          {
+            "label": "外贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "status_allow": [
+              "384"
+            ],
+            "status_field": "status",
+            "order_source_object_code": "/hs/order/orderAnalyze?type=2",
+            "shipment_source_object_code": "/hs/order/orderShipments?type=2"
+          }
+        ],
+        "person_field": "create_id",
+        "lookback_periods": 12,
+        "backfill_lookback": true
+      },
+      "excel_code": "STF-14",
+      "category": "营销中心-业务员",
+      "description": "货物出货未税（元）= Σ(发货数量 send_qty × 该订单未税单价)，未税单价 = 订单未税金额 ÷ 订单数量（内贸 remove_taxes_freight、外贸 receivable_CNY，status=384）；发货月按发货单审核月 check_date，业务员取所属订单的下单人 create_id；订单明细按 12 期回看，覆盖发货月之前创建的订单。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 125,
+      "code": "marketing_person_design_service_income",
+      "name": "营销中心业务员设计服务收入",
+      "formula": "设计服务收入（元）= Σ(内贸 design_remove_taxes_freight + 外贸 design_cost)，只统计有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组；当月无设计服务收入的业务员不输出行（按 0 处理）。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "元",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "design_remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "design_cost"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status"
+      },
+      "excel_code": "STF-15",
+      "category": "营销中心-业务员",
+      "description": "设计服务收入（元）= Σ(内贸 design_remove_taxes_freight + 外贸 design_cost)，只统计有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组；当月无设计服务收入的业务员不输出行（按 0 处理）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 126,
+      "code": "marketing_person_goods_shipment_qty",
+      "name": "营销中心业务员出货数量",
+      "formula": "出货数量 = Σ发货数量 send_qty，发货月按发货单审核月 check_date，业务员取所属订单的下单人 create_id；订单明细按 12 期回看以取得业务员归属。",
+      "measures": {
+        "kind": "crm_shipment_person_amount",
+        "unit": "个",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "status_allow": [
+              "384"
+            ],
+            "status_field": "status",
+            "order_source_object_code": "/hs/order/orderAnalyze?type=1",
+            "shipment_source_object_code": "/hs/order/orderShipments?type=1"
+          },
+          {
+            "label": "外贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "status_allow": [
+              "384"
+            ],
+            "status_field": "status",
+            "order_source_object_code": "/hs/order/orderAnalyze?type=2",
+            "shipment_source_object_code": "/hs/order/orderShipments?type=2"
+          }
+        ],
+        "value_mode": "qty",
+        "person_field": "create_id",
+        "lookback_periods": 12,
+        "backfill_lookback": true
+      },
+      "excel_code": "STF-68",
+      "category": "营销中心-业务员",
+      "description": "出货数量 = Σ发货数量 send_qty，发货月按发货单审核月 check_date，业务员取所属订单的下单人 create_id；订单明细按 12 期回看以取得业务员归属。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 127,
+      "code": "marketing_person_order_push_untaxed",
+      "name": "营销中心业务员下推金额",
+      "formula": "下推金额（元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取已下推订单（erp_push_status=1），按 **收款日期 collectiontime 所在月落到当期**，只统计有效订单 status=384，按业务员（下单人 create_id）分组；订单明细按 12 期回看、向前看 2 期（覆盖收款月早于/晚于建单月的订单）。",
+      "measures": {
+        "kind": "crm_order_push_person",
+        "stat": "amount",
+        "unit": "元",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "period_field": "collectiontime",
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status",
+        "forward_periods": 2,
+        "push_date_field": "erp_push_date",
+        "lookback_periods": 12,
+        "backfill_lookback": true,
+        "cycle_start_field": "createtime",
+        "push_status_allow": [
+          "1"
+        ],
+        "push_status_field": "erp_push_status"
+      },
+      "excel_code": "STF-23",
+      "category": "营销中心-业务员",
+      "description": "下推金额（元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取已下推订单（erp_push_status=1），按 **收款日期 collectiontime 所在月落到当期**，只统计有效订单 status=384，按业务员（下单人 create_id）分组；订单明细按 12 期回看、向前看 2 期（覆盖收款月早于/晚于建单月的订单）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 128,
+      "code": "marketing_person_order_push_period",
+      "name": "营销中心业务员下推周期",
+      "formula": "下推周期（天）= Σ(下推时间 erp_push_date − 建单时间 createtime) ÷ 下推订单数，按业务员分别计算（订单数加权，不是各订单周期的简单平均）：取已下推订单（erp_push_status=1）且下推时间落在当期、订单有效 status=384；公司合计同样按「天数和 ÷ 订单数和」加权。",
+      "measures": {
+        "kind": "crm_order_push_person",
+        "stat": "period_days",
+        "unit": "天",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status",
+        "push_date_field": "erp_push_date",
+        "lookback_periods": 12,
+        "backfill_lookback": true,
+        "cycle_start_field": "createtime",
+        "push_status_allow": [
+          "1"
+        ],
+        "push_status_field": "erp_push_status"
+      },
+      "excel_code": "STF-24",
+      "category": "营销中心-业务员",
+      "description": "下推周期（天）= Σ(下推时间 erp_push_date − 建单时间 createtime) ÷ 下推订单数，按业务员分别计算（订单数加权，不是各订单周期的简单平均）：取已下推订单（erp_push_status=1）且下推时间落在当期、订单有效 status=384；公司合计同样按「天数和 ÷ 订单数和」加权。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 129,
+      "code": "marketing_person_sample_order_intake_untaxed",
+      "name": "营销中心业务员打样接单业绩（未税）",
+      "formula": "打样接单业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取订单类型 order_type=2（打样）、有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "元",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "row_filters": [
+              {
+                "op": "equals",
+                "field": "order_type",
+                "value": "2"
+              }
+            ],
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "row_filters": [
+              {
+                "op": "equals",
+                "field": "order_type",
+                "value": "2"
+              }
+            ],
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "row_filters": [
+          {
+            "op": "equals",
+            "field": "order_type",
+            "value": "2"
+          }
+        ],
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status"
+      },
+      "excel_code": "STF-38",
+      "category": "营销中心-业务员",
+      "description": "打样接单业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取订单类型 order_type=2（打样）、有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 130,
+      "code": "marketing_person_batch_order_intake_untaxed",
+      "name": "营销中心业务员批量接单业绩（未税）",
+      "formula": "批量接单业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取订单类型 order_type=1（批量）、有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "元",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "row_filters": [
+              {
+                "op": "equals",
+                "field": "order_type",
+                "value": "1"
+              }
+            ],
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "row_filters": [
+              {
+                "op": "equals",
+                "field": "order_type",
+                "value": "1"
+              }
+            ],
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "row_filters": [
+          {
+            "op": "equals",
+            "field": "order_type",
+            "value": "1"
+          }
+        ],
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status"
+      },
+      "excel_code": "STF-39",
+      "category": "营销中心-业务员",
+      "description": "批量接单业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取订单类型 order_type=1（批量）、有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 131,
+      "code": "marketing_person_new_customer_intake_untaxed",
+      "name": "营销中心业务员新客户业绩（未税）",
+      "formula": "新客户业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取客户标识 is_new=1（新客户）、有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "元",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "row_filters": [
+              {
+                "op": "equals",
+                "field": "is_new",
+                "value": "1"
+              }
+            ],
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "row_filters": [
+              {
+                "op": "equals",
+                "field": "is_new",
+                "value": "1"
+              }
+            ],
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "row_filters": [
+          {
+            "op": "equals",
+            "field": "is_new",
+            "value": "1"
+          }
+        ],
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status"
+      },
+      "excel_code": "STF-40",
+      "category": "营销中心-业务员",
+      "description": "新客户业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取客户标识 is_new=1（新客户）、有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 132,
+      "code": "marketing_person_old_customer_intake_untaxed",
+      "name": "营销中心业务员老客户业绩（未税）",
+      "formula": "老客户业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取客户标识 is_new=2（老客户）、有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "元",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "row_filters": [
+              {
+                "op": "equals",
+                "field": "is_new",
+                "value": "2"
+              }
+            ],
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "row_filters": [
+              {
+                "op": "equals",
+                "field": "is_new",
+                "value": "2"
+              }
+            ],
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "row_filters": [
+          {
+            "op": "equals",
+            "field": "is_new",
+            "value": "2"
+          }
+        ],
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status"
+      },
+      "excel_code": "STF-41",
+      "category": "营销中心-业务员",
+      "description": "老客户业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，取客户标识 is_new=2（老客户）、有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 133,
+      "code": "marketing_person_old_customer_order_count",
+      "name": "营销中心业务员本月下单老客户数量",
+      "formula": "本月下单老客户数量（家）= 当期订单中 **is_new=2（老客户）** 的客户去重数，按订单创建月 createtime 落当期，只统计有效订单 status=384，按业务员（下单人 create_id）分组；同一客户当月多单只算一次、跨内贸外贸也只算一次；公司合计取全部业务员的客户并集。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "家",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "row_filters": [
+              {
+                "op": "equals",
+                "field": "is_new",
+                "value": "2"
+              }
+            ],
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "row_filters": [
+              {
+                "op": "equals",
+                "field": "is_new",
+                "value": "2"
+              }
+            ],
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "value_mode": "count_customers",
+        "row_filters": [
+          {
+            "op": "equals",
+            "field": "is_new",
+            "value": "2"
+          }
+        ],
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status",
+        "customer_field": "customer"
+      },
+      "excel_code": "STF-48",
+      "category": "营销中心-业务员",
+      "description": "本月下单老客户数量（家）= 当期订单中 **is_new=2（老客户）** 的客户去重数，按订单创建月 createtime 落当期，只统计有效订单 status=384，按业务员（下单人 create_id）分组；同一客户当月多单只算一次、跨内贸外贸也只算一次；公司合计取全部业务员的客户并集。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 134,
+      "code": "marketing_person_total_customer_count",
+      "name": "营销中心业务员总客户数量",
+      "formula": "总客户数量（家）= 客户表中**所属业务员（principal_id）**为本业务员的客户数量；来源 CRM 客户列表接口（未分页全量，当前快照），未分配业务员（principal_id 为空）的客户不计入；该指标是时点快照口径，历史期间取重算时点最新的客户列表批次。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "家",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "客户列表",
+            "source_object_code": "/hs/customer/getCusotmerList"
+          }
+        ],
+        "value_mode": "count_customers",
+        "person_field": "principal_id",
+        "status_allow": [],
+        "status_field": null,
+        "customer_field": "id",
+        "exclude_empty_person": true
+      },
+      "excel_code": "STF-47",
+      "category": "营销中心-业务员",
+      "description": "总客户数量（家）= 客户表中**所属业务员（principal_id）**为本业务员的客户数量；来源 CRM 客户列表接口（未分页全量，当前快照），未分配业务员（principal_id 为空）的客户不计入；该指标是时点快照口径，历史期间取重算时点最新的客户列表批次。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 135,
+      "code": "marketing_person_repurchase_rate",
+      "name": "营销中心业务员复购率",
+      "formula": "复购率（%）= 本月下单老客户数量 ÷ 总客户数量 × 100%，**按业务员分别计算**（分子为「营销中心业务员本月下单老客户数量」STF-48，分母为「营销中心业务员总客户数量」STF-47，同为当月、同一业务员）；分母为 0 的业务员不输出行；公司合计 = Σ分子 ÷ Σ分母 × 100。",
+      "measures": {
+        "kind": "metric_ratio_person",
+        "unit": "%",
+        "ratio_scale": 100,
+        "numerator_metric_codes": [
+          "marketing_person_old_customer_order_count"
+        ],
+        "denominator_metric_codes": [
+          "marketing_person_total_customer_count"
+        ]
+      },
+      "excel_code": "STF-49",
+      "category": "营销中心-业务员",
+      "description": "复购率（%）= 本月下单老客户数量 ÷ 总客户数量 × 100%，**按业务员分别计算**（分子为「营销中心业务员本月下单老客户数量」STF-48，分母为「营销中心业务员总客户数量」STF-47，同为当月、同一业务员）；分母为 0 的业务员不输出行；公司合计 = Σ分子 ÷ Σ分母 × 100。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 136,
+      "code": "marketing_person_quote_count",
+      "name": "营销中心业务员报价次数",
+      "formula": "报价次数（次）= 当期已审核报价单（quote_bills.status='E'）条数，按报价日期 date 落在当期，按业务员（报价单 create_id）分组。",
+      "measures": {
+        "kind": "crm_quote_person",
+        "stat": "count",
+        "unit": "次",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "报价单",
+            "source_object_code": "/hs/quote/getQuoteList"
+          }
+        ],
+        "person_field": "create_id"
+      },
+      "excel_code": "STF-10",
+      "category": "营销中心-业务员",
+      "description": "报价次数（次）= 当期已审核报价单（quote_bills.status='E'）条数，按报价日期 date 落在当期，按业务员（报价单 create_id）分组。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 137,
+      "code": "marketing_person_quote_success_rate",
+      "name": "营销中心业务员报价成功率",
+      "formula": "报价成功率（%）= 已转订单的报价单数 ÷ 报价次数 × 100%，按业务员分别计算（接口 transformation=1 表示该报价单已关联有效内贸/外贸订单，status=384）；公司合计 = Σ已转单数 ÷ Σ报价次数 × 100；报价次数为 0 的业务员不输出行。",
+      "measures": {
+        "kind": "crm_quote_person",
+        "stat": "success_rate",
+        "unit": "%",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "报价单",
+            "source_object_code": "/hs/quote/getQuoteList"
+          }
+        ],
+        "person_field": "create_id",
+        "transformation_allow": [
+          "1"
+        ],
+        "transformation_field": "transformation"
+      },
+      "excel_code": "STF-11",
+      "category": "营销中心-业务员",
+      "description": "报价成功率（%）= 已转订单的报价单数 ÷ 报价次数 × 100%，按业务员分别计算（接口 transformation=1 表示该报价单已关联有效内贸/外贸订单，status=384）；公司合计 = Σ已转单数 ÷ Σ报价次数 × 100；报价次数为 0 的业务员不输出行。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 138,
+      "code": "marketing_person_quote_gross_profit_rate",
+      "name": "营销中心业务员报价毛利率",
+      "formula": "报价毛利率（%）=（报价未税 −（材料成本 + 加工费））÷ 报价未税 × 100%，按业务员分别计算（公司合计 = Σ(未税 − 料工费) ÷ Σ未税 × 100）；接口字段 not_tax_all_quote_amount = 报价未税总价、material_labor_cost = 料工费；**注意**：当前接口的 material_labor_cost = materialCost × qty（含附件费、**不含** processCost 加工费），待 CRM 侧改成 (materialCost + processCost) × qty 后本指标自动按新口径取数，无需改本系统。",
+      "measures": {
+        "kind": "crm_quote_person",
+        "stat": "gross_profit_rate",
+        "unit": "%",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "报价单",
+            "source_object_code": "/hs/quote/getQuoteList"
+          }
+        ],
+        "cost_field": "material_labor_cost",
+        "amount_field": "not_tax_all_quote_amount",
+        "person_field": "create_id"
+      },
+      "excel_code": "STF-12",
+      "category": "营销中心-业务员",
+      "description": "报价毛利率（%）=（报价未税 −（材料成本 + 加工费））÷ 报价未税 × 100%，按业务员分别计算（公司合计 = Σ(未税 − 料工费) ÷ Σ未税 × 100）；接口字段 not_tax_all_quote_amount = 报价未税总价、material_labor_cost = 料工费；**注意**：当前接口的 material_labor_cost = materialCost × qty（含附件费、**不含** processCost 加工费），待 CRM 侧改成 (materialCost + processCost) × qty 后本指标自动按新口径取数，无需改本系统。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 155,
+      "code": "marketing_person_order_count",
+      "name": "营销中心业务员接单量",
+      "formula": "接单量（单）= 当期有效订单条数（status=384，剔除作废），内贸 + 外贸订单明细按订单创建月 createtime 落当期，按业务员（下单人 create_id）分组；不按订单类型/是否出货过滤，也不看金额。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "单",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "value_mode": "count_orders",
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status"
+      },
+      "excel_code": null,
+      "category": "营销中心-业务员",
+      "description": "接单量（单）= 当期有效订单条数（status=384，剔除作废），内贸 + 外贸订单明细按订单创建月 createtime 落当期，按业务员（下单人 create_id）分组；不按订单类型/是否出货过滤，也不看金额。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 156,
+      "code": "marketing_person_order_price",
+      "name": "营销中心业务员客单价",
+      "formula": "客单价（元/单）= 接单未税（STF-13）÷ 接单量（当期有效订单条数），**按业务员分别相除**；分子取「营销中心业务员接单未税」，分母取「营销中心业务员接单量」，同为当月、同一业务员；公司合计 = Σ接单未税 ÷ Σ接单量；接单量为 0 的业务员不输出行。",
+      "measures": {
+        "kind": "metric_ratio_person",
+        "unit": "元/单",
+        "ratio_scale": 1,
+        "numerator_metric_codes": [
+          "marketing_person_order_intake_untaxed"
+        ],
+        "denominator_metric_codes": [
+          "marketing_person_order_count"
+        ]
+      },
+      "excel_code": "STF-50",
+      "category": "营销中心-业务员",
+      "description": "客单价（元/单）= 接单未税（STF-13）÷ 接单量（当期有效订单条数），**按业务员分别相除**；分子取「营销中心业务员接单未税」，分母取「营销中心业务员接单量」，同为当月、同一业务员；公司合计 = Σ接单未税 ÷ Σ接单量；接单量为 0 的业务员不输出行。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 157,
+      "code": "marketing_person_unship_order_inventory",
+      "name": "营销中心业务员库存（未出货订单）",
+      "formula": "库存（元）= 业务员名下**未出货订单**（orderAnalyze 的 chuhuo ≠ 1）的有效订单（status=384）未税金额合计（内贸 remove_taxes_freight + 外贸 receivable_CNY），按业务员（下单人 create_id）分组；订单明细按 24 期回看（未出货订单可能很久以前建单），同一订单只在其建单月的批次里出现，不会重复计算。**注意**：订单明细表没有成本字段（material_cost/process_cost 实测全为 0/NULL），因此暂以**未税金额**作为订单库存金额口径；与公司口径「营销中心外部订单库存（未税）」（来源 /hs/getNoChuHuo，不限建单月）存在差异，业务员版受 24 期回看窗口限制、偏低。",
+      "measures": {
+        "kind": "crm_order_push_person",
+        "stat": "amount",
+        "unit": "元",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "内贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "remove_taxes_freight"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=1"
+          },
+          {
+            "label": "外贸",
+            "amount_terms": [
+              {
+                "sign": 1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/order/orderAnalyze?type=2"
+          }
+        ],
+        "row_filters": [
+          {
+            "op": "not_equals",
+            "field": "chuhuo",
+            "value": "1"
+          }
+        ],
+        "person_field": "create_id",
+        "status_allow": [
+          "384"
+        ],
+        "status_field": "status",
+        "period_filter": false,
+        "lookback_periods": 24,
+        "backfill_lookback": true,
+        "push_status_allow": []
+      },
+      "excel_code": "STF-25",
+      "category": "营销中心-业务员",
+      "description": "库存（元）= 业务员名下**未出货订单**（orderAnalyze 的 chuhuo ≠ 1）的有效订单（status=384）未税金额合计（内贸 remove_taxes_freight + 外贸 receivable_CNY），按业务员（下单人 create_id）分组；订单明细按 24 期回看（未出货订单可能很久以前建单），同一订单只在其建单月的批次里出现，不会重复计算。**注意**：订单明细表没有成本字段（material_cost/process_cost 实测全为 0/NULL），因此暂以**未税金额**作为订单库存金额口径；与公司口径「营销中心外部订单库存（未税）」（来源 /hs/getNoChuHuo，不限建单月）存在差异，业务员版受 24 期回看窗口限制、偏低。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 158,
+      "code": "marketing_person_return_refund_untaxed",
+      "name": "营销中心业务员退货退款",
+      "formula": "退货退款（元，**负数口径**）= Σ退款订单金额，按业务员（退款单 create_id）分组；数据源为 CRM《退款订单明细》`/hs/getReturnOrderDetail`（已按退款状态 status=522 + 订单创建月 createtime 过滤）；内贸取 account（= receivable − taxes，去税）、外贸取 receivable_CNY（人民币应收）；实测 2026-09 明细 4 条合计 5,658.99，与公司口径 /hs/getReturnOrder 完全一致。与公司口径「营销中心退货/退款（负数）」一致按负数入账，便于对外出货净额 = 出货未税 + 设计服务收入 + 退货退款（负数）。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "元",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "退款订单明细",
+            "amount_terms": [
+              {
+                "sign": -1,
+                "field": "account"
+              },
+              {
+                "sign": -1,
+                "field": "receivable_CNY"
+              }
+            ],
+            "source_object_code": "/hs/getReturnOrderDetail"
+          }
+        ],
+        "person_field": "create_id",
+        "status_allow": [],
+        "status_field": null
+      },
+      "excel_code": "STF-16",
+      "category": "营销中心-业务员",
+      "description": "退货退款（元，**负数口径**）= Σ退款订单金额，按业务员（退款单 create_id）分组；数据源为 CRM《退款订单明细》`/hs/getReturnOrderDetail`（已按退款状态 status=522 + 订单创建月 createtime 过滤）；内贸取 account（= receivable − taxes，去税）、外贸取 receivable_CNY（人民币应收）；实测 2026-09 明细 4 条合计 5,658.99，与公司口径 /hs/getReturnOrder 完全一致。与公司口径「营销中心退货/退款（负数）」一致按负数入账，便于对外出货净额 = 出货未税 + 设计服务收入 + 退货退款（负数）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 159,
+      "code": "marketing_person_external_shipment_net_untaxed",
+      "name": "营销中心业务员对外出货净额",
+      "formula": "对外出货净额（元）= 货物出货未税（STF-14）+ 设计服务收入（STF-15）+ 退货退款（STF-16，负数），**按业务员分别相加**（kind=metric_sum_person，逐个业务员取三个组成指标的当期结果相加）；公司合计 = Σ各业务员；某个业务员当月没有某个组成指标的行时按 0 计入；三项口径同源（都按业务员维度算好后相加），与公司口径「营销中心对外出货未税销售额（净额）」一致。",
+      "measures": {
+        "kind": "metric_sum_person",
+        "unit": "元",
+        "component_metric_codes": [
+          "marketing_person_goods_shipment_untaxed",
+          "marketing_person_design_service_income",
+          "marketing_person_return_refund_untaxed"
+        ]
+      },
+      "excel_code": "STF-17",
+      "category": "营销中心-业务员",
+      "description": "对外出货净额（元）= 货物出货未税（STF-14）+ 设计服务收入（STF-15）+ 退货退款（STF-16，负数），**按业务员分别相加**（kind=metric_sum_person，逐个业务员取三个组成指标的当期结果相加）；公司合计 = Σ各业务员；某个业务员当月没有某个组成指标的行时按 0 计入；三项口径同源（都按业务员维度算好后相加），与公司口径「营销中心对外出货未税销售额（净额）」一致。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 160,
+      "code": "marketing_person_settlement_income",
+      "name": "营销中心业务员营销结算收入18%",
+      "formula": "营销结算收入18%（元）= 对外出货净额（STF-17）× 18%，**按业务员分别折算**（kind=metric_sum_person + scale=0.18，逐个业务员取当期净额乘 18%）；公司合计 = Σ各业务员；与公司口径「营销中心总收益（营销结算收入）」= 对外出货未税净额 × 18% 一致。",
+      "measures": {
+        "kind": "metric_sum_person",
+        "unit": "元",
+        "scale": 0.18,
+        "component_metric_codes": [
+          "marketing_person_external_shipment_net_untaxed"
+        ]
+      },
+      "excel_code": "STF-18",
+      "category": "营销中心-业务员",
+      "description": "营销结算收入18%（元）= 对外出货净额（STF-17）× 18%，**按业务员分别折算**（kind=metric_sum_person + scale=0.18，逐个业务员取当期净额乘 18%）；公司合计 = Σ各业务员；与公司口径「营销中心总收益（营销结算收入）」= 对外出货未税净额 × 18% 一致。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 161,
+      "code": "marketing_person_variable_expense_allocation",
+      "name": "营销中心业务员变动费用分摊",
+      "formula": "变动费用分摊（元）= 业务员收入（STF-18 营销结算收入18%）÷ 总收入（ORD-01 营销中心接单金额·未税）× 变动费用合计（CM-01），按业务员分别计算（kind=metric_alloc_person）；分母与费用池都取公司口径指标的当期合计行；**口径已确认（业务确认保持 ORD-01 作分母）**：各业务员分摊额合计小于 CM-01 变动费用合计属预期，差额部分不参与业务员分摊；如需改成「按各业务员收入占比分摊（合计=费用池）」，把 base_metric_codes 置空即可（改用 Σ业务员基数作分母）。",
+      "measures": {
+        "kind": "metric_alloc_person",
+        "unit": "元",
+        "base_metric_codes": [
+          "marketing_order_intake_untaxed"
+        ],
+        "pool_metric_codes": [
+          "marketing_variable_expense_total"
+        ],
+        "share_metric_codes": [
+          "marketing_person_settlement_income"
+        ]
+      },
+      "excel_code": "STF-26",
+      "category": "营销中心-业务员",
+      "description": "变动费用分摊（元）= 业务员收入（STF-18 营销结算收入18%）÷ 总收入（ORD-01 营销中心接单金额·未税）× 变动费用合计（CM-01），按业务员分别计算（kind=metric_alloc_person）；分母与费用池都取公司口径指标的当期合计行；**口径已确认（业务确认保持 ORD-01 作分母）**：各业务员分摊额合计小于 CM-01 变动费用合计属预期，差额部分不参与业务员分摊；如需改成「按各业务员收入占比分摊（合计=费用池）」，把 base_metric_codes 置空即可（改用 Σ业务员基数作分母）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 162,
+      "code": "marketing_person_fixed_expense_allocation",
+      "name": "营销中心业务员固定费用分摊",
+      "formula": "固定费用分摊（元）= 业务员收入（STF-18 营销结算收入18%）÷ 总收入（ORD-01 营销中心接单金额·未税）× 固定费用合计（CM-04），按业务员分别计算（kind=metric_alloc_person）；分母与费用池都取公司口径指标的当期合计行，口径与 STF-26 变动费用分摊保持一致（**已确认以 ORD-01 作分母**：各业务员分摊额合计小于固定费用合计属预期，差额不参与业务员分摊）。",
+      "measures": {
+        "kind": "metric_alloc_person",
+        "unit": "元",
+        "base_metric_codes": [
+          "marketing_order_intake_untaxed"
+        ],
+        "pool_metric_codes": [
+          "marketing_fixed_expense_total"
+        ],
+        "share_metric_codes": [
+          "marketing_person_settlement_income"
+        ]
+      },
+      "excel_code": "STF-28",
+      "category": "营销中心-业务员",
+      "description": "固定费用分摊（元）= 业务员收入（STF-18 营销结算收入18%）÷ 总收入（ORD-01 营销中心接单金额·未税）× 固定费用合计（CM-04），按业务员分别计算（kind=metric_alloc_person）；分母与费用池都取公司口径指标的当期合计行，口径与 STF-26 变动费用分摊保持一致（**已确认以 ORD-01 作分母**：各业务员分摊额合计小于固定费用合计属预期，差额不参与业务员分摊）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 163,
+      "code": "marketing_person_contribution_margin",
+      "name": "营销中心业务员边际贡献",
+      "formula": "边际贡献（元）= 营销结算收入18%（STF-18）− 变动费用分摊（STF-26），按业务员分别相减（kind=metric_diff_person，加项 − 减项，缺失项按 0）；公司合计 = Σ各业务员；与公司口径「营销中心边际贡献」= 总收益（营销结算收入）− 变动费用合计 同思路。",
+      "measures": {
+        "kind": "metric_diff_person",
+        "unit": "元",
+        "addend_metric_codes": [
+          "marketing_person_settlement_income"
+        ],
+        "subtrahend_metric_codes": [
+          "marketing_person_variable_expense_allocation"
+        ]
+      },
+      "excel_code": "STF-27",
+      "category": "营销中心-业务员",
+      "description": "边际贡献（元）= 营销结算收入18%（STF-18）− 变动费用分摊（STF-26），按业务员分别相减（kind=metric_diff_person，加项 − 减项，缺失项按 0）；公司合计 = Σ各业务员；与公司口径「营销中心边际贡献」= 总收益（营销结算收入）− 变动费用合计 同思路。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 164,
+      "code": "marketing_person_hq_allocation",
+      "name": "营销中心业务员总部分摊",
+      "formula": "总部分摊（元）= 对外出货净额（STF-17）× 8%，**按业务员分别折算**（kind=metric_sum_person + scale=0.08，逐个业务员取当期净额乘 8%）；公司合计 = Σ各业务员。",
+      "measures": {
+        "kind": "metric_sum_person",
+        "unit": "元",
+        "scale": 0.08,
+        "component_metric_codes": [
+          "marketing_person_external_shipment_net_untaxed"
+        ]
+      },
+      "excel_code": "STF-29",
+      "category": "营销中心-业务员",
+      "description": "总部分摊（元）= 对外出货净额（STF-17）× 8%，**按业务员分别折算**（kind=metric_sum_person + scale=0.08，逐个业务员取当期净额乘 8%）；公司合计 = Σ各业务员。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 165,
+      "code": "marketing_person_settlement_profit",
+      "name": "营销中心业务员结算收益",
+      "formula": "结算收益（元）= 边际贡献（STF-27）− 固定费用分摊（STF-28）− 总部分摊（STF-29），按业务员分别相减（kind=metric_diff_person，加项 1 个、减项 2 个，缺失项按 0）；公司合计 = Σ各业务员；其中 STF-18 营销结算收入按对外出货净额的 18% 折算。",
+      "measures": {
+        "kind": "metric_diff_person",
+        "unit": "元",
+        "addend_metric_codes": [
+          "marketing_person_contribution_margin"
+        ],
+        "subtrahend_metric_codes": [
+          "marketing_person_fixed_expense_allocation",
+          "marketing_person_hq_allocation"
+        ]
+      },
+      "excel_code": "STF-30",
+      "category": "营销中心-业务员",
+      "description": "结算收益（元）= 边际贡献（STF-27）− 固定费用分摊（STF-28）− 总部分摊（STF-29），按业务员分别相减（kind=metric_diff_person，加项 1 个、减项 2 个，缺失项按 0）；公司合计 = Σ各业务员；其中 STF-18 营销结算收入按对外出货净额的 18% 折算。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 166,
+      "code": "marketing_person_sales_per_capita",
+      "name": "营销中心业务员人均销售额",
+      "formula": "人均销售额（元）= 对外出货净额（STF-17），按业务员分别取值（kind=metric_sum_person，单一组成指标；业务员维度下即为该业务员的当期销售额）。如需按人数折算（如「净额合计 ÷ 业务员人数」或「÷ 在职营销人员数」），增配 scale 或再引入人数类指标即可，口径请与业务确认。",
+      "measures": {
+        "kind": "metric_sum_person",
+        "unit": "元",
+        "component_metric_codes": [
+          "marketing_person_external_shipment_net_untaxed"
+        ]
+      },
+      "excel_code": "STF-36",
+      "category": "营销中心-业务员",
+      "description": "人均销售额（元）= 对外出货净额（STF-17），按业务员分别取值（kind=metric_sum_person，单一组成指标；业务员维度下即为该业务员的当期销售额）。如需按人数折算（如「净额合计 ÷ 业务员人数」或「÷ 在职营销人员数」），增配 scale 或再引入人数类指标即可，口径请与业务确认。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 167,
+      "code": "marketing_person_profit_per_capita",
+      "name": "营销中心业务员人均利润贡献",
+      "formula": "人均利润贡献（元）= 结算收益（STF-30），按业务员分别取值（kind=metric_sum_person，单一组成指标；业务员维度下即为该业务员的当期结算收益）。如需按人数折算（如「结算收益合计 ÷ 业务员人数」），增配 scale 或再引入人数类指标即可。",
+      "measures": {
+        "kind": "metric_sum_person",
+        "unit": "元",
+        "component_metric_codes": [
+          "marketing_person_settlement_profit"
+        ]
+      },
+      "excel_code": "STF-37",
+      "category": "营销中心-业务员",
+      "description": "人均利润贡献（元）= 结算收益（STF-30），按业务员分别取值（kind=metric_sum_person，单一组成指标；业务员维度下即为该业务员的当期结算收益）。如需按人数折算（如「结算收益合计 ÷ 业务员人数」），增配 scale 或再引入人数类指标即可。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 168,
+      "code": "marketing_person_clue_count_30d",
+      "name": "营销中心业务员近30天线索数量",
+      "formula": "近30天线索数量（条）= Σ取数时点往前 30 天内创建的线索数（接口 /hs/clue/getClueList，按 startTime/endTime 滚动窗口），按线索负责人（principal_id）分组；未分配负责人的线索不计入；**当月每日重算即真正的「近30天」**；历史期间回补时取数时点 = 该期间 1 日，即「该期间起点的近30天」，如需改为「期间末月往前30天」请另行确认。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "条",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "线索",
+            "source_object_code": "/hs/clue/getClueList"
+          }
+        ],
+        "value_mode": "count_orders",
+        "person_field": "principal_id",
+        "status_allow": [],
+        "status_field": null,
+        "exclude_empty_person": true
+      },
+      "excel_code": "STF-42",
+      "category": "营销中心-业务员",
+      "description": "近30天线索数量（条）= Σ取数时点往前 30 天内创建的线索数（接口 /hs/clue/getClueList，按 startTime/endTime 滚动窗口），按线索负责人（principal_id）分组；未分配负责人的线索不计入；**当月每日重算即真正的「近30天」**；历史期间回补时取数时点 = 该期间 1 日，即「该期间起点的近30天」，如需改为「期间末月往前30天」请另行确认。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 169,
+      "code": "marketing_person_clue_deal_count_30d",
+      "name": "营销中心业务员近30天成交线索数量",
+      "formula": "近30天成交线索数量（条）= Σ取数时点往前 30 天内创建、且线索状态 status=1（已转换/成交）的线索数（接口 /hs/clue/getClueList），按线索负责人（principal_id）分组；未分配负责人的线索不计入；当月每日重算即真正的「近30天」，历史期间回补口径同 STF-42。",
+      "measures": {
+        "kind": "crm_person_amount",
+        "unit": "条",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "线索",
+            "source_object_code": "/hs/clue/getClueList"
+          }
+        ],
+        "value_mode": "count_orders",
+        "row_filters": [
+          {
+            "op": "equals",
+            "field": "status",
+            "value": "1"
+          }
+        ],
+        "person_field": "principal_id",
+        "status_allow": [],
+        "status_field": null,
+        "exclude_empty_person": true
+      },
+      "excel_code": "STF-43",
+      "category": "营销中心-业务员",
+      "description": "近30天成交线索数量（条）= Σ取数时点往前 30 天内创建、且线索状态 status=1（已转换/成交）的线索数（接口 /hs/clue/getClueList），按线索负责人（principal_id）分组；未分配负责人的线索不计入；当月每日重算即真正的「近30天」，历史期间回补口径同 STF-42。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 170,
+      "code": "marketing_person_clue_conversion_rate",
+      "name": "营销中心业务员线索转化率",
+      "formula": "线索转化率（%）= 近30天成交线索数量（STF-43）÷ 近30天线索数量（STF-42）× 100%，**按业务员分别相除**（kind=metric_ratio_person）；公司合计 = Σ成交线索 ÷ Σ线索数 × 100；分母（线索数）为 0 的业务员不输出行；口径与 STF-42/STF-43 一致（取数时点往前 30 天滚动窗口）。",
+      "measures": {
+        "kind": "metric_ratio_person",
+        "unit": "%",
+        "ratio_scale": 100,
+        "numerator_metric_codes": [
+          "marketing_person_clue_deal_count_30d"
+        ],
+        "denominator_metric_codes": [
+          "marketing_person_clue_count_30d"
+        ]
+      },
+      "excel_code": "STF-44",
+      "category": "营销中心-业务员",
+      "description": "线索转化率（%）= 近30天成交线索数量（STF-43）÷ 近30天线索数量（STF-42）× 100%，**按业务员分别相除**（kind=metric_ratio_person）；公司合计 = Σ成交线索 ÷ Σ线索数 × 100；分母（线索数）为 0 的业务员不输出行；口径与 STF-42/STF-43 一致（取数时点往前 30 天滚动窗口）。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    },
+    {
+      "id": 171,
+      "code": "marketing_person_total_labor_hours",
+      "name": "营销中心业务员总劳动时间",
+      "formula": "总劳动时间（小时）= 正常工作时间 + 加班时间（**企微打卡口径**），按员工汇总；数据源为 CRM 工时接口 `/hs/getWorkTime`（与公司口径「营销中心总劳动时间」同一批次）：`data.regularWork.detail`（每人正常工时，按天扣 1.5 小时午休）+ `data.overtime.byUser`（每人加班工时，超过 18 点扣 30 分钟吃饭）；人员键是**工号**（如 YG20014），按工号映射到 CRM 用户名/姓名与 master_person；覆盖范围是企微通讯录里工号 YG20 开头的**在职营销人员**（约 85~100 人），比下单业务员（约 53 人）多，未映射上 CRM 人员的按工号显示。",
+      "measures": {
+        "kind": "crm_worktime_person",
+        "unit": "小时",
+        "group_by": "person",
+        "components": [
+          {
+            "label": "工时",
+            "source_object_code": "/hs/getWorkTime"
+          }
+        ]
+      },
+      "excel_code": "STF-32",
+      "category": "营销中心-业务员",
+      "description": "总劳动时间（小时）= 正常工作时间 + 加班时间（**企微打卡口径**），按员工汇总；数据源为 CRM 工时接口 `/hs/getWorkTime`（与公司口径「营销中心总劳动时间」同一批次）：`data.regularWork.detail`（每人正常工时，按天扣 1.5 小时午休）+ `data.overtime.byUser`（每人加班工时，超过 18 点扣 30 分钟吃饭）；人员键是**工号**（如 YG20014），按工号映射到 CRM 用户名/姓名与 master_person；覆盖范围是企微通讯录里工号 YG20 开头的**在职营销人员**（约 85~100 人），比下单业务员（约 53 人）多，未映射上 CRM 人员的按工号显示。 数据来源：CRM《订单分析接口文档》《订单发货分析接口文档》（/hs/order/orderAnalyze / /hs/order/orderShipments，GET、无需鉴权，month 为整月）；业务员映射链为 create_id → source_person(raw_json.id) → 工号 → master_person。月指标，每日 02:30 重算当月，每次计算保留 calc_version 版本。"
+    }
+  ],
+  "meta_source_object": [
+    {
+      "id": 44,
+      "code": "/hs/order/orderAnalyze?type=1",
+      "name": "CRM 订单明细（内贸）",
+      "query_type": "api",
+      "request_template": "{\"month\": \"{{ now.strftime('%Y-%m') }}\"}",
+      "status": 0
+    },
+    {
+      "id": 45,
+      "code": "/hs/order/orderAnalyze?type=2",
+      "name": "CRM 订单明细（外贸）",
+      "query_type": "api",
+      "request_template": "{\"month\": \"{{ now.strftime('%Y-%m') }}\"}",
+      "status": 0
+    }
+  ],
+  "meta_sync_job": [
+    {
+      "id": 69,
+      "name": "CRM业务员指标-CRM 订单明细（内贸）",
+      "source_system_id": 3,
+      "source_object_id": 44,
+      "cron_expr": "0 0 2 * * ?",
+      "request_params": "{\"month\": \"{{ now.strftime('%Y-%m') }}\"}",
+      "sync_mode": "full",
+      "status": 0,
+      "description": "CRM 接口 /hs/order/orderAnalyze?type=1，按 month 取整月明细（未分页，单月约 1.3k 行）"
+    },
+    {
+      "id": 70,
+      "name": "CRM业务员指标-CRM 订单明细（外贸）",
+      "source_system_id": 3,
+      "source_object_id": 45,
+      "cron_expr": "0 0 2 * * ?",
+      "request_params": "{\"month\": \"{{ now.strftime('%Y-%m') }}\"}",
+      "sync_mode": "full",
+      "status": 0,
+      "description": "CRM 接口 /hs/order/orderAnalyze?type=2，按 month 取整月明细（未分页，单月约 1.3k 行）"
+    }
+  ]
+}

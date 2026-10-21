@@ -14,7 +14,8 @@
 
 产品线主数据源（2026-10-15 业务确认）：**CRM 产品型号字典**
 ``/hs/product/getProductModel``（型号字典，实测 523 行、字段 id / category_id / model /
-width / length / height），搭配**订单分析接口** ``/hs/order/orderAnalyze?type=1|2`` 使用。
+width / length / height），搭配**订单分析接口** ``/hs/order/orderAnalyze?type=1|2|3`` 使用
+（``type=3`` 为 2026-10-21 新增的零售订单范围）。
 
 **SKU 就取型号字典的 ``model``**（型号编码，如 J01B），不取 id、不取名称。
 **产品名称、规格不做**（2026-10-15 业务确认）：型号字典的 ``width / length / height``
@@ -48,6 +49,7 @@ PRODUCT_MODEL_OBJECT = "/hs/product/getProductModel"  # 型号字典｜产品线
 PRODUCT_CATEGORY_OBJECT = "/hs/product/getProductCategory"  # 系列字典｜上卷产品线大类
 ORDER_ANALYZE_DOMESTIC_OBJECT = "/hs/order/orderAnalyze?type=1"  # 订单分析（内贸）
 ORDER_ANALYZE_EXPORT_OBJECT = "/hs/order/orderAnalyze?type=2"  # 订单分析（外贸）
+ORDER_ANALYZE_RETAIL_OBJECT = "/hs/order/orderAnalyze?type=3"  # 订单分析（零售）
 
 # 实际成本来源：金蝶「成本计算单」（2026-10-16 业务更正 —— 实际成本取 ERP 成本计算单，按订单取）
 COST_BILL_OBJECT = "CB_CostCalBill"  # GetSysReportData 的 formid

@@ -50,7 +50,11 @@ ENTITY_CODE = "order_full_chain"
 ENTITY_NAME = "订单全链路"
 TABLE_NAME = "dwd_order_full_chain"
 
-ORDER_OBJECTS = ["/hs/order/orderAnalyze?type=1", "/hs/order/orderAnalyze?type=2"]
+ORDER_OBJECTS = [
+    "/hs/order/orderAnalyze?type=1",
+    "/hs/order/orderAnalyze?type=2",
+    "/hs/order/orderAnalyze?type=3",  # 2026-10-21 新增：零售订单范围
+]
 
 MENU_PARENT_NAME = "指标中心"
 MENU_NAME = "订单全链路"

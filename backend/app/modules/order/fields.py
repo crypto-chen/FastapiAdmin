@@ -133,6 +133,9 @@ SOURCE_KEYS: dict[str, list[str]] = {
 # 接单未税：内贸新旧名 + 外贸
 INTAKE_KEYS_DOMESTIC: list[str] = ["remove_taxes_freight", "amount"]
 INTAKE_KEYS_EXPORT: list[str] = ["receivable_CNY"]
+# 零售订单（orderAnalyze?type=3）：内贸/外贸零售行都回填 remove_taxes_freight，
+# 外贸零售行的 receivable_CNY 为空，故以 remove_taxes_freight 优先、receivable 兜底。
+INTAKE_KEYS_RETAIL: list[str] = ["remove_taxes_freight", "receivable"]
 
 # 成本：2026-10-13 新版字段名 + 旧字段名兜底
 MATERIAL_COST_KEYS: list[str] = ["material_cost_total", "material_cost"]

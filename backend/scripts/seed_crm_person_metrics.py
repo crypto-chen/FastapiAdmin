@@ -2,30 +2,34 @@
 
 数据源：CRM《订单分析接口文档》《订单发货分析接口文档》，域名
 ``http://crmapi.yonggubox.com``，均为 ``GET``、**无需登录/令牌**，
-入参为 ``type``（1=内贸 2=外贸）+ ``month``（``YYYY-MM``）。
+入参为 ``type``（1=内贸 2=外贸 3=零售）+ ``month``（``YYYY-MM``）。
 
 口径（已确认）：
 - 业务员 = 订单**下单人** ``create_id``；映射链
   ``create_id`` → ``source_person``（``source_type='crm'``，``raw_json.id``）
   → 工号（``raw_json.number``）→ ``master_person.code``（标准人员）。
+- 2026-10-21 起 CRM ``orderAnalyze`` 增加 ``type=3``（零售订单范围）。接单/订单数/
+  新老客户/未出货库存等订单类指标同时汇总内贸、外贸、零售三路；零售行金额取
+  ``remove_taxes_freight``，订单类型固定为零售（3）。发货明细接口尚无零售批次，
+  出货类指标维持原口径（零售出货取聚水潭）。
 - 接单未税（STF-13）归属月 = 收款日期 ``collectiontime`` 所在月（订单明细按建单月
   回看 12 期、前看 1 期，覆盖收款月与建单月错位的订单）；业务员下推金额（STF-23）
   同样按收款日期 ``collectiontime`` 所在月归期，并按建单月前看 2 期；
   其他接单类指标仍按订单创建月 ``createtime``；
   出货月 = 发货单审核月 ``check_date``。
-- 金额：内贸 ``remove_taxes_freight``（未税不含运费）、外贸 ``receivable_CNY``。
+- 金额：内贸/零售 ``remove_taxes_freight``（未税不含运费）、外贸 ``receivable_CNY``。
 - 只统计有效订单 ``status=384``，作废（``status=522``）剔除；
   离职业务员的历史数据保留（不按人员在职状态过滤）。
 
 三个指标（STF 为财务底稿科目编码，写入 ``metric_def.excel_code``）：
 - ``marketing_person_order_intake_untaxed`` **接单未税** STF-13
-  = Σ(内贸 ``remove_taxes_freight`` + 外贸 ``receivable_CNY``)，按 ``create_id`` 分组；
+  = Σ(内贸 ``remove_taxes_freight`` + 外贸 ``receivable_CNY`` + 零售 ``remove_taxes_freight``)，按 ``create_id`` 分组；
   按收款日期 ``collectiontime`` 所在月归期，订单明细回看 12 期、前看 1 期。
 - ``marketing_person_goods_shipment_untaxed`` **货物出货未税** STF-14
   = Σ(发货数量 × 该订单未税单价)，发货明细按 ``order_number`` 关联订单明细取业务员与单价；
   订单明细按 ``lookback_periods``（默认 12 期）回看，因为部分订单在发货月之前创建。
 - ``marketing_person_design_service_income`` **设计服务收入** STF-15
-  = Σ(内贸 ``design_remove_taxes_freight`` + 外贸 ``design_cost``)，按 ``create_id`` 分组。
+  = Σ(内贸 ``design_remove_taxes_freight`` + 外贸 ``design_cost`` + 零售设计服务收入)，按 ``create_id`` 分组。
 
 结果落 ``metric_value``：一行公司合计（``dept_code`` 为空）+ 每业务员一行
 （``dept_code``/``person_code`` = 业务员编码，``dept_name``/``person_name`` = 姓名），
@@ -98,10 +102,11 @@ MONTH_DATE_RANGE: dict = {
 # 指标计算遇到该期间没有批次时会自动按期间回补一次。
 CUSTOMER_CRON = "0 0 2 ? * MON"
 
-# 一个来源对象一条：同一接口按 type 拆成内贸/外贸两条（来源对象 code 唯一）
+# 一个来源对象一条：同一接口按 type 拆成内贸/外贸/零售三条（来源对象 code 唯一）
 SOURCE_OBJECTS = [
     {"code": f"{ORDER_PATH}?type=1", "name": "CRM 订单明细（内贸）"},
     {"code": f"{ORDER_PATH}?type=2", "name": "CRM 订单明细（外贸）"},
+    {"code": f"{ORDER_PATH}?type=3", "name": "CRM 订单明细（零售）"},
     {"code": f"{SHIPMENT_PATH}?type=1", "name": "CRM 发货明细（内贸）"},
     {"code": f"{SHIPMENT_PATH}?type=2", "name": "CRM 发货明细（外贸）"},
     {
@@ -140,7 +145,7 @@ DIMENSIONS = {"org": False, "dept": True, "person": True}
 
 
 def intake_components(extra: dict | None = None) -> list[dict]:
-    """接单类指标的内贸/外贸两个口径分支（金额字段不同，可选附加过滤条件）。"""
+    """接单类指标的内贸/外贸/零售三个口径分支（金额字段不同，可选附加过滤条件）。"""
     return [
         {
             "label": "内贸",
@@ -154,6 +159,12 @@ def intake_components(extra: dict | None = None) -> list[dict]:
             "amount_terms": [{"field": "receivable_CNY", "sign": 1}],
             **(extra or {}),
         },
+        {
+            "label": "零售",
+            "source_object_code": f"{ORDER_PATH}?type=3",
+            "amount_terms": [{"field": "remove_taxes_freight", "sign": 1}],
+            **(extra or {}),
+        },
     ]
 
 METRICS = [
@@ -161,7 +172,7 @@ METRICS = [
         "code": "marketing_person_order_intake_untaxed",
         "name": "营销中心业务员接单未税",
         "excel_code": "STF-13",
-        "rule": "接单未税（元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，"
+        "rule": "接单未税（元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY + 零售 remove_taxes_freight)，"
         "只统计有效订单 status=384（剔除作废 522），按收款日期 collectiontime 所在月落到当期，"
         "按业务员（下单人 create_id）分组；订单明细按建单月回看 12 期、前看 1 期，"
         "覆盖收款月与建单月错位的订单。",
@@ -175,18 +186,7 @@ METRICS = [
             "lookback_periods": 12,
             "forward_periods": 1,
             "backfill_lookback": True,
-            "components": [
-                {
-                    "label": "内贸",
-                    "source_object_code": f"{ORDER_PATH}?type=1",
-                    "amount_terms": [{"field": "remove_taxes_freight", "sign": 1}],
-                },
-                {
-                    "label": "外贸",
-                    "source_object_code": f"{ORDER_PATH}?type=2",
-                    "amount_terms": [{"field": "receivable_CNY", "sign": 1}],
-                },
-            ],
+            "components": intake_components(),
         },
     },
     {
@@ -226,7 +226,7 @@ METRICS = [
         "code": "marketing_person_design_service_income",
         "name": "营销中心业务员设计服务收入",
         "excel_code": "STF-15",
-        "rule": "设计服务收入（元）= Σ(内贸 design_remove_taxes_freight + 外贸 design_cost)，"
+        "rule": "设计服务收入（元）= Σ(内贸 design_remove_taxes_freight + 外贸 design_cost + 零售设计服务收入)，"
         "只统计有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组；"
         "当月无设计服务收入的业务员不输出行（按 0 处理）。",
         "measures": {
@@ -245,6 +245,14 @@ METRICS = [
                     "label": "外贸",
                     "source_object_code": f"{ORDER_PATH}?type=2",
                     "amount_terms": [{"field": "design_cost", "sign": 1}],
+                },
+                {
+                    "label": "零售",
+                    "source_object_code": f"{ORDER_PATH}?type=3",
+                    "amount_terms": [
+                        {"field": "design_remove_taxes_freight", "sign": 1},
+                        {"field": "design_cost", "sign": 1},
+                    ],
                 },
             ],
         },
@@ -285,7 +293,7 @@ METRICS = [
         "code": "marketing_person_order_push_untaxed",
         "name": "营销中心业务员下推金额",
         "excel_code": "STF-23",
-        "rule": "下推金额（元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，"
+        "rule": "下推金额（元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY + 零售 remove_taxes_freight)，"
         "取已下推订单（erp_push_status=1），按 **收款日期 collectiontime 所在月落到当期**，"
         "只统计有效订单 status=384，按业务员（下单人 create_id）分组；"
         "订单明细按 12 期回看、向前看 2 期（覆盖收款月早于/晚于建单月的订单）。",
@@ -315,6 +323,11 @@ METRICS = [
                     "source_object_code": f"{ORDER_PATH}?type=2",
                     "amount_terms": [{"field": "receivable_CNY", "sign": 1}],
                 },
+                {
+                    "label": "零售",
+                    "source_object_code": f"{ORDER_PATH}?type=3",
+                    "amount_terms": [{"field": "remove_taxes_freight", "sign": 1}],
+                },
             ],
         },
     },
@@ -322,7 +335,7 @@ METRICS = [
         "code": "marketing_person_order_push_period",
         "name": "营销中心业务员下推周期",
         "excel_code": "STF-24",
-        "rule": "下推周期（天）= Σ(下推时间 erp_push_date − 建单时间 createtime) ÷ 下推订单数，"
+        "rule": "下推周期（天）= Σ(下推时间 erp_push_date − 建单时间 createtime) ÷ 下推订单数（含零售订单），"
         "按业务员分别计算（订单数加权，不是各订单周期的简单平均）：取已下推订单"
         "（erp_push_status=1）且下推时间落在当期、订单有效 status=384；"
         "公司合计同样按「天数和 ÷ 订单数和」加权。",
@@ -349,6 +362,11 @@ METRICS = [
                     "label": "外贸",
                     "source_object_code": f"{ORDER_PATH}?type=2",
                     "amount_terms": [{"field": "receivable_CNY", "sign": 1}],
+                },
+                {
+                    "label": "零售",
+                    "source_object_code": f"{ORDER_PATH}?type=3",
+                    "amount_terms": [{"field": "remove_taxes_freight", "sign": 1}],
                 },
             ],
         },
@@ -536,13 +554,13 @@ METRICS = [
         },
     },
     {
-        # 「接单量」= 当期有效订单条数（内贸 + 外贸），客单价的分母；
+    # 「接单量」= 当期有效订单条数（内贸 + 外贸 + 零售），客单价的分母；
         # 财务底稿编码待补：确定后填 excel_code 并重跑本脚本即可
         "code": "marketing_person_order_count",
         "name": "营销中心业务员接单量",
         "excel_code": None,
         "rule": "接单量（单）= 当期有效订单条数（status=384，剔除作废），"
-        "内贸 + 外贸订单明细按订单创建月 createtime 落当期，按业务员（下单人 create_id）分组；"
+        "内贸 + 外贸 + 零售订单明细按订单创建月 createtime 落当期，按业务员（下单人 create_id）分组；"
         "不按订单类型/是否出货过滤，也不看金额。",
         "measures": {
             "kind": "crm_person_amount",
@@ -574,7 +592,7 @@ METRICS = [
         "name": "营销中心业务员库存（未出货订单）",
         "excel_code": "STF-25",
         "rule": "库存（元）= 业务员名下**未出货订单**（orderAnalyze 的 chuhuo ≠ 1）的有效订单"
-        "（status=384）未税金额合计（内贸 remove_taxes_freight + 外贸 receivable_CNY），"
+        "（status=384）未税金额合计（内贸 remove_taxes_freight + 外贸 receivable_CNY + 零售 remove_taxes_freight），"
         "按业务员（下单人 create_id）分组；订单明细按 24 期回看（未出货订单可能很久以前建单），"
         "同一订单只在其建单月的批次里出现，不会重复计算。"
         "**注意**：订单明细表没有成本字段（material_cost/process_cost 实测全为 0/NULL），"
@@ -602,6 +620,11 @@ METRICS = [
                     "label": "外贸",
                     "source_object_code": f"{ORDER_PATH}?type=2",
                     "amount_terms": [{"field": "receivable_CNY", "sign": 1}],
+                },
+                {
+                    "label": "零售",
+                    "source_object_code": f"{ORDER_PATH}?type=3",
+                    "amount_terms": [{"field": "remove_taxes_freight", "sign": 1}],
                 },
             ],
         },

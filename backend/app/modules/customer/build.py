@@ -39,6 +39,7 @@ CUSTOMER_MASTER_OBJECT = "/hs/customer/getCusotmerList"
 PRODUCT_DICT_OBJECT = "/hs/product/getProductCategory"
 ORDER_OBJECT_DOMESTIC = "/hs/order/orderAnalyze?type=1"
 ORDER_OBJECT_EXPORT = "/hs/order/orderAnalyze?type=2"
+ORDER_OBJECT_RETAIL = "/hs/order/orderAnalyze?type=3"
 PRODUCT_CATEGORY_ROOT_ID = 1
 # 容器节点：其子类才是真正的产品线大类（钣金外壳 / CNC外壳 / 面板…）
 CONTAINER_PRODUCT_NAMES = {"未知", "其它", "新产品"}
@@ -266,7 +267,7 @@ def product_line_map(rows: list[dict]) -> dict[int, str]:
 async def _order_region_index(db: AsyncSession) -> dict[str, str]:
     """订单号 → 地区（内贸 region / 外贸 country），取自 CRM 订单明细批次。"""
     index: dict[str, str] = {}
-    for object_code in (ORDER_OBJECT_DOMESTIC, ORDER_OBJECT_EXPORT):
+    for object_code in (ORDER_OBJECT_DOMESTIC, ORDER_OBJECT_EXPORT, ORDER_OBJECT_RETAIL):
         for row in await _latest_run_rows(db, object_code):
             number = str(row.get("number") or "").strip()
             if not number:
@@ -424,7 +425,8 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     buckets: dict[Any, dict[str, Any]] = {}
     for row in order_rows:
         extra = row.extra or {}
-        key = row.customer_id or extra.get("customer_number") or row.customer_name or 0
+        # 订单宽表没有 customer_name 物理列，客户名放在 extra（零售单也可能没有 customer_id）
+        key = row.customer_id or extra.get("customer_number") or extra.get("customer_name") or 0
         bucket = buckets.setdefault(
             key,
             {

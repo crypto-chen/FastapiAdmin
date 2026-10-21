@@ -3,7 +3,7 @@
 关联链路（详见 ``docs/订单全链路数据方案.md`` §5）：
 
 ```
-orderAnalyze(内贸/外贸) ── 订单主表（一行一单）
+orderAnalyze(内贸/外贸/零售) ── 订单主表（一行一单）
     ├─ orderShipments 按 order_number        → 出货未税
     ├─ PRD_MO 按 FSaleOrderNo(取前两段)      → 生产工单/入库数量/生产周期/实际交期
     ├─ getReturnOrderDetail 按 number        → 退货退款
@@ -34,6 +34,7 @@ from .fields import (
     DATETIME_KEYS,
     INTAKE_KEYS_DOMESTIC,
     INTAKE_KEYS_EXPORT,
+    INTAKE_KEYS_RETAIL,
     MATERIAL_COST_KEYS,
     MONEY_SCALE,
     PROCESS_COST_KEYS,
@@ -46,6 +47,9 @@ logger = logging.getLogger(__name__)
 
 ORDER_OBJECT_DOMESTIC = "/hs/order/orderAnalyze?type=1"
 ORDER_OBJECT_EXPORT = "/hs/order/orderAnalyze?type=2"
+# CRM 2026-10-21 起 orderAnalyze 增加 type=3（零售订单范围），返回 LS 开头的零售单；
+# 零售单横跨内贸/外贸（行内 ``type`` = 1/2），订单类型统一记为 3。
+ORDER_OBJECT_RETAIL = "/hs/order/orderAnalyze?type=3"
 SHIPMENT_OBJECT_DOMESTIC = "/hs/order/orderShipments?type=1"
 SHIPMENT_OBJECT_EXPORT = "/hs/order/orderShipments?type=2"
 # 发货明细（发货时间口径，2026-10-16 接入）：按 order_id 关联，用于出货数量
@@ -59,6 +63,7 @@ MO_OBJECT = "PRD_MO"
 
 TRADE_DOMESTIC = "domestic"
 TRADE_EXPORT = "export"
+TRADE_RETAIL = "retail"
 
 # 订单类型：CRM order_type 1=批量 2=打样 3=零售（宽表展示名称，编码另存 order_type_code）
 ORDER_TYPE_NAMES = {"1": "批量", "2": "打样", "3": "零售"}
@@ -75,6 +80,11 @@ FORWARD_PERIODS = 12
 # --------------------------------------------------------------------------- #
 def _is_empty(value: Any) -> bool:
     return value is None or value == "" or value == "-"
+
+
+def is_void_order(row: dict) -> bool:
+    """CRM 作废单（status=522）不进入订单全链路。"""
+    return str(row.get("status") or "").strip() == "522"
 
 
 def pick(row: dict, keys: list[str]) -> Any:
@@ -337,10 +347,12 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
         # 订单用一个期间内的全部批次合并（旧批次业务属性 + 新批次成本字段）
         domestic_batches, order_rows_domestic = await merged_order_rows(db, ORDER_OBJECT_DOMESTIC, period_value)
         export_batches, order_rows_export = await merged_order_rows(db, ORDER_OBJECT_EXPORT, period_value)
+        retail_batches, order_rows_retail = await merged_order_rows(db, ORDER_OBJECT_RETAIL, period_value)
         batches["order_domestic"] = domestic_batches
         batches["order_export"] = export_batches
-        if not order_rows_domestic and not order_rows_export:
-            raise ValueError(f"期间 {period_value} 没有 CRM 订单明细批次（orderAnalyze 内贸/外贸）")
+        batches["order_retail"] = retail_batches
+        if not order_rows_domestic and not order_rows_export and not order_rows_retail:
+            raise ValueError(f"期间 {period_value} 没有 CRM 订单明细批次（orderAnalyze 内贸/外贸/零售）")
 
         # 发货明细按「该期间及之后」取：跨月发货（9 月接单、10 月发货）才算得到
         shipment_rows_domestic = await forward_rows(db, SHIPMENT_OBJECT_DOMESTIC, period_value)
@@ -421,17 +433,32 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
         records: list[OrderFullChainModel] = []
 
         seen_orders: set[str] = set()
-        for trade_type, rows in ((TRADE_DOMESTIC, order_rows_domestic), (TRADE_EXPORT, order_rows_export)):
+        order_groups = (
+            (TRADE_DOMESTIC, order_rows_domestic, False),
+            (TRADE_EXPORT, order_rows_export, False),
+            (TRADE_RETAIL, order_rows_retail, True),
+        )
+        for trade_type, rows, is_retail in order_groups:
             for row in rows:
                 number = str(row.get("number") or "").strip()
+                # 作废单（status=522）不进入宽表；零售批次作废比例较高，必须剔除
+                if is_void_order(row):
+                    continue
                 # 同一订单号可能同时出现在内贸/外贸批次（或历史多批），只保留第一条
                 if number and number in seen_orders:
                     continue
                 if number:
                     seen_orders.add(number)
+                row_trade_type = trade_type
+                if is_retail:
+                    # 零售单行内 type：1 内贸、2 外贸；仅用于贸易类型维度，订单类型仍是零售
+                    retail_type = str(row.get("type") or "").strip()
+                    row_trade_type = TRADE_DOMESTIC if retail_type == "1" else (
+                        TRADE_EXPORT if retail_type == "2" else TRADE_RETAIL
+                    )
                 record, quality = build_record(
                     row,
-                    trade_type,
+                    row_trade_type,
                     period_value,
                     calc_version,
                     customer_map,
@@ -443,6 +470,7 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
                     model_names,
                     category_names,
                     base_names,
+                    is_retail=is_retail,
                 )
                 if record is None:
                     continue
@@ -504,6 +532,7 @@ def build_record(
     model_names: dict[int, str],
     category_names: dict[int, str],
     base_names: dict[int, str],
+    is_retail: bool = False,
 ) -> tuple[OrderFullChainModel | None, list[str]]:
     """单行 CRM 订单 → 宽表记录。返回 (记录, 质量标记列表)。"""
     number = str(row.get("number") or "").strip()
@@ -526,7 +555,7 @@ def build_record(
     extra["product_series"] = category_names.get(int(series_id)) if series_id is not None else None
     # 订单类型：宽表 extra["order_type"] 存名称（批量/打样/零售，覆盖物理列里的编码），
     # 物理列 order_type 仍是 1/2/3 —— 供 /order/page 与开放接口按编码过滤
-    order_type_code = str(pick(row, SOURCE_KEYS["order_type"]) or "").strip()
+    order_type_code = "3" if is_retail else str(pick(row, SOURCE_KEYS["order_type"]) or "").strip()
     extra["order_type_code"] = order_type_code or None
     extra["order_type"] = ORDER_TYPE_NAMES.get(order_type_code)
     # 新老客户：同样存名称，编码另存 is_new_code
@@ -542,7 +571,13 @@ def build_record(
     extra["shop"] = base_names.get(int(shop_id)) if shop_id is not None else None
 
     qty = to_number(pick(row, SOURCE_KEYS["qty"]))
-    intake = to_number(pick(row, INTAKE_KEYS_DOMESTIC if trade_type == TRADE_DOMESTIC else INTAKE_KEYS_EXPORT))
+    if is_retail:
+        intake_keys = INTAKE_KEYS_RETAIL
+    elif trade_type == TRADE_DOMESTIC:
+        intake_keys = INTAKE_KEYS_DOMESTIC
+    else:
+        intake_keys = INTAKE_KEYS_EXPORT
+    intake = to_number(pick(row, intake_keys))
 
     material_cost = to_number(pick(row, MATERIAL_COST_KEYS))
     process_cost = to_number(pick(row, PROCESS_COST_KEYS))
@@ -707,7 +742,7 @@ def build_record(
         calc_version=calc_version,
         order_id=order_id,
         trade_type=trade_type,
-        order_type=str(pick(row, SOURCE_KEYS["order_type"])) if pick(row, SOURCE_KEYS["order_type"]) is not None else None,
+        order_type=order_type_code or None,
         customer_id=int(customer_id) if customer_id is not None else None,
         salesman_code=str(pick(row, SOURCE_KEYS["salesman_code"])) if pick(row, SOURCE_KEYS["salesman_code"]) is not None else None,
         order_date=order_date,
