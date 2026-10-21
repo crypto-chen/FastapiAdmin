@@ -30,7 +30,21 @@ CRM `/hs/order/orderAnalyze` 新增 `type=3`：
 
 ## 服务器更新
 
-在服务器项目根目录拉取代码后，进入 `backend`：
+在服务器项目根目录拉取代码后，直接执行 Python 一键脚本（Windows / Linux 通用）：
+
+```bash
+python deploy/order-analyze-retail-20261021/deploy.py --apply
+```
+
+指定服务名时：
+
+```bash
+python deploy/order-analyze-retail-20261021/deploy.py --apply --service fastapiadmin
+```
+
+不带 `--apply` 只预演命令。脚本日志写入 `deploy/order-analyze-retail-20261021/deploy_run.log`。
+
+等价的手工步骤（进入 `backend`）：
 
 ```bash
 git pull origin master
