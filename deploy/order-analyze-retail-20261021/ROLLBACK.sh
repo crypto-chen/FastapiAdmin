@@ -22,11 +22,17 @@ for rel in \
 done
 
 echo "[2/3] 回滚数据库（删除本次新版本、type=3 批次、恢复指标定义）"
-cd "$ROOT/backend"
-python ../deploy/order-analyze-retail-20261021/rollback_retail.py --since "${SINCE:-2026-10-21 09:50:00}"
+if [ "${CODE_ONLY:-0}" = "1" ]; then
+  echo "  CODE_ONLY=1：跳过数据库回滚"
+else
+  cd "$ROOT/backend"
+  python ../deploy/order-analyze-retail-20261021/rollback_retail.py --since "${SINCE:-2026-10-21 09:50:00}"
+fi
 
 echo "[3/3] 重启后端"
-if [ -n "${SERVICE:-}" ]; then
+if [ "${CODE_ONLY:-0}" = "1" ]; then
+  echo "  CODE_ONLY=1：跳过重启"
+elif [ -n "${SERVICE:-}" ]; then
   systemctl restart "$SERVICE"
   systemctl status "$SERVICE" --no-pager | head -5
 else
