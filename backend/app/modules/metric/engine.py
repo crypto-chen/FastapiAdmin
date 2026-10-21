@@ -2029,8 +2029,12 @@ async def _sum_component_values_by_org(
     return {org_id: round(value, 4) for org_id, value in totals.items()}, row_count
 
 
-async def _load_run_payload(job_id: int, period_value: str) -> dict | None:
+async def _load_run_payload(job_id: int, period_value: str, merge_runs: bool = True) -> dict | None:
     """读取某同步任务在指定期间最近一次成功批次的原始返回（无批次返回 ``None``）。
+
+    ``merge_runs=False`` 时只返回最近一次成功批次，不合并同期间其它批次；
+    滚动窗口快照类来源（如线索列表）必须用这个模式，否则同月多次同步会把
+    不同窗口的行累加成一个超长窗口。
 
     同一期间存在多个成功批次时，对**按单号可合并**的明细做逐行合并：行内含 ``number``
     （典型是 CRM ``orderAnalyze``）时，把该期间所有成功批次按 ``number`` 合并，
@@ -2047,6 +2051,8 @@ async def _load_run_payload(job_id: int, period_value: str) -> dict | None:
             return None
         payload = dict(run.rows_json or {})
         rows = _payload_rows(payload)
+        if not merge_runs:
+            return payload
         if not rows or not isinstance(rows[0], dict) or "number" not in rows[0]:
             return payload
         if not period_value:
@@ -2092,6 +2098,8 @@ async def _aggregate_crm_person_amount(context: dict) -> dict:
       通常不同月，同样按 ``lookback_periods`` 回看）；``stat`` = ``amount`` 输出下推金额，
       ``period_days`` 输出下推周期 = Σ(下推时间 − 建单时间) ÷ 下推订单数 —— 平均值不能逐单
       相加，因此业务员与公司合计都按「天数和 ÷ 订单数和」加权。
+    - ``use_latest_batch_only``：只取最近一次成功批次，不合并同期间其它批次；
+      滚动窗口快照（线索列表）必须开启。
     """
     config = context["config"]
     kind = str(config.get("kind") or "")
@@ -2108,6 +2116,7 @@ async def _aggregate_crm_person_amount(context: dict) -> dict:
     is_customer_count = kind == CRM_PERSON_AMOUNT_KIND and value_mode == "count_customers"
     is_order_count = kind == CRM_PERSON_AMOUNT_KIND and value_mode == "count_orders"
     omit_zero = bool(config.get("omit_zero_persons", True))
+    merge_runs = not bool(config.get("use_latest_batch_only"))
     # 累加器：普通口径累加 value；平均口径累加 days / orders（orders 兼作行数）
     buckets: dict[str, dict] = {}
     matched_rows = 0
@@ -2126,11 +2135,11 @@ async def _aggregate_crm_person_amount(context: dict) -> dict:
 
     async def load_rows(job_id: int, period_value: str, allow_backfill: bool) -> list:
         """读某期批次明细；缺失且允许时按期间回补一次。"""
-        payload = await _load_run_payload(job_id, period_value)
+        payload = await _load_run_payload(job_id, period_value, merge_runs=merge_runs)
         if payload is None and allow_backfill and backfill_lookback:
             await execute_meta_sync_job(job_id, period_value=period_value)
             backfilled_periods.append(period_value)
-            payload = await _load_run_payload(job_id, period_value)
+            payload = await _load_run_payload(job_id, period_value, merge_runs=merge_runs)
         return (_payload_rows(payload) or []) if payload is not None else []
 
     async with async_db_session() as db:

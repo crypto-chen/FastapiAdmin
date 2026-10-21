@@ -804,7 +804,7 @@ METRICS = [
         "name": "营销中心业务员近30天线索数量",
         "excel_code": "STF-42",
         "rule": "近30天线索数量（条）= Σ取数时点往前 30 天内创建的线索数"
-        "（接口 /hs/clue/getClueList，按 startTime/endTime 滚动窗口），"
+        "（接口 /hs/clue/getClueList，按 startTime/endTime 滚动窗口，取最近一次成功批次），"
         "按线索负责人（principal_id）分组；未分配负责人的线索不计入；"
         "**当月每日重算即真正的「近30天」**；历史期间回补时取数时点 = 该期间 1 日，"
         "即「该期间起点的近30天」，如需改为「期间末月往前30天」请另行确认。",
@@ -818,6 +818,8 @@ METRICS = [
             # 线索表没有订单状态：不按订单 status 过滤（线索状态用 row_filters 单独控制）
             "status_field": None,
             "status_allow": [],
+            # 线索接口是滚动窗口快照：同月多次同步只取最近一次，避免把不同窗口的行合并
+            "use_latest_batch_only": True,
             "components": [{"label": "线索", "source_object_code": CLUE_PATH}],
         },
     },
@@ -825,7 +827,7 @@ METRICS = [
         "code": "marketing_person_clue_deal_count_30d",
         "name": "营销中心业务员近30天成交线索数量",
         "excel_code": "STF-43",
-        "rule": "近30天成交线索数量（条）= Σ取数时点往前 30 天内创建、且线索状态 status=1（已转换/成交）"
+        "rule": "近30天成交线索数量（条）= Σ取数时点往前 30 天内创建、且线索已转化订单 deal=1（已成交）"
         "的线索数（接口 /hs/clue/getClueList），按线索负责人（principal_id）分组；"
         "未分配负责人的线索不计入；当月每日重算即真正的「近30天」，历史期间回补口径同 STF-42。",
         "measures": {
@@ -837,7 +839,8 @@ METRICS = [
             "unit": "条",
             "status_field": None,
             "status_allow": [],
-            "row_filters": [{"field": "status", "op": "equals", "value": "1"}],
+            "use_latest_batch_only": True,
+            "row_filters": [{"field": "deal", "op": "equals", "value": "1"}],
             "components": [{"label": "线索", "source_object_code": CLUE_PATH}],
         },
     },
