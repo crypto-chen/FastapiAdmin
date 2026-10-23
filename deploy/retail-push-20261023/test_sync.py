@@ -26,7 +26,7 @@ def main() -> None:
 
     payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
     headers = {"X-Request-ID": str(payload.get("request_id") or "retail-test")}
-    with httpx.Client(timeout=60) as client:
+    with httpx.Client(timeout=60, follow_redirects=True) as client:
         response = client.post(args.url, json=payload, headers=headers)
     print(f"HTTP {response.status_code}")
     try:
