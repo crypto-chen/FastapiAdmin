@@ -1,0 +1,46 @@
+Retail push + admin page verification
+Date: 2026-10-23
+Commit: b9ce7ea2 (pushed to origin/master)
+
+Backend tests:
+  cd backend
+  python -m pytest tests/test_retail_open_sync.py -q
+  Result: 6 passed in 230.63s
+
+Backend lint:
+  ruff check ...
+  Result: All checks passed!
+
+Migration:
+  python scripts/check_retail_migration.py
+  Result:
+    UPGRADE OK: 3 tables + 2 open_client columns + indexes
+    DOWNGRADE OK: retail tables and open_client columns removed
+
+Frontend:
+  cd frontend/web
+  pnpm run type-check
+  Result: exit 0
+
+  pnpm run build:prod
+  Result: built in 1m 59s (exit 0)
+
+Local push test:
+  python deploy/retail-push-20261023/test_sync.py --url http://127.0.0.1:8001/open/v1/retail/orders/sync
+  Result:
+    HTTP 200
+    received=2, created=2, failed=0, periods=["2026-10"]
+
+Metric replay test after creating the default push job:
+  received=2, unchanged=2, failed=0
+  metric_sync: {"period_value":"2026-10","status":"published","run_id":2505,"row_count":2}
+
+Admin API:
+  /retail/periods, /retail/orders/page, /retail/orders/{id},
+  /retail/batches/page, /retail/batches/{id} registered and protected by
+  module_retail:order:query / module_retail:batch:query.
+
+Menu:
+  python scripts/seed_retail_menu.py
+  Result: 零售订单菜单 id=221
+  Menu path: 开放接口 → 零售订单同步
