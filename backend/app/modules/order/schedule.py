@@ -1,12 +1,13 @@
 """订单全链路构建调度。
 
-每天 **02:10** 构建当期（晚于源同步 02:00，早于指标计算 02:30）；
-**每月 1 日**先强制重拉上月各来源批次再构建上月，避免上月最后一天的变动丢失。
+凌晨 **02:10** 构建当期（晚于源同步 02:00，早于指标计算 02:30）；中午 12:20、
+晚上 18:20 由指标轮次在同步完成后调用。**每月 1 日的凌晨轮次**先强制重拉上月
+各来源批次再构建上月，避免上月最后一天的变动丢失。
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
@@ -14,6 +15,7 @@ from sqlalchemy import select
 from app.core.ap_scheduler import scheduler
 from app.core.database import async_db_session
 from app.core.logger import logger
+from app.core.schedule_plan import SCHEDULE_TZ, is_daytime_run
 from app.modules.metadata.model import MetaSyncJobModel, SourceObjectModel
 from app.modules.metadata.sync import execute_meta_sync_job
 
@@ -123,7 +125,7 @@ async def execute_order_build_job() -> None:
     必须把 9 月的订单批次也重拉一次再重建。
     """
     try:
-        if date.today().day == 1:
+        if datetime.now(SCHEDULE_TZ).day == 1 and not is_daytime_run():
             period = previous_period()
             await refresh_period_sources(period)
             result = await build_one_period(period)

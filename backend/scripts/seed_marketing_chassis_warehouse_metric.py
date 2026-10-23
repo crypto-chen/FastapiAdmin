@@ -63,7 +63,7 @@ STANDARD_TABLE_NAME = "dwd_inventory_inout_stock_summary"
 METRIC_CODE = "marketing_chassis_warehouse_balance"
 METRIC_NAME = "营销中心机箱成品仓"
 SYNC_JOB_NAME = "存货收发存汇总表-组织100"
-SYNC_CRON = "0 0 2 * * ?"  # 每天 02:00，早于指标调度的 02:30
+SYNC_CRON = "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"  # 每天 02:00/12:20/18:20
 
 # 组织与仓库：ERP100 组织（编码 100）下的机箱成品仓（仓库编码 JXCPC）
 ORG_CODE = "100"

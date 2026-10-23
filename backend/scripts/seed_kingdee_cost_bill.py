@@ -134,7 +134,7 @@ async def main() -> None:
         job.source_system_id = system.id
         job.source_object_id = source_object.id
         job.org_code = ORG_CODE
-        job.cron_expr = "0 0 2 * * ?"
+        job.cron_expr = "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"
         job.request_params = REQUEST_PARAMS
         job.variables = VARIABLES
         job.sync_mode = "full"

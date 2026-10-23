@@ -5,11 +5,12 @@ import asyncio
 import re
 from datetime import UTC, date, datetime, timedelta
 
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.base import BaseTrigger
 
 from app.core.ap_scheduler import scheduler
 from app.core.database import async_db_session
 from app.core.logger import logger
+from app.core.schedule_plan import build_cron_trigger, cron_has_fire_at, normalize_sync_cron
 from app.modules.crm.model import CrmConnectionModel
 from app.modules.crm.service import build_client as build_crm_client
 from app.modules.erp.jushuitan.model import JushuitanConnectionModel
@@ -31,26 +32,9 @@ SYNC_RETRY_TIMES = 3
 SYNC_RETRY_DELAY = 2.0
 
 
-def _build_trigger(cron_expr: str) -> CronTrigger:
-    fields = (cron_expr or "").strip().split()
-    if len(fields) == 5:
-        fields = ["0", *fields]
-    if len(fields) not in (6, 7):
-        raise ValueError("Cron 表达式格式错误，应为 5/6/7 段")
-    fields = [field if field != "?" else "*" for field in fields]
-    if len(fields) == 6:
-        fields.append("*")
-    second, minute, hour, day, month, day_of_week, year = fields
-    return CronTrigger(
-        second=second,
-        minute=minute,
-        hour=hour,
-        day=day,
-        month=month,
-        day_of_week=day_of_week,
-        year=year,
-        timezone="Asia/Shanghai",
-    )
+def _build_trigger(cron_expr: str) -> BaseTrigger:
+    """构建单个或多个 Cron 表达式对应的触发器。"""
+    return build_cron_trigger(cron_expr)
 
 
 def register_meta_sync_job(job: MetaSyncJobModel) -> None:
@@ -249,10 +233,11 @@ def _safe_eval(expression: str, context: dict) -> object:
 
 
 async def reconcile_meta_sync_jobs() -> None:
-    """启动时把启用的同步任务恢复到 APScheduler。"""
+    """启动时把启用的同步任务恢复到 APScheduler，并统一为每日三次。"""
     from sqlalchemy import false, select
 
-    async with async_db_session() as db:
+    changed: list[int] = []
+    async with async_db_session() as db, db.begin():
         jobs = (
             await db.execute(
                 select(MetaSyncJobModel).where(
@@ -261,11 +246,85 @@ async def reconcile_meta_sync_jobs() -> None:
                 )
             )
         ).scalars().all()
+        for job in jobs:
+            normalized = normalize_sync_cron(job.cron_expr)
+            if normalized and normalized != job.cron_expr:
+                job.cron_expr = normalized
+                changed.append(int(job.id))
+    if changed:
+        logger.info(f"同步任务 Cron 已统一为每日三次（凌晨/12:20/18:20）：{changed}")
     for job in jobs:
         try:
             register_meta_sync_job(job)
         except Exception as e:
             logger.error(f"恢复元数据同步任务 {job.id} 失败: {e}")
+
+
+async def wait_for_sync_jobs(scheduled_at: datetime, timeout_seconds: int = 1800) -> None:
+    """等待 ``scheduled_at`` 这一轮应触发的同步任务结束。
+
+    指标批次在 12:20/18:20 与同步任务同时启动。先按各任务 Cron 筛出本轮应执行
+    的任务，再轮询 ``meta_sync_run``，避免指标读到当天上午的旧批次。
+    """
+    from sqlalchemy import false, select
+
+    async with async_db_session() as db:
+        jobs = (
+            await db.execute(
+                select(MetaSyncJobModel.id, MetaSyncJobModel.cron_expr).where(
+                    MetaSyncJobModel.is_deleted == false(),
+                    MetaSyncJobModel.status == 0,
+                    MetaSyncJobModel.cron_expr.is_not(None),
+                )
+            )
+        ).all()
+
+    expected: list[int] = []
+    for job_id, cron_expr in jobs:
+        if not cron_expr:
+            continue
+        try:
+            if cron_has_fire_at(str(cron_expr), scheduled_at):
+                expected.append(int(job_id))
+        except Exception as exc:  # noqa: BLE001 - 单个任务 Cron 异常不应阻塞指标
+            logger.warning(f"同步任务 {job_id} Cron 无法解析，跳过等待：{cron_expr}（{exc}）")
+    if not expected:
+        logger.info(f"同步等待：{scheduled_at:%H:%M} 没有应执行的同步任务")
+        return
+
+    cutoff = scheduled_at.astimezone(UTC) - timedelta(seconds=90)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    last_pending: list[int] = []
+    while True:
+        async with async_db_session() as db:
+            rows = (
+                await db.execute(
+                    select(MetaSyncRunModel.job_id, MetaSyncRunModel.status).where(
+                        MetaSyncRunModel.job_id.in_(expected),
+                        MetaSyncRunModel.started_at >= cutoff,
+                    )
+                )
+            ).all()
+        finished = {int(job_id) for job_id, status in rows if status in ("success", "failed")}
+        pending = [job_id for job_id in expected if job_id not in finished]
+        if not pending:
+            logger.info(
+                f"同步等待：{scheduled_at:%H:%M} 本轮 {len(expected)} 个同步任务已全部结束"
+            )
+            return
+        if pending != last_pending:
+            logger.info(
+                f"同步等待：{scheduled_at:%H:%M} 仍有 {len(pending)} 个任务未结束：{pending}"
+            )
+            last_pending = pending
+        if loop.time() >= deadline:
+            logger.warning(
+                f"同步等待超时（{timeout_seconds}s）：{scheduled_at:%H:%M} 仍有任务未结束：{pending}；"
+                "指标将使用现有最新批次继续计算"
+            )
+            return
+        await asyncio.sleep(5)
 
 
 async def _get_sys_report_data_with_retry(

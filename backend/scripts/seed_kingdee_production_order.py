@@ -56,7 +56,7 @@ STANDARD_ENTITY_CODE = "production_order"
 STANDARD_ENTITY_NAME = "生产订单"
 STANDARD_TABLE_NAME = "dwd_production_order"
 SYNC_JOB_NAME = "生产订单-订单全链路"
-SYNC_CRON = "0 0 2 * * ?"  # 每天 02:00，早于指标调度的 02:30
+SYNC_CRON = "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"  # 每天 02:00/12:20/18:20
 
 # (字段Key, 中文名, 数据类型)：表头字段 + FTreeEntity 分录字段，顺序即 FieldKeys 顺序
 SOURCE_FIELDS = [

@@ -1,7 +1,8 @@
 """客户分析构建调度。
 
-每天 **02:20** 构建当期（晚于订单全链路 02:10，早于指标计算 02:30）；
-**每月 1 日**先构建上月，保证上月数据在月度结转时被固化。
+凌晨 **02:20** 构建当期（晚于订单全链路 02:10，早于指标计算 02:30）；中午 12:20、
+晚上 18:20 由指标轮次在订单宽表重建后调用。**每月 1 日的凌晨轮次**先构建上月，
+保证上月数据在月度结转时被固化。
 
 说明：客户分析直接读 ``dwd_order_full_chain``，所以只需要重跑订单全链路即可拿到最新订单数据，
 本任务不再单独回补 CRM 来源批次。
@@ -9,13 +10,14 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 
 from apscheduler.triggers.cron import CronTrigger
 
 from app.core.ap_scheduler import scheduler
 from app.core.database import async_db_session
 from app.core.logger import logger
+from app.core.schedule_plan import SCHEDULE_TZ, is_daytime_run
 
 from .build import build_period
 
@@ -49,7 +51,7 @@ async def build_one_period(period_value: str) -> dict:
 async def execute_customer_build_job() -> None:
     """调度入口：每月 1 日先结转上月，再回补最近 3 期（含当期）。"""
     try:
-        if date.today().day == 1:
+        if datetime.now(SCHEDULE_TZ).day == 1 and not is_daytime_run():
             period = _shift_period(1)
             result = await build_one_period(period)
             logger.info(f"客户分析上月结转 {period} 完成：{result}")

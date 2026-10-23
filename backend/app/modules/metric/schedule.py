@@ -1,25 +1,32 @@
 """指标计算调度。
 
-**一个批次任务** + 每日刷新：每天 02:30（晚于数据源同步 02:00）按依赖分层重算一次
-**当月**数值，每次计算保留一个 ``calc_version``，可按日期回溯当天的口径。
+**一个批次任务** + 每日三次刷新：凌晨 02:30、中午 12:20、晚上 18:20 按依赖分层
+重算一次**当月**数值，每次计算保留一个 ``calc_version``，可按日期回溯当天的口径。
 
 分层调度（见 ``batch.py``）保证组成指标先于派生指标完成；派生指标计算前还有一层
 「组成指标当天算过」的新鲜度校验（见 ``engine._ensure_component_values``）兜底
 单指标重算与开放接口触发。
 
-另外在每月 1 日补一次**上月结转**：先把上月同步批次强制重拉（上月最后一天的
-批次是当天 02:00 拉的，不含当天白天产生的单据），再重算上月指标。缺少这一步时，
-月指标的月末最后一天数据会永久缺失。
+另外在每月 1 日的凌晨轮次补一次**上月结转**：先把上月同步批次强制重拉（上月最后
+一天的批次是当天 02:00 拉的，不含当天白天产生的单据），再重算上月指标。缺少这一步
+时，月指标的月末最后一天数据会永久缺失。
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime
 
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.base import BaseTrigger
 
 from app.core.ap_scheduler import scheduler
 from app.core.logger import logger
+from app.core.schedule_plan import (
+    METRIC_CALC_TIMES,
+    SCHEDULE_TZ,
+    build_daily_trigger,
+    is_daytime_run,
+    latest_daytime_slot,
+)
 
 from .batch import load_enabled_metrics, run_metric_batch
 from .engine import previous_period_value
@@ -27,34 +34,58 @@ from .engine import previous_period_value
 METRIC_CALC_JOB_PREFIX = "metric_calc:"
 # 批次任务 job id：固定一个，覆盖全部启用指标（旧版为一指标一任务 ``metric_calc:{id}``）
 METRIC_CALC_BATCH_JOB_ID = f"{METRIC_CALC_JOB_PREFIX}batch"
-# 每天 02:30 重算（晚于科目余额表同步的 02:00）
-METRIC_CALC_HOUR = 2
-METRIC_CALC_MINUTE = 30
+# 每天 02:30、12:20、18:20 重算（凌晨轮次晚于科目余额表同步的 02:00）
+METRIC_CALC_SCHEDULE = ", ".join(f"{hour:02d}:{minute:02d}" for hour, minute in METRIC_CALC_TIMES)
 
 
-def _build_trigger() -> CronTrigger:
-    return CronTrigger(
-        second="0",
-        minute=str(METRIC_CALC_MINUTE),
-        hour=str(METRIC_CALC_HOUR),
-        timezone="Asia/Shanghai",
-    )
+def _build_trigger() -> BaseTrigger:
+    return build_daily_trigger(METRIC_CALC_TIMES)
 
 
 async def execute_metric_calc_job() -> None:
     """调度入口：按依赖分层重算全部启用指标的当前期间；每月 1 日先补算上月。"""
     try:
+        daytime = is_daytime_run()
+        if daytime:
+            await _refresh_daytime_upstream()
         metrics = await load_enabled_metrics()
         if not metrics:
             logger.warning("没有启用中的指标，跳过定时计算")
             return
-        if date.today().day == 1:
+        if datetime.now(SCHEDULE_TZ).day == 1 and not daytime:
             await _settle_previous_period(metrics)
         summary = await run_metric_batch(label="当期")
         logger.info(f"指标批次计算完成: {summary}")
     except Exception as e:
         logger.exception(f"指标批次计算失败: {e}")
         raise
+
+
+async def _refresh_daytime_upstream() -> None:
+    """日间轮次：先等同步完成，再重建订单/客户宽表，最后计算指标。
+
+    凌晨轮次由各自的 02:00/02:10/02:20 任务完成，这里不重复执行。
+    """
+    from app.modules.metadata.sync import wait_for_sync_jobs
+
+    slot = latest_daytime_slot()
+    if slot is None:
+        return
+    await wait_for_sync_jobs(slot)
+
+    from app.modules.order.schedule import execute_order_build_job
+
+    try:
+        await execute_order_build_job()
+    except Exception as exc:  # noqa: BLE001 - 上游宽表失败时仍用现有版本算指标
+        logger.exception(f"日间订单全链路构建失败，指标将使用现有宽表：{exc}")
+
+    from app.modules.customer.schedule import execute_customer_build_job
+
+    try:
+        await execute_customer_build_job()
+    except Exception as exc:  # noqa: BLE001 - 上游宽表失败时仍用现有版本算指标
+        logger.exception(f"日间客户分析构建失败，指标将使用现有宽表：{exc}")
 
 
 async def _settle_previous_period(metrics: list[dict]) -> None:
@@ -81,7 +112,7 @@ async def _settle_previous_period(metrics: list[dict]) -> None:
 
 
 def register_metric_calc_job() -> None:
-    """注册/刷新批次计算任务（每天 02:30 一次）。"""
+    """注册/刷新批次计算任务（每天 02:30、12:20、18:20）。"""
     try:
         scheduler.remove_job(METRIC_CALC_BATCH_JOB_ID)
     except Exception:
@@ -107,7 +138,7 @@ async def reconcile_metric_calc_jobs() -> None:
         register_metric_calc_job()
         logger.info(
             f"指标批次计算任务已注册: {METRIC_CALC_BATCH_JOB_ID}"
-            f"（每天 {METRIC_CALC_HOUR:02d}:{METRIC_CALC_MINUTE:02d}）"
+            f"（每天 {METRIC_CALC_SCHEDULE}）"
         )
     except Exception as e:
         logger.error(f"恢复指标批次计算任务失败: {e}")

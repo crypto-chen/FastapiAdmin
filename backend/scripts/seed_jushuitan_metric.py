@@ -100,7 +100,11 @@ async def main() -> None:
     )
     parser.add_argument("--tax-rate", type=float, default=0.0, help="税率(%%)，用于含税→未税折算")
     parser.add_argument("--by-shop", action="store_true", help="是否按店铺拆分结果")
-    parser.add_argument("--cron", default="0 0 2 * * ?", help="同步 Cron（6 段，默认每天 02:00，早于指标调度的 02:30）")
+    parser.add_argument(
+        "--cron",
+        default="0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?",
+        help="同步 Cron（分号分隔多段，默认每天 02:00/12:20/18:20）",
+    )
     args = parser.parse_args()
 
     if not args.app_key or not args.app_secret or not args.access_token:

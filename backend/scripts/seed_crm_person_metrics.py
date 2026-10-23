@@ -70,7 +70,7 @@ ImportUtil.find_models(MappedBase)
 
 CONNECTION_NAME = "CRM 默认连接"
 SOURCE_SYSTEM_CODE = "crm"
-SYNC_CRON = "0 0 2 * * ?"  # 每天 02:00，早于指标调度的 02:30
+SYNC_CRON = "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"  # 每天 02:00/12:20/18:20
 CATEGORY = "营销中心-业务员"
 
 # 整月取值：orderAnalyze 按订单创建月、orderShipments 按发货单审核月，均传 ``month``
@@ -98,9 +98,8 @@ MONTH_DATE_RANGE: dict = {
     ]
 }
 
-# 客户列表是「当前全量快照」（无时间参数、每次约 2.5 万行），按周同步即可；
-# 指标计算遇到该期间没有批次时会自动按期间回补一次。
-CUSTOMER_CRON = "0 0 2 ? * MON"
+# 客户列表是「当前全量快照」（无时间参数、每次约 2.5 万行），随每日三轮同步刷新。
+CUSTOMER_CRON = "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"
 
 # 一个来源对象一条：同一接口按 type 拆成内贸/外贸/零售三条（来源对象 code 唯一）
 SOURCE_OBJECTS = [
@@ -897,7 +896,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="初始化营销中心业务员分析指标")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="CRM 接口域名")
     parser.add_argument("--connection-name", default=CONNECTION_NAME, help="连接名称")
-    parser.add_argument("--cron", default=SYNC_CRON, help="同步 Cron（6 段，默认每天 02:00）")
+    parser.add_argument("--cron", default=SYNC_CRON, help="同步 Cron（分号分隔多段，默认每天 02:00/12:20/18:20）")
     args = parser.parse_args()
 
     job_ids: list[int] = []
