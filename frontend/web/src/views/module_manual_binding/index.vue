@@ -58,26 +58,26 @@
               <ElButton type="primary" size="small" @click="bindPersonRow(row)">绑定</ElButton>
             </div>
             <div v-else class="bind-person-org">
-              <ElSelect v-model="personOrgForms[row.id].master_person_id" placeholder="内部人员" clearable filterable>
+              <ElSelect v-model="personOrgForm(row.id).master_person_id" placeholder="内部人员" clearable filterable>
                 <ElOption v-for="opt in personOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
               </ElSelect>
-              <ElSelect v-model="personOrgForms[row.id].master_org_id" placeholder="内部组织" clearable filterable>
+              <ElSelect v-model="personOrgForm(row.id).master_org_id" placeholder="内部组织" clearable filterable>
                 <ElOption v-for="opt in orgOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
               </ElSelect>
               <ElSelect
-                v-model="personOrgForms[row.id].master_dept_id"
+                v-model="personOrgForm(row.id).master_dept_id"
                 placeholder="内部部门"
                 clearable
                 filterable
               >
                 <ElOption
-                  v-for="opt in deptOptionsByOrg(personOrgForms[row.id].master_org_id)"
+                  v-for="opt in deptOptionsByOrg(personOrgForm(row.id).master_org_id)"
                   :key="opt.id"
                   :label="`${opt.code} - ${opt.name}`"
                   :value="opt.id"
                 />
               </ElSelect>
-              <ElSwitch v-model="personOrgForms[row.id].is_primary" active-text="主岗" />
+              <ElSwitch v-model="personOrgForm(row.id).is_primary" active-text="主岗" />
               <ElButton type="primary" size="small" @click="bindPersonOrgRow(row)">绑定</ElButton>
             </div>
           </template>
@@ -92,6 +92,21 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ManualBindingAPI, type MappingItem } from "@/api/module_system_mapping";
 
+interface DeptOption {
+  id: number;
+  code: string;
+  name: string;
+  org_id?: number | null;
+}
+
+interface PersonOrgForm {
+  master_person_id?: number;
+  master_org_id?: number;
+  master_dept_id?: number;
+  is_primary: boolean;
+  status: number;
+}
+
 const activeKey = ref("org");
 const loading = ref(false);
 const syncingOrg = ref(false);
@@ -99,13 +114,23 @@ const syncingPerson = ref(false);
 const rows = ref<MappingItem[]>([]);
 const orgOptions = ref<{ value: number; label: string }[]>([]);
 const personOptions = ref<{ value: number; label: string }[]>([]);
-const allDeptOptions = ref<Record<string, unknown>[]>([]);
+const allDeptOptions = ref<DeptOption[]>([]);
 const sourceTypes = ref<{ value: string; label: string }[]>([]);
 const sourceType = ref<string | undefined>(undefined);
 const orgTargets = reactive<Record<number, number | undefined>>({});
 const deptTargets = reactive<Record<number, number | undefined>>({});
 const personTargets = reactive<Record<number, number | undefined>>({});
-const personOrgForms = reactive<Record<number, Record<string, any>>>({});
+const personOrgForms = reactive<Record<number, PersonOrgForm>>({});
+
+function personOrgForm(id?: number): PersonOrgForm {
+  const key = id ?? 0;
+  let form = personOrgForms[key];
+  if (!form) {
+    form = { master_person_id: undefined, master_org_id: undefined, master_dept_id: undefined, is_primary: false, status: 0 };
+    personOrgForms[key] = form;
+  }
+  return form;
+}
 
 const currentColumns = computed(() => {
   if (activeKey.value === "org") {
@@ -156,7 +181,14 @@ async function loadOptions() {
   ]);
   orgOptions.value = orgRes.data?.data ?? [];
   personOptions.value = personRes.data?.data ?? [];
-  allDeptOptions.value = deptRes.data?.data ?? [];
+  allDeptOptions.value = (deptRes.data?.data ?? [])
+    .filter((item) => typeof item.id === "number")
+    .map((item) => ({
+      id: item.id as number,
+      code: String(item.code ?? ""),
+      name: String(item.name ?? ""),
+      org_id: typeof item.org_id === "number" ? item.org_id : null,
+    }));
   sourceTypes.value = typeRes.data?.data ?? [];
 }
 
@@ -176,9 +208,7 @@ async function loadCurrent() {
       const res = await ManualBindingAPI.sourcePersons({ page_no: 1, page_size: 500, source_type: sourceType.value });
       rows.value = res.data?.data?.items ?? [];
       rows.value.forEach((row) => {
-        if (!personOrgForms[row.id!]) {
-          personOrgForms[row.id!] = { master_person_id: undefined, master_org_id: undefined, master_dept_id: undefined, is_primary: false, status: 0 };
-        }
+        personOrgForm(row.id);
       });
     }
   } finally {
@@ -252,7 +282,7 @@ async function bindPersonRow(row: MappingItem) {
 }
 
 async function bindPersonOrgRow(row: MappingItem) {
-  const form = personOrgForms[row.id!];
+  const form = personOrgForm(row.id);
   if (!form?.master_person_id || !form?.master_org_id) return ElMessage.warning("请选择内部人员和组织");
   await ManualBindingAPI.bindPersonOrg({
     source_person_id: row.id,

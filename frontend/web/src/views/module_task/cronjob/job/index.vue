@@ -189,7 +189,7 @@
                 plain
                 :icon="Edit"
                 :disabled="row.status === 3"
-                @click="handleOpenModifyDialog(row)"
+                @click="handleOpenModifyDialog(row as SchedulerJob)"
               >
                 编辑
               </ElButton>

@@ -73,6 +73,11 @@ interface ResourceConfig {
   columns: ColumnConfig[];
 }
 
+interface JobOption {
+  id: number;
+  name: string;
+}
+
 const statusText = (value: unknown) => (Number(value) === 0 ? "启用" : "停用");
 
 const resources: ResourceConfig[] = [
@@ -154,6 +159,7 @@ const resources: ResourceConfig[] = [
     label: "同步日志",
     page: MetadataAPI.syncJob.runPage,
     columns: [
+      { prop: "job_name", label: "任务名称", width: 200 },
       { prop: "batch_id", label: "批次ID", width: 200 },
       { prop: "status", label: "状态", width: 100 },
       { prop: "row_count", label: "行数", width: 100 },
@@ -166,7 +172,7 @@ const resources: ResourceConfig[] = [
 
 const activeKey = ref(resources[0]!.key);
 const rows = ref<MetaItem[]>([]);
-const jobs = ref<MetaItem[]>([]);
+const jobs = ref<JobOption[]>([]);
 const jobId = ref<number | undefined>(undefined);
 const loading = ref(false);
 const detailVisible = ref(false);
@@ -184,7 +190,10 @@ function formatCell(row: MetaItem, col: ColumnConfig) {
 
 async function loadJobs() {
   const res = await MetadataAPI.syncJob.page({ page_no: 1, page_size: 100 });
-  jobs.value = res.data?.data?.items ?? [];
+  const items = res.data?.data?.items ?? [];
+  jobs.value = items
+    .filter((item): item is MetaItem & JobOption => typeof item.id === "number" && typeof item.name === "string")
+    .map((item) => ({ id: item.id, name: item.name }));
 }
 
 async function loadData() {

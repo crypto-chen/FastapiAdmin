@@ -405,8 +405,8 @@ function addVariable(prop: string) {
   form[prop].push({ name: "", value_type: "expression", value: "", description: "" });
 }
 
-function removeVariable(prop: string, index: number) {
-  if (Array.isArray(form[prop])) form[prop].splice(index, 1);
+function removeVariable(prop: string, index: number | string) {
+  if (Array.isArray(form[prop])) form[prop].splice(Number(index), 1);
 }
 
 function openCreate() {
