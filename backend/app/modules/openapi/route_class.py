@@ -121,7 +121,13 @@ class OpenApiLogRoute(APIRoute):
             body = b""
         if body:
             try:
-                payload.update(_redact(json.loads(body.decode("utf-8"))))
+                parsed = json.loads(body.decode("utf-8"))
+                if isinstance(parsed, dict):
+                    payload.update(_redact(parsed))
+                else:
+                    # 兼容裸数组请求体（如零售订单推送）；dict.update(list) 会抛
+                    # "dictionary update sequence element ... is required"
+                    payload["body"] = _redact(parsed)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 payload["body"] = "无法解析的请求体"
         if request.query_params:

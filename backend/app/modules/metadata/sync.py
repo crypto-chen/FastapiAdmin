@@ -514,6 +514,8 @@ async def fetch_jushuitan_sales_outbound(connection_id: int, biz: dict) -> dict:
 async def fetch_source_payload(source_system: SourceSystemModel, source_object: SourceObjectModel, params: dict) -> dict:
     """按来源系统的 ``connector_type`` 分派取数，统一返回 ``{"Rows"|"datas": [...]}``。"""
     connector_type = str(getattr(source_system, "connector_type", "") or KINGDEE_CONNECTOR).strip().lower()
+    if connector_type == "push":
+        raise RuntimeError("推送型同步任务不支持主动取数，请调用 /open/v1/retail/orders/sync 写入数据")
     if connector_type == JUSHUITAN_CONNECTOR:
         return await fetch_jushuitan_sales_outbound(int(source_system.connection_id or 0), params)
     if connector_type == CRM_CONNECTOR:

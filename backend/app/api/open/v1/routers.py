@@ -9,6 +9,7 @@ from app.modules.customer.open_controller import OpenCustomerRouter
 from app.modules.openapi.open_controller import OpenAuthRouter, OpenMetricRouter, OpenOrgRouter
 from app.modules.order.open_controller import OpenOrderRouter
 from app.modules.product.open_controller import OpenProductLineRouter
+from app.modules.retail.open_controller import OpenRetailRouter
 
 open_v1 = APIRouter(prefix="/open/v1")
 for controller in (
@@ -18,5 +19,6 @@ for controller in (
     OpenOrderRouter,
     OpenCustomerRouter,
     OpenProductLineRouter,
+    OpenRetailRouter,
 ):
     open_v1.include_router(controller)

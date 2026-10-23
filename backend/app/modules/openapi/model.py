@@ -43,6 +43,18 @@ class OpenClientModel(ModelMixin, UserMixin):
     allow_product_line_detail: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, comment="是否允许查询产品线分析明细(默认不开放)"
     )
+    allow_retail_sync: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        comment="是否允许推送零售数据(默认不开放)",
+    )
+    retail_sync_job_id: Mapped[int | None] = mapped_column(
+        Integer,
+        default=None,
+        nullable=True,
+        comment="零售推送回放的同步任务ID（空=只落零售表，不回放指标批次）",
+    )
     order_scope: Mapped[dict | None] = mapped_column(
         JSON, default=None, nullable=True, comment="允许的订单范围(客户/业务员/贸易类型)，空=不限"
     )
