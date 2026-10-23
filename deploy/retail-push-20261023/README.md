@@ -55,7 +55,7 @@ python deploy/retail-push-20261023/test_sync.py
 也可以直接 curl：
 
 ```bash
-curl -X POST "http://120.237.174.243:6479/open/v1/retail/orders/sync" \
+curl -L -X POST "http://120.237.174.243:6479/open/v1/retail/orders/sync" \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: retail-test-20261023-001" \
   --data-binary @deploy/retail-push-20261023/test_retail_sync.json
