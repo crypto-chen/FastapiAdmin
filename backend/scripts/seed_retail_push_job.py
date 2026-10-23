@@ -104,7 +104,7 @@ async def main() -> None:
         job.description = "不主动取数；由 /open/v1/retail/orders/sync 推送后回放 meta_sync_run"
         await db.flush()
         print(f"来源系统 id={system.id}，来源对象 id={source_object.id}，同步任务 id={job.id}")
-        print("把该 id 配置到开放应用的 retail_sync_job_id，即可让零售指标使用推送数据。")
+        print("接口会按任务名自动回放；如需指定其他任务，设置 RETAIL_SYNC_JOB_ID=<id>。")
 
     await async_engine.dispose()
 
