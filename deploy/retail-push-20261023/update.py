@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -36,11 +37,27 @@ def log(message: str) -> None:
         fh.write(line + "\n")
 
 
-def run(cmd: list[str], cwd: Path, apply: bool) -> None:
+def run(
+    cmd: list[str],
+    cwd: Path,
+    apply: bool,
+    env_extra: dict[str, str] | None = None,
+) -> None:
     log("$ " + " ".join(str(item) for item in cmd))
     if not apply:
         return
-    result = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, encoding="utf-8", errors="replace")
+    env = os.environ.copy()
+    if env_extra:
+        env.update(env_extra)
+    result = subprocess.run(
+        cmd,
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
     if result.stdout.strip():
         log(result.stdout.strip())
     if result.stderr.strip():
@@ -94,10 +111,11 @@ def main() -> None:
     if not args.skip_pull:
         run(["git", "pull", "--ff-only", "origin", "master"], ROOT, args.apply)
 
-    run([sys.executable, "main.py", "upgrade", "--env", args.env], BACKEND, args.apply)
-    run([sys.executable, "scripts/seed_retail_push_job.py"], BACKEND, args.apply)
-    run([sys.executable, "scripts/seed_retail_menu.py"], BACKEND, args.apply)
-    run([sys.executable, "scripts/check_retail_migration.py"], BACKEND, args.apply)
+    backend_env = {"ENVIRONMENT": args.env}
+    run([sys.executable, "main.py", "upgrade", "--env", args.env], BACKEND, args.apply, backend_env)
+    run([sys.executable, "scripts/seed_retail_push_job.py"], BACKEND, args.apply, backend_env)
+    run([sys.executable, "scripts/seed_retail_menu.py"], BACKEND, args.apply, backend_env)
+    run([sys.executable, "scripts/check_retail_migration.py"], BACKEND, args.apply, backend_env)
 
     if args.build_frontend:
         build_frontend(args.apply, args.frontend_target)

@@ -70,3 +70,24 @@ curl -L -X POST "http://120.237.174.243:6479/open/v1/retail/orders/sync" \
 重复提交同一 `X-Request-ID` 会返回 `duplicate=true`。
 
 测试数据为虚构订单（店铺/买家/地址均为测试值），可在页面筛选期间 `2026-10` 查看。
+
+## 4. 页面不显示「零售订单同步」排查
+
+前端打包只更新页面文件，**菜单由后端数据库注册**。按顺序检查：
+
+```bash
+cd backend
+ENVIRONMENT=prod python scripts/check_retail_menu.py
+ENVIRONMENT=prod python scripts/seed_retail_menu.py
+```
+
+- 输出应包含 `零售订单菜单 id=...`；没有输出或报父菜单错误，先执行 `ENVIRONMENT=prod python scripts/seed_openapi_menu.py`。
+- 菜单只绑定 `SUPER_ADMIN` / `ADMIN`；用其他角色登录时需要到「系统管理 → 角色 → 菜单权限」勾选。
+- 注册菜单后**退出重新登录**（菜单在前端登录时加载并缓存）。
+- 确认发布目录是正在使用的 nginx 站点目录，且新 `dist` 里包含页面：
+
+```bash
+grep -R "retail/orders/page" /usr/share/nginx/html/assets | head
+```
+
+没有结果说明发布目录仍是旧 `dist`；重新构建并复制 `frontend/web/dist/*`。
