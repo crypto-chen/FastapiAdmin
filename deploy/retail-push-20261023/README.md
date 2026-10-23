@@ -32,6 +32,8 @@ python deploy/retail-push-20261023/update.py --apply --service fastapiadmin \
   --build-frontend --frontend-target /usr/share/nginx/html
 ```
 
+如果由 FastAPI 直接托管前端，把 `--frontend-target` 换成 `backend/dist`。
+
 服务器没有 Node 时，本机构建后上传 `frontend/web/dist` 到现有 nginx 站点目录：
 
 ```bash
