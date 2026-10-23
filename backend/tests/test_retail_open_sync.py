@@ -210,7 +210,8 @@ def test_sync_without_token_idempotent_and_metric_feed(retail_client: TestClient
             assert row is not None
             return row.buyer_paid_amount
 
-    assert str(asyncio.run(_amount("3317147040205147897"))) == "70.0000"
+    first_so_id = str(sample["orders"][0]["so_id"])
+    assert str(asyncio.run(_amount(first_so_id))) == "70.0000"
 
     # 旧 version 不允许覆盖新数据
     stale_order = dict(sample["orders"][0])
@@ -223,7 +224,7 @@ def test_sync_without_token_idempotent_and_metric_feed(retail_client: TestClient
     )
     assert stale.status_code == 200, stale.text
     assert stale.json()["data"]["stale"] == 1
-    assert str(asyncio.run(_amount("3317147040205147897"))) == "70.0000"
+    assert str(asyncio.run(_amount(first_so_id))) == "70.0000"
 
 
 def test_sync_accepts_bare_order_list_and_data_wrapper(retail_client: TestClient) -> None:
