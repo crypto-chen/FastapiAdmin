@@ -77,6 +77,7 @@ curl -L -X POST "http://120.237.174.243:6479/open/v1/retail/orders/sync" \
 
 ```bash
 cd backend
+ENVIRONMENT=prod python scripts/check_retail_data.py
 ENVIRONMENT=prod python scripts/check_retail_menu.py
 ENVIRONMENT=prod python scripts/seed_retail_menu.py
 ```
