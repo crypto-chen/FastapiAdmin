@@ -247,6 +247,21 @@ def test_sync_accepts_bare_order_list_and_data_wrapper(retail_client: TestClient
     assert wrapped.json()["data"]["created"] == 1
 
 
+def test_sync_accepts_orders_json_string(retail_client: TestClient) -> None:
+    """兼容低代码平台把数组序列化成字符串后放进扁平 data 的情况。"""
+    ctx = asyncio.run(_prepare())
+    resp = retail_client.post(
+        "/open/v1/retail/orders/sync",
+        headers=_headers("req-json-string"),
+        json={
+            "request_id": "req-json-string",
+            "orders": json.dumps(ctx["sample"]["orders"], ensure_ascii=False),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["created"] == 6
+
+
 def test_sync_works_without_authorization_header(retail_client: TestClient) -> None:
     ctx = asyncio.run(_prepare())
     resp = retail_client.post(

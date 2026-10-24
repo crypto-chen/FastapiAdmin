@@ -257,24 +257,41 @@ class RetailSyncService:
         if isinstance(payload, list):
             return [item for item in payload if isinstance(item, dict)], {}
         envelope = payload.model_dump(exclude_none=True)
-        orders: list[dict[str, Any]] = []
-        if isinstance(envelope.get("orders"), list):
-            orders = envelope["orders"]
-        elif isinstance(envelope.get("datas"), list):
-            orders = envelope["datas"]
-        else:
+        orders = RetailSyncService._as_orders(envelope.get("orders"))
+        if not orders:
+            orders = RetailSyncService._as_orders(envelope.get("datas"))
+        if not orders:
             data = envelope.get("data")
-            if isinstance(data, list):
-                orders = data
-            elif isinstance(data, dict):
-                for key in ("orders", "datas", "data"):
-                    if isinstance(data.get(key), list):
-                        orders = data[key]
-                        break
+            orders = RetailSyncService._as_orders(data)
+            if isinstance(data, dict):
                 for key in ("params", "page_index", "page_size", "has_next", "data_count", "source"):
                     if key in data and key not in envelope:
                         envelope[key] = data[key]
         return [item for item in orders if isinstance(item, dict)], envelope
+
+    @staticmethod
+    def _as_orders(value: Any) -> list[dict[str, Any]]:
+        """兼容数组、单个订单对象和低代码平台传来的 JSON 字符串。"""
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            try:
+                value = json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            for key in ("orders", "datas", "data"):
+                nested = value.get(key)
+                if isinstance(nested, (list, str)):
+                    parsed = RetailSyncService._as_orders(nested)
+                    if parsed:
+                        return parsed
+            if any(key in value for key in ("so_id", "o_id", "outer_so_id", "raw_so_id")):
+                return [value]
+        return []
 
     async def _find_batch(self, request_key: str) -> RetailSyncBatchModel | None:
         return (
