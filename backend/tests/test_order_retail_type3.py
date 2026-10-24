@@ -1,6 +1,6 @@
 """orderAnalyze type=3（零售）映射到订单全链路的单元测试（纯函数，不依赖数据库）。"""
 
-from app.modules.order.build import build_record, is_void_order
+from app.modules.order.build import build_record, is_void_order, to_id_list
 
 
 def _retail_row(**overrides):
@@ -57,3 +57,10 @@ def test_retail_row_uses_retail_intake_and_order_type_3():
 def test_void_retail_order_is_skipped():
     assert is_void_order(_retail_row(status="522")) is True
     assert is_void_order(_retail_row(status="384")) is False
+
+
+def test_multi_model_ids_are_split_and_deduplicated():
+    assert to_id_list("486,486") == [486]
+    assert to_id_list("12,13") == [12, 13]
+    assert to_id_list("240,226,240") == [240, 226]
+    assert to_id_list(None) == []

@@ -105,6 +105,24 @@ def to_number(value: Any) -> float | None:
         return None
 
 
+def to_id_list(value: Any) -> list[int]:
+    """CRM 多型号/多系列编码（``486,486``、``12,13``）→ 去重后的整数列表。"""
+    if _is_empty(value):
+        return []
+    ids: list[int] = []
+    for part in str(value).split(","):
+        text = part.strip()
+        if not text:
+            continue
+        try:
+            number = int(float(text))
+        except (TypeError, ValueError):
+            continue
+        if number not in ids:
+            ids.append(number)
+    return ids
+
+
 def to_datetime(value: Any) -> datetime | None:
     """兼容 unix 秒、``YYYY-MM-DD``、``YYYY-MM-DD HH:MM:SS``、ISO 串。"""
     if _is_empty(value):
@@ -546,13 +564,16 @@ def build_record(
         if value is not None:
             extra[field_code] = value
 
-    # SKU（型号）与产品线（系列）：CRM 给的是编码，宽表存**名称**，编码另存 *_id 字段
-    sku_id = to_number(extra.get("sku"))
-    extra["sku_id"] = int(sku_id) if sku_id is not None else None
-    extra["sku"] = model_names.get(int(sku_id)) if sku_id is not None else None
-    series_id = to_number(extra.get("product_series"))
-    extra["product_series_id"] = int(series_id) if series_id is not None else None
-    extra["product_series"] = category_names.get(int(series_id)) if series_id is not None else None
+    # SKU（型号）与产品线（系列）：CRM 给的是编码，宽表存**名称**，编码另存 *_id 字段。
+    # 2026-10 起零售单会返回逗号分隔的多型号/多系列；保留完整列表，主字段取第一个（主型号）。
+    sku_ids = to_id_list(extra.get("sku"))
+    extra["sku_ids"] = sku_ids
+    extra["sku_id"] = sku_ids[0] if sku_ids else None
+    extra["sku"] = model_names.get(sku_ids[0]) if sku_ids else None
+    series_ids = to_id_list(extra.get("product_series"))
+    extra["product_series_ids"] = series_ids
+    extra["product_series_id"] = series_ids[0] if series_ids else None
+    extra["product_series"] = category_names.get(series_ids[0]) if series_ids else None
     # 订单类型：宽表 extra["order_type"] 存名称（批量/打样/零售，覆盖物理列里的编码），
     # 物理列 order_type 仍是 1/2/3 —— 供 /order/page 与开放接口按编码过滤
     order_type_code = "3" if is_retail else str(pick(row, SOURCE_KEYS["order_type"]) or "").strip()

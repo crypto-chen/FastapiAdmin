@@ -27,8 +27,6 @@ from app.modules.metadata.sync import extract_payload_rows
 from app.modules.order.model import OrderFullChainModel
 
 from .fields import (
-    ORDER_ANALYZE_DOMESTIC_OBJECT,
-    ORDER_ANALYZE_EXPORT_OBJECT,
     PRODUCT_CATEGORY_OBJECT,
     PRODUCT_MODEL_OBJECT,
 )
@@ -671,29 +669,51 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     for row in order_rows:
         extra = row.extra or {}
         sku = str(extra.get("sku") or "").strip()
+        if "," in sku:
+            sku = ""
         product_line = ""
-        # 主数据源：型号字典 category_id → 系列字典上卷
+        # 主数据源：型号字典 category_id → 系列字典上卷。
+        # 零售单可能返回多个型号（逗号分隔），取第一个能命中字典的型号作为主型号。
+        model_ids: list[int] = []
+        for value in extra.get("sku_ids") or []:
+            try:
+                model_ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
         try:
-            model_id = int(extra.get("sku_id")) if extra.get("sku_id") not in (None, "") else None
+            primary_model_id = int(extra.get("sku_id")) if extra.get("sku_id") not in (None, "") else None
         except (TypeError, ValueError):
-            model_id = None
-        if model_id is not None and model_id in models:
+            primary_model_id = None
+        if primary_model_id is not None and primary_model_id not in model_ids:
+            model_ids.insert(0, primary_model_id)
+        model_id = next((item for item in model_ids if item in models), None)
+        if model_id is not None:
             matched += 1
             category_id = models[model_id].get("category_id")
             if category_id is not None:
                 product_line = lines.get(int(category_id), "")
-            if not sku:
-                sku = models[model_id].get("model") or ""
+            sku = models[model_id].get("model") or sku
         else:
             unmatched += 1
-        # 兜底：型号未命中时用订单行的 product_series_id 上卷
+        # 兜底：型号未命中时用订单行的 product_series_id（多系列逐个尝试）上卷
         if not product_line:
+            series_ids: list[int] = []
+            for value in extra.get("product_series_ids") or []:
+                try:
+                    series_ids.append(int(value))
+                except (TypeError, ValueError):
+                    continue
             try:
-                series_id = int(extra.get("product_series_id")) if extra.get("product_series_id") not in (None, "") else None
+                primary_series_id = (
+                    int(extra.get("product_series_id"))
+                    if extra.get("product_series_id") not in (None, "")
+                    else None
+                )
             except (TypeError, ValueError):
-                series_id = None
-            if series_id is not None:
-                product_line = lines.get(series_id, "")
+                primary_series_id = None
+            if primary_series_id is not None and primary_series_id not in series_ids:
+                series_ids.insert(0, primary_series_id)
+            product_line = next((lines.get(item, "") for item in series_ids if lines.get(item)), "")
         if not product_line:
             product_line = "未分类"
 
@@ -795,9 +815,9 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
             )
         )
 
-    for (product_line, sku), store in sorted(buckets.items()):
+    for (_product_line, _sku), store in sorted(buckets.items()):
         emit(store, 0)
-    for product_line, store in sorted(line_totals.items()):
+    for _product_line, store in sorted(line_totals.items()):
         emit(store, 1)
     emit(grand, 2)
 
