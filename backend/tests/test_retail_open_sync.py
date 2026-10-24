@@ -274,6 +274,18 @@ def test_sync_accepts_raw_json_string_body(retail_client: TestClient) -> None:
     assert resp.json()["data"]["created"] == 6
 
 
+def test_sync_accepts_python_repr_body(retail_client: TestClient) -> None:
+    """兼容平台把参数直接 str(dict) 后发送（单引号、True/False）。"""
+    ctx = asyncio.run(_prepare())
+    resp = retail_client.post(
+        "/open/v1/retail/orders/sync",
+        headers={**_headers("req-python-repr"), "Content-Type": "application/json"},
+        content=repr(ctx["sample"]),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["created"] == 6
+
+
 def test_sync_works_without_authorization_header(retail_client: TestClient) -> None:
     ctx = asyncio.run(_prepare())
     resp = retail_client.post(

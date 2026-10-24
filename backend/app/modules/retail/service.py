@@ -108,7 +108,7 @@ class RetailSyncService:
 
     async def sync(
         self,
-        payload: RetailSyncPayload | list[dict[str, Any]] | str,
+        payload: Any,
         request_id: str | None = None,
         raw_body: bytes | None = None,
     ) -> RetailSyncResultSchema:
@@ -252,9 +252,7 @@ class RetailSyncService:
         return result
 
     @staticmethod
-    def _normalize(
-        payload: RetailSyncPayload | list[dict[str, Any]] | str,
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def _normalize(payload: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if isinstance(payload, str):
             parsed = RetailSyncService._parse_json(payload)
             if parsed is None:
@@ -262,6 +260,8 @@ class RetailSyncService:
             payload = parsed
         if isinstance(payload, list):
             return [item for item in payload if isinstance(item, dict)], {}
+        if not isinstance(payload, (RetailSyncPayload, dict)):
+            return [], {}
         if isinstance(payload, dict):
             envelope = dict(payload)
         else:
@@ -292,6 +292,17 @@ class RetailSyncService:
                 return ast.literal_eval(text)
             except (ValueError, SyntaxError):
                 return None
+
+    @staticmethod
+    def parse_body(raw_body: bytes) -> Any:
+        """解析 HTTP body：标准 JSON、JSON 字符串，或平台传来的 Python 字面量。"""
+        text = raw_body.decode("utf-8-sig").strip()
+        if not text:
+            return ""
+        parsed = RetailSyncService._parse_json(text)
+        if parsed is None:
+            raise ValueError("既不是合法 JSON，也不是 Python 字典/数组字面量")
+        return parsed
 
     @staticmethod
     def _as_orders(value: Any) -> list[dict[str, Any]]:

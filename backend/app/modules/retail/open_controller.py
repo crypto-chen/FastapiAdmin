@@ -4,9 +4,9 @@
 IP 做白名单与限流。单次请求的订单数/体积上限由服务层控制。
 """
 
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,6 @@ from app.core.exceptions import CustomException
 from app.modules.openapi.route_class import OpenApiLogRoute
 from app.modules.openapi.security import CODE_PARAM_INVALID
 
-from .schema import RetailSyncPayload
 from .service import MAX_REQUEST_BYTES, RetailSyncService
 
 OpenRetailRouter = APIRouter(
@@ -33,7 +32,6 @@ OpenRetailRouter = APIRouter(
 async def sync_retail_orders(
     request: Request,
     db: Annotated[AsyncSession, Depends(db_getter)],
-    data: Annotated[RetailSyncPayload | list[dict[str, Any]] | str, Body()],
 ) -> JSONResponse:
     """外部系统主动推送零售订单，按唯一键幂等写入。
 
@@ -50,8 +48,16 @@ async def sync_retail_orders(
             code=CODE_PARAM_INVALID,
             status_code=413,
         )
+    try:
+        payload = RetailSyncService.parse_body(raw_body)
+    except ValueError as exc:
+        raise CustomException(
+            msg=f"请求体不是合法 JSON：{exc}",
+            code=CODE_PARAM_INVALID,
+            status_code=400,
+        ) from exc
     result = await RetailSyncService(db, app_id="public").sync(
-        data,
+        payload,
         request_id=request.headers.get("X-Request-ID"),
         raw_body=raw_body,
     )
