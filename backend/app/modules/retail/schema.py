@@ -16,10 +16,10 @@ class RetailSyncPayload(BaseModel):
 
     request_id: str | None = Field(default=None, max_length=128, description="幂等请求ID，建议每次推送唯一")
     source: str | None = Field(default=None, max_length=32, description="数据来源标识，缺省 qimen")
-    orders: list[dict[str, Any]] | str | None = Field(
+    orders: list[dict[str, Any]] | dict[str, Any] | str | None = Field(
         default=None, description="订单数组；低代码平台也可传 JSON 字符串"
     )
-    datas: list[dict[str, Any]] | str | None = Field(
+    datas: list[dict[str, Any]] | dict[str, Any] | str | None = Field(
         default=None, description="聚水潭 datas 数组；也兼容 JSON 字符串"
     )
     data: dict[str, Any] | list[dict[str, Any]] | str | None = Field(

@@ -33,7 +33,7 @@ OpenRetailRouter = APIRouter(
 async def sync_retail_orders(
     request: Request,
     db: Annotated[AsyncSession, Depends(db_getter)],
-    data: Annotated[RetailSyncPayload | list[dict[str, Any]], Body()],
+    data: Annotated[RetailSyncPayload | list[dict[str, Any]] | str, Body()],
 ) -> JSONResponse:
     """外部系统主动推送零售订单，按唯一键幂等写入。
 

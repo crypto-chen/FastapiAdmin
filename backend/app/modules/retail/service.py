@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -107,7 +108,7 @@ class RetailSyncService:
 
     async def sync(
         self,
-        payload: RetailSyncPayload | list[dict[str, Any]],
+        payload: RetailSyncPayload | list[dict[str, Any]] | str,
         request_id: str | None = None,
         raw_body: bytes | None = None,
     ) -> RetailSyncResultSchema:
@@ -252,11 +253,19 @@ class RetailSyncService:
 
     @staticmethod
     def _normalize(
-        payload: RetailSyncPayload | list[dict[str, Any]],
+        payload: RetailSyncPayload | list[dict[str, Any]] | str,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        if isinstance(payload, str):
+            parsed = RetailSyncService._parse_json(payload)
+            if parsed is None:
+                return [], {}
+            payload = parsed
         if isinstance(payload, list):
             return [item for item in payload if isinstance(item, dict)], {}
-        envelope = payload.model_dump(exclude_none=True)
+        if isinstance(payload, dict):
+            envelope = dict(payload)
+        else:
+            envelope = payload.model_dump(exclude_none=True)
         orders = RetailSyncService._as_orders(envelope.get("orders"))
         if not orders:
             orders = RetailSyncService._as_orders(envelope.get("datas"))
@@ -267,18 +276,29 @@ class RetailSyncService:
                 for key in ("params", "page_index", "page_size", "has_next", "data_count", "source"):
                     if key in data and key not in envelope:
                         envelope[key] = data[key]
+        if not orders and any(key in envelope for key in ("so_id", "o_id", "outer_so_id", "raw_so_id")):
+            orders = [envelope]
         return [item for item in orders if isinstance(item, dict)], envelope
+
+    @staticmethod
+    def _parse_json(value: str) -> Any:
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            try:
+                return ast.literal_eval(text)
+            except (ValueError, SyntaxError):
+                return None
 
     @staticmethod
     def _as_orders(value: Any) -> list[dict[str, Any]]:
         """兼容数组、单个订单对象和低代码平台传来的 JSON 字符串。"""
         if isinstance(value, str):
-            text = value.strip()
-            if not text:
-                return []
-            try:
-                value = json.loads(text)
-            except (json.JSONDecodeError, TypeError):
+            value = RetailSyncService._parse_json(value)
+            if value is None:
                 return []
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]

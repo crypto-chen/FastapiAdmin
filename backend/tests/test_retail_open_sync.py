@@ -262,6 +262,18 @@ def test_sync_accepts_orders_json_string(retail_client: TestClient) -> None:
     assert resp.json()["data"]["created"] == 6
 
 
+def test_sync_accepts_raw_json_string_body(retail_client: TestClient) -> None:
+    """兼容低代码平台 payload_type=raw：整个 body 是 JSON 字符串。"""
+    ctx = asyncio.run(_prepare())
+    resp = retail_client.post(
+        "/open/v1/retail/orders/sync",
+        headers={**_headers("req-raw-string"), "Content-Type": "application/json"},
+        content=json.dumps(ctx["sample"], ensure_ascii=False),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["created"] == 6
+
+
 def test_sync_works_without_authorization_header(retail_client: TestClient) -> None:
     ctx = asyncio.run(_prepare())
     resp = retail_client.post(

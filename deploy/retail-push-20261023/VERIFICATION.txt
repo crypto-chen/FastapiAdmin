@@ -5,7 +5,7 @@ Commit: master (latest, pushed to origin)
 Backend tests:
   cd backend
   python -m pytest tests/test_retail_open_sync.py -q
-  Result: 7 passed in 262.00s
+  Result: 8 passed in 295.21s
 
 Backend lint:
   ruff check ...
