@@ -56,6 +56,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[Any, Any]:
     await reconcile_customer_build_jobs()
     logger.info("✅ 客户分析构建任务 初始化完成")
 
+    from app.modules.retail.schedule import reconcile_retail_order_sync_jobs
+
+    await reconcile_retail_order_sync_jobs()
+    logger.info("✅ 聚水潭零售订单同步任务 初始化完成")
+
     console_start(
         host=settings.SERVER_HOST,
         port=settings.SERVER_PORT,

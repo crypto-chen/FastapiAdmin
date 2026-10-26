@@ -114,3 +114,6 @@ python scripts/sync_jushuitan_orders.py --name "聚水潭默认连接" --period 
 python scripts/sync_jushuitan_orders.py --name "聚水潭默认连接" \
   --begin "2026-10-19 00:00:00" --end "2026-10-26 23:59:59" --date-type 0
 ```
+
+后端启动后会自动注册：**每 10 分钟拉最近 30 分钟**，以及 **每天 02:10 拉最近 7 天**。
+只需重启后端，不需要额外配置 Windows 任务计划。

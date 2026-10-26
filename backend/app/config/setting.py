@@ -165,6 +165,10 @@ class Settings(BaseSettings):
     # ******************* 零售数据推送 ******************* #
     # ================================================= #
     RETAIL_SYNC_JOB_ID: int | None = None  # 零售推送回放任务ID；空=按任务名自动查找
+    RETAIL_ORDER_SYNC_INTERVAL_MINUTES: int = 10  # 聚水潭非淘系订单自动同步间隔（分钟）
+    RETAIL_ORDER_SYNC_LOOKBACK_MINUTES: int = 30  # 每次同步回看分钟数
+    RETAIL_ORDER_SYNC_MAX_ROWS: int = 20000  # 单次最多拉取订单数
+    RETAIL_ORDER_SYNC_CONNECTION_ID: int | None = None  # 指定聚水潭连接；空=第一个启用连接
 
     # ================================================= #
     # ********************* 日志配置 ******************* #

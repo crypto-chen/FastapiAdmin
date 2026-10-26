@@ -30,6 +30,12 @@ Jushuitan non-TaoBao order query:
   python scripts/sync_jushuitan_orders.py --name "聚水潭默认连接" --period 2026-10 --max-rows 3 --dry-run
   Result: 3 orders fetched by /open/orders/single/query (date_type=0, read-only)
 
+Automatic schedule:
+  register_retail_order_sync_job()
+  Result:
+    retail_order_sync:jushuitan:10m     interval[0:10:00]
+    retail_order_sync:jushuitan:daily   cron[hour=2, minute=10]
+
 Unit tests:
   python -m pytest tests/test_jushuitan.py -q
   Result: 20 passed
