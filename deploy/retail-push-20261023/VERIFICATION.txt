@@ -23,7 +23,19 @@ Frontend:
   Result: exit 0
 
   pnpm run build:prod
-  Result: built in 1m 59s (exit 0)
+  Result: built in 46.48s (exit 0)
+
+Jushuitan non-TaoBao order query:
+  cd backend
+  python scripts/sync_jushuitan_orders.py --name "聚水潭默认连接" --period 2026-10 --max-rows 3 --dry-run
+  Result: 3 orders fetched by /open/orders/single/query (date_type=0, read-only)
+
+Unit tests:
+  python -m pytest tests/test_jushuitan.py -q
+  Result: 20 passed
+
+  python -m pytest tests/test_retail_open_sync.py -q -k pull_orders
+  Result: 1 passed
 
 Local push test:
   python deploy/retail-push-20261023/test_sync.py --url http://127.0.0.1:8001/open/v1/retail/orders/sync

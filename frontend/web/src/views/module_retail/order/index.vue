@@ -36,6 +36,13 @@
               @keyup.enter="queryOrders"
             />
             <ElInput
+              v-model="orderSearch.source"
+              placeholder="来源"
+              clearable
+              style="width: 110px"
+              @keyup.enter="queryOrders"
+            />
+            <ElInput
               v-model="orderSearch.keyword"
               placeholder="单号/买家/备注"
               clearable
@@ -55,6 +62,7 @@
 
           <ElTable v-loading="orderLoading" :data="orders" border stripe height="calc(100vh - 360px)">
             <ElTableColumn prop="period_value" label="期间" width="90" fixed />
+            <ElTableColumn prop="source" label="来源" width="90" />
             <ElTableColumn label="店铺" min-width="170" show-overflow-tooltip>
               <template #default="{ row }">
                 {{ row.shop_name || "-" }}<span class="muted"> / {{ row.shop_id }}</span>
@@ -270,6 +278,7 @@ const orderSearch = reactive<{
   shop_name?: string;
   so_id?: string;
   status?: string;
+  source?: string;
   keyword?: string;
 }>({});
 const batchSearch = reactive<{ request_id?: string; source?: string; status?: string }>({});
@@ -342,6 +351,7 @@ async function loadOrders() {
       shop_name: orderSearch.shop_name || undefined,
       so_id: orderSearch.so_id || undefined,
       status: orderSearch.status || undefined,
+      source: orderSearch.source || undefined,
       keyword: orderSearch.keyword || undefined,
       page_no: orderPage.page_no,
       page_size: orderPage.page_size,
@@ -393,6 +403,7 @@ function resetOrderSearch() {
     shop_name: "",
     so_id: "",
     status: "",
+    source: "",
     keyword: "",
   });
   queryOrders();

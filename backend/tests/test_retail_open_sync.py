@@ -27,7 +27,7 @@ from app.modules.openapi.model import OpenApiLogModel
 from app.modules.retail.model import RetailOrderItemModel, RetailOrderModel, RetailSyncBatchModel
 from app.modules.retail.query_service import RetailQueryService
 from app.modules.retail.schema import RetailBatchQueryParam, RetailOrderQueryParam
-from app.modules.retail.service import DEFAULT_RETAIL_PUSH_JOB_NAME
+from app.modules.retail.service import DEFAULT_RETAIL_PUSH_JOB_NAME, RetailSyncService
 
 SAMPLE_PATH = Path(__file__).parent / "data" / "qimen_retail_sample.json"
 
@@ -329,6 +329,25 @@ def test_admin_retail_query_service(retail_client: TestClient) -> None:
             assert batch_detail["received_count"] == 6
 
     asyncio.run(_query())
+
+
+def test_pull_orders_writes_retail_tables(retail_client: TestClient) -> None:
+    """聚水潭主动拉取的订单复用同一套 upsert 和页面查询。"""
+    ctx = asyncio.run(_prepare())
+
+    async def _pull() -> None:
+        async with async_db_session() as db, db.begin():
+            result = await RetailSyncService(db, app_id="jushuitan_pull").pull_orders(
+                ctx["sample"]["orders"],
+                source="jushuitan",
+                request_id="pull-test-1",
+            )
+            assert result.created == 6
+        async with async_db_session() as db:
+            count = (await db.execute(select(func.count(RetailOrderModel.id)))).scalar() or 0
+            assert int(count) == 6
+
+    asyncio.run(_pull())
 
 
 def test_admin_retail_routes_registered(retail_client: TestClient) -> None:

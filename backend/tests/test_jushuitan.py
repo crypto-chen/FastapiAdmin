@@ -1,6 +1,8 @@
 """聚水潭对接单元测试：签名规则、时间分段、金额折算、路由注册。"""
 
+import asyncio
 from datetime import date, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -9,6 +11,7 @@ from app.modules.erp.jushuitan.client import (
     MAX_WINDOW_DAYS,
     JushuitanClient,
     JushuitanClientConfig,
+    OrderQuery,
     build_sign,
     month_range,
     split_windows,
@@ -205,6 +208,52 @@ def test_monthly_biz_template_renders_period():
 
     december = render_request_params(MONTHLY_SALES_OUTBOUND_BIZ, now=datetime(2026, 12, 1))
     assert december["modified_end"] == "2026-12-31 23:59:59"
+
+
+def test_order_query_biz_and_iter_orders():
+    """订单查询 biz 字段正确，翻页去重后按 o_id 输出。"""
+    query = OrderQuery(
+        shop_id=10246497,
+        modified_begin="2026-10-01 00:00:00",
+        modified_end="2026-10-01 23:59:59",
+        date_type=0,
+        status="Delivering",
+    )
+    biz = query.to_biz()
+    assert biz["shop_id"] == 10246497
+    assert biz["date_type"] == 0
+    assert biz["status"] == "Delivering"
+    assert "is_offline_shop" not in biz
+
+    client = JushuitanClient(JushuitanClientConfig(app_key="ak", app_secret="as", access_token="at"))
+    client.query_orders_page = AsyncMock(
+        side_effect=[
+            {
+                "orders": [{"o_id": 1, "so_id": "A"}, {"o_id": 2, "so_id": "B"}],
+                "has_next": True,
+                "page_count": 2,
+            },
+            {
+                "orders": [{"o_id": 2, "so_id": "B"}, {"o_id": 3, "so_id": "C"}],
+                "has_next": False,
+                "page_count": 2,
+            },
+        ]
+    )
+
+    async def _collect():
+        return [
+            row
+            async for row in client.iter_orders(
+                datetime(2026, 10, 1, 0, 0, 0),
+                datetime(2026, 10, 1, 23, 59, 59),
+                page_size=100,
+            )
+        ]
+
+    rows = asyncio.run(_collect())
+    assert [row["o_id"] for row in rows] == [1, 2, 3]
+    assert client.query_orders_page.await_count == 2
 
 
 def test_extract_sales_outbound_for_metric():

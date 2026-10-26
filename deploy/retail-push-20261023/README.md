@@ -92,3 +92,25 @@ grep -R "retail/orders/page" /usr/share/nginx/html/assets | head
 ```
 
 没有结果说明发布目录仍是旧 `dist`；重新构建并复制 `frontend/web/dist/*`。
+
+## 5. 非淘系订单从聚水潭拉取
+
+淘系走奇门，非淘系走聚水潭「订单查询」`/open/orders/single/query`：
+
+```bash
+cd backend
+python scripts/sync_jushuitan_orders.py --name "聚水潭默认连接" --period 2026-10
+```
+
+先只取数验证：
+
+```bash
+python scripts/sync_jushuitan_orders.py --name "聚水潭默认连接" --period 2026-10 --dry-run
+```
+
+建议每日拉取最近 7 天，更新 `WaitConfirm → Delivering/Sent` 状态：
+
+```bash
+python scripts/sync_jushuitan_orders.py --name "聚水潭默认连接" \
+  --begin "2026-10-19 00:00:00" --end "2026-10-26 23:59:59" --date-type 0
+```

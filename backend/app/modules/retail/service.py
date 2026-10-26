@@ -251,6 +251,114 @@ class RetailSyncService:
         await self.db.flush()
         return result
 
+    async def pull_orders(
+        self,
+        orders: list[dict[str, Any]],
+        source: str = "jushuitan",
+        request_id: str | None = None,
+        publish_metric: bool = False,
+    ) -> RetailSyncResultSchema:
+        """接收集水潭主动拉取回来的订单（非淘系），复用同一套幂等落库。"""
+        batch_id = f"pull-{datetime.now(UTC):%Y%m%d%H%M%S%f}"
+        request_key = (request_id or batch_id)[:128]
+        existing = await self._find_batch(request_key)
+        if existing is not None:
+            return self._replay(existing)
+
+        batch = RetailSyncBatchModel(
+            app_id=self.app_id,
+            client_id=self.client_id,
+            request_key=request_key,
+            request_id=request_id,
+            source=source,
+            status="running",
+            payload_hash=_hash(orders),
+            received_count=len(orders),
+            periods=[],
+            has_next=False,
+            raw_payload={"pull": True, "received": len(orders)},
+        )
+        self.db.add(batch)
+        await self.db.flush()
+
+        created = updated = unchanged = stale = failed = item_count = 0
+        periods: set[str] = set()
+        errors: list[RetailSyncErrorSchema] = []
+        for index, order in enumerate(orders):
+            if not isinstance(order, dict):
+                failed += 1
+                errors.append(RetailSyncErrorSchema(index=index, reason="订单不是对象"))
+                continue
+            try:
+                async with self.db.begin_nested():
+                    result = await self._upsert_order(order=order, source=source, batch_id=batch_id)
+                periods.add(result["period_value"])
+                if result.get("previous_period"):
+                    periods.add(result["previous_period"])
+                item_count += int(result["item_count"])
+                if result["action"] == "created":
+                    created += 1
+                elif result["action"] == "updated":
+                    updated += 1
+                elif result["action"] == "unchanged":
+                    unchanged += 1
+                else:
+                    stale += 1
+            except Exception as exc:  # noqa: BLE001 - 单条失败不阻断整批
+                failed += 1
+                errors.append(
+                    RetailSyncErrorSchema(
+                        index=index,
+                        order_id=_text(order.get("so_id") or order.get("o_id"), 64),
+                        reason=str(exc)[:500],
+                    )
+                )
+
+        metric_sync: list[dict[str, Any]] = []
+        if publish_metric:
+            job_id = await self._resolve_job_id()
+            if job_id:
+                for period in sorted(periods):
+                    try:
+                        async with self.db.begin_nested():
+                            metric_sync.append(
+                                await self._publish_period(job_id, period, source, batch_id)
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        metric_sync.append(
+                            {"period_value": period, "status": "failed", "reason": str(exc)[:300]}
+                        )
+
+        status = "success" if failed == 0 else ("partial" if failed < len(orders) else "failed")
+        batch.status = status
+        batch.created_count = created
+        batch.updated_count = updated
+        batch.unchanged_count = unchanged
+        batch.stale_count = stale
+        batch.failed_count = failed
+        batch.item_count = item_count
+        batch.periods = sorted(periods)
+        batch.errors = [item.model_dump() for item in errors[:100]]
+
+        result = RetailSyncResultSchema(
+            batch_id=batch_id,
+            request_id=request_id,
+            received=len(orders),
+            created=created,
+            updated=updated,
+            unchanged=unchanged,
+            stale=stale,
+            failed=failed,
+            item_count=item_count,
+            periods=sorted(periods),
+            has_next=False,
+            errors=errors[:100],
+            metric_sync=metric_sync,
+        )
+        batch.result = result.model_dump()
+        await self.db.flush()
+        return result
+
     @staticmethod
     def _normalize(payload: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if isinstance(payload, str):

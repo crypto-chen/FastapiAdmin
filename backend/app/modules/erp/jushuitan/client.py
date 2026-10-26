@@ -34,6 +34,8 @@ TEST_BASE_URL = "https://dev-api.jushuitan.com"
 
 # 销售出库查询接口路径（docType=8 & docId=34）
 SALES_OUTBOUND_QUERY_PATH = "/open/orders/out/simple/query"
+# 订单查询（docType=4 & docId=22）：不返回淘系/拼多多订单
+ORDER_QUERY_PATH = "/open/orders/single/query"
 # 店铺查询（用于连通性自检，docId=1）
 SHOPS_QUERY_PATH = "/open/shops/query"
 
@@ -41,6 +43,8 @@ SHOPS_QUERY_PATH = "/open/shops/query"
 MAX_WINDOW_DAYS = 7
 # 文档硬约束：销售出库查询 page_size 默认 30、最大 50
 MAX_PAGE_SIZE = 50
+# 订单查询 page_size 最大 100
+MAX_ORDER_PAGE_SIZE = 100
 # 100 次/分钟 → 两次请求间隔不小于 0.6 秒，留一点余量
 MIN_REQUEST_INTERVAL = 0.62
 # 出库单状态：已出库
@@ -93,6 +97,30 @@ class SalesOutboundQuery(BaseModel):
 
     def to_biz(self) -> dict[str, Any]:
         """转成接口 ``biz`` 字典，剔除未传字段。"""
+        return self.model_dump(exclude_none=True)
+
+
+class OrderQuery(BaseModel):
+    """订单查询 ``biz`` 参数（docId=22）。
+
+    该接口不返回淘系/拼多多订单；淘系走奇门，拼多多走方舟。
+    ``date_type``：0=修改时间，2=订单日期，3=发货时间。
+    """
+
+    shop_id: int | None = Field(default=None, description="店铺编码")
+    is_offline_shop: bool | None = Field(default=None, description="是否线下店铺")
+    modified_begin: str | None = Field(default=None, description="起始时间 yyyy-MM-dd HH:mm:ss")
+    modified_end: str | None = Field(default=None, description="结束时间，与起始不超过 7 天")
+    date_type: int = Field(default=0, ge=0, le=3, description="0=修改时间 2=订单日期 3=发货时间")
+    status: str | None = Field(default=None, description="订单状态；空=全部")
+    page_index: int = Field(default=1, ge=1, description="页码")
+    page_size: int = Field(default=MAX_ORDER_PAGE_SIZE, ge=1, le=MAX_ORDER_PAGE_SIZE, description="每页最大 100")
+    start_ts: int | None = Field(default=None, description="行版本号；用于增量防漏单")
+    is_get_total: bool = Field(default=True, description="是否返回总条数/总页数")
+    order_types: list[str] | None = Field(default=None, description="订单类型")
+    archive: bool | None = Field(default=None, description="是否查询历史订单")
+
+    def to_biz(self) -> dict[str, Any]:
         return self.model_dump(exclude_none=True)
 
 
@@ -221,6 +249,64 @@ class JushuitanClient:
         """单次销售出库查询（一页）。"""
         payload = biz.to_biz() if isinstance(biz, SalesOutboundQuery) else dict(biz)
         return await self.call(SALES_OUTBOUND_QUERY_PATH, payload)
+
+    async def query_orders(self, biz: OrderQuery | dict[str, Any]) -> dict[str, Any]:
+        """单次订单查询（一页）。"""
+        payload = biz.to_biz() if isinstance(biz, OrderQuery) else dict(biz)
+        return await self.call(ORDER_QUERY_PATH, payload)
+
+    async def query_orders_page(
+        self,
+        begin: datetime,
+        end: datetime,
+        page_index: int = 1,
+        page_size: int = MAX_ORDER_PAGE_SIZE,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        query = OrderQuery(
+            modified_begin=begin.strftime(TIME_FORMAT),
+            modified_end=end.strftime(TIME_FORMAT),
+            page_index=page_index,
+            page_size=page_size,
+            **extra,
+        )
+        return await self.query_orders(query)
+
+    async def iter_orders(
+        self,
+        begin: datetime,
+        end: datetime,
+        page_size: int = MAX_ORDER_PAGE_SIZE,
+        **extra: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """按时间段翻页拉取订单；超过 7 天自动分段，按 o_id/so_id 去重。"""
+        seen: set[Any] = set()
+        for window_begin, window_end in split_windows(begin, end):
+            page_index = 1
+            while True:
+                data = await self.query_orders_page(
+                    window_begin,
+                    window_end,
+                    page_index=page_index,
+                    page_size=page_size,
+                    **extra,
+                )
+                rows = data.get("orders")
+                if not isinstance(rows, list):
+                    rows = data.get("datas") if isinstance(data.get("datas"), list) else []
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    key = row.get("o_id") or row.get("so_id") or json.dumps(row, sort_keys=True, default=str)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    yield row
+                has_next = bool(data.get("has_next"))
+                page_count = data.get("page_count")
+                if not rows or (not has_next and not (isinstance(page_count, int) and page_index < page_count)):
+                    break
+                page_index += 1
 
     async def query_sales_outbound_page(
         self,
