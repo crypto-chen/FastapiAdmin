@@ -20,7 +20,7 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
@@ -58,6 +58,12 @@ async def _load_connection(source_id: int | None, name: str | None) -> Jushuitan
 
 
 def _resolve_range(args: argparse.Namespace) -> tuple[datetime, datetime]:
+    if args.recent_days is not None:
+        if args.recent_days <= 0:
+            raise SystemExit("--recent-days 必须大于 0")
+        end = datetime.now().replace(microsecond=0)
+        begin = end - timedelta(days=args.recent_days)
+        return begin, end
     if args.period:
         return month_range(args.period)
     if args.begin and args.end:
@@ -77,6 +83,7 @@ async def main() -> None:
     parser.add_argument("--source-id", type=int, default=None, help="聚水潭连接配置 ID")
     parser.add_argument("--name", default="聚水潭默认连接", help="聚水潭连接名称")
     parser.add_argument("--period", default=None, help="月度期间 YYYY-MM")
+    parser.add_argument("--recent-days", type=int, default=None, help="最近 N 天（适合每日定时任务）")
     parser.add_argument("--begin", default=None, help="起始时间 yyyy-MM-dd HH:mm:ss")
     parser.add_argument("--end", default=None, help="结束时间 yyyy-MM-dd HH:mm:ss")
     parser.add_argument("--date-type", type=int, default=0, choices=[0, 2, 3], help="0=修改时间 2=订单日期 3=发货时间")
