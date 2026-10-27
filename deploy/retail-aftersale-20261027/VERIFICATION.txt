@@ -161,3 +161,49 @@
 ------------------------------------------------------------
     python deploy/retail-aftersale-20261027/update.py --apply --service fastapiadmin
     python deploy/retail-aftersale-20261027/update.py --apply --service fastapiadmin --build-frontend --frontend-target /usr/share/nginx/html
+
+六、追加：接单金额按 13% 去税（同日）
+------------------------------------------------------------
+改动：
+    backend\app\config\setting.py               新增 RETAIL_TAX_RATE: float = 13.0
+    backend\app\modules\retail\query_service.py  untaxed() 折算；订单/售后 summary 与逐行增加未税字段
+    frontend\web\src\api\module_retail\index.ts  类型补充
+    frontend\web\src\views\module_retail\order\index.vue  汇总栏 + 表格列 + 明细抽屉
+    docs\平台店铺分析指标对接方案.md             PLT-08 改 ✅（÷1.13）、PLT-11 未税口径
+    docs\聚水潭对接说明.md / 零售数据同步开放接口对接说明.md  RETAIL_TAX_RATE 说明
+
+1) 真实库数值（本地 dev MySQL，期间 2026-10）
+命令：
+    cd backend
+    .venv\Scripts\python.exe ..\deploy\retail-aftersale-20261027\check_tax.py
+实际输出（逐字）：
+    ORDER SUMMARY {'order_count': 55, 'buyer_paid_amount_sum': 194.5, 'untaxed_amount_sum': 172.12, 'tax_rate': 13.0, 'item_count_sum': 358}
+    AFTERSALE SUMMARY {'after_sale_count': 0, 'actual_refund_sum': 0.0, 'untaxed_actual_refund_sum': 0.0, 'tax_rate': 13.0, ...}
+核对：194.50 ÷ 1.13 = 172.124… → 172.12（保留 2 位，四舍五入）
+退出码：0
+
+2) 单元测试（新增未税断言）
+命令：
+    cd backend
+    .venv\Scripts\ruff.exe check app/modules/retail app/config/setting.py tests/test_retail_open_sync.py
+    .venv\Scripts\python.exe -m pytest tests/test_retail_open_sync.py -q -k "after_sale or admin_query"
+实际输出（逐字）：
+    All checks passed!
+    ...                                                                      [100%]
+    3 passed, 11 deselected in 67.35s (0:01:07)
+断言内容：
+    summary.untaxed_amount_sum == round(buyer_paid_amount_sum / 1.13, 2)
+    summary.untaxed_actual_refund_sum == 249.56   （282.00 ÷ 1.13）
+退出码：0
+
+3) 前端类型检查
+命令：
+    cd frontend/web
+    pnpm run type-check
+实际输出：
+    > vue-tsc --noEmit   （无错误）
+退出码：0
+
+4) 回滚
+    删除/注释 RETAIL_TAX_RATE 并重启即恢复 13 默认；需要完全回到含税口径时设 RETAIL_TAX_RATE=0。
+    本次无数据库变更，ROLLBACK.sh 无需执行降级。

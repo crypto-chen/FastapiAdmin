@@ -337,6 +337,14 @@ def test_admin_retail_query_service(retail_client: TestClient) -> None:
             page = await service.page_orders(RetailOrderQueryParam(period_value="2026-10"), 1, 20)
             assert page["total"] == 6
             assert page["summary"]["order_count"] == 6
+            # 接单未税 = 买家实付合计 ÷ 1.13（默认税率 13%）
+            assert page["summary"]["tax_rate"] == 13.0
+            assert page["summary"]["untaxed_amount_sum"] == round(
+                page["summary"]["buyer_paid_amount_sum"] / 1.13, 2
+            )
+            assert page["items"][0]["untaxed_amount"] == round(
+                (page["items"][0]["buyer_paid_amount"] or 0) / 1.13, 2
+            )
             detail = await service.order_detail(int(page["items"][0]["id"]))
             assert detail["order"]["period_value"] == "2026-10"
             assert detail["items"]
@@ -502,8 +510,10 @@ def test_after_sale_query_page_and_summary(retail_client: TestClient) -> None:
             )
             assert page["total"] == 2
             assert page["summary"]["actual_refund_sum"] == 282.0
+            assert page["summary"]["untaxed_actual_refund_sum"] == 249.56
             detail = await service.aftersale_detail(page["items"][0]["id"])
             assert detail["after_sale"]["as_id"] in {"900000001", "900000002"}
+            assert detail["after_sale"]["untaxed_actual_refund"] is not None
             assert len(detail["items"]) == 1
 
     asyncio.run(_query())

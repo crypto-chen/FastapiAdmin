@@ -47,6 +47,7 @@ export interface RetailOrderRow {
   pay_amount?: number | null;
   buyer_paid_amount?: number | null;
   seller_income_amount?: number | null;
+  untaxed_amount?: number | null;
   freight?: number | null;
   free_amount?: number | null;
   receiver_state?: string | null;
@@ -64,6 +65,8 @@ export interface RetailOrderPageResult extends RetailPageResult<RetailOrderRow> 
   summary: {
     order_count: number;
     buyer_paid_amount_sum: number;
+    untaxed_amount_sum: number;
+    tax_rate: number;
     item_count_sum: number;
   };
 }
@@ -167,6 +170,7 @@ export interface RetailAfterSaleRow {
   payment?: number | null;
   free_amount?: number | null;
   actual_refund?: number | null;
+  untaxed_actual_refund?: number | null;
   buyer_apply_refund?: number | null;
   receive_refund?: number | null;
   seller_real_refund?: number | null;
@@ -186,6 +190,8 @@ export interface RetailAfterSalePageResult extends RetailPageResult<RetailAfterS
   summary: {
     after_sale_count: number;
     actual_refund_sum: number;
+    untaxed_actual_refund_sum: number;
+    tax_rate: number;
     refund_sum: number;
     item_count_sum: number;
   };

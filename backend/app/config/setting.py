@@ -169,6 +169,9 @@ class Settings(BaseSettings):
     RETAIL_ORDER_SYNC_LOOKBACK_MINUTES: int = 30  # 每次同步回看分钟数
     RETAIL_ORDER_SYNC_MAX_ROWS: int = 20000  # 单次最多拉取订单数
     RETAIL_ORDER_SYNC_CONNECTION_ID: int | None = None  # 指定聚水潭连接；空=第一个启用连接
+    # 零售订单/退货金额税率（百分比）：未税金额 = 含税金额 / (1 + RETAIL_TAX_RATE / 100)
+    # 零售（电商）默认 13%；设 0 表示上游金额已是未税、不再折算
+    RETAIL_TAX_RATE: float = 13.0
 
     # ================================================= #
     # ********************* 日志配置 ******************* #

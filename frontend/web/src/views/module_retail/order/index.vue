@@ -68,7 +68,10 @@
 
           <div class="summary">
             <span>订单 {{ orderPage.summary.order_count }} 张</span>
-            <span>买家实付合计 {{ formatMoney(orderPage.summary.buyer_paid_amount_sum) }}</span>
+            <span>买家实付合计（含税） {{ formatMoney(orderPage.summary.buyer_paid_amount_sum) }}</span>
+            <span class="summary-tax">
+              接单未税（÷{{ orderPage.summary.tax_rate }}%）{{ formatMoney(orderPage.summary.untaxed_amount_sum) }}
+            </span>
             <span>明细行合计 {{ orderPage.summary.item_count_sum }}</span>
             <span class="summary-extra">点「明细」查看 SKU 与金额</span>
           </div>
@@ -93,6 +96,9 @@
             </ElTableColumn>
             <ElTableColumn label="买家实付" width="110" align="right">
               <template #default="{ row }">{{ formatMoney(row.buyer_paid_amount) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="接单未税" width="110" align="right">
+              <template #default="{ row }">{{ formatMoney(row.untaxed_amount) }}</template>
             </ElTableColumn>
             <ElTableColumn prop="item_count" label="明细" width="70" align="center" />
             <ElTableColumn label="上游修改" width="165">
@@ -250,7 +256,11 @@
 
           <div class="summary">
             <span>售后单 {{ afterSalePage.summary.after_sale_count }} 张</span>
-            <span>实退合计 {{ formatMoney(afterSalePage.summary.actual_refund_sum) }}</span>
+            <span>实退合计（含税） {{ formatMoney(afterSalePage.summary.actual_refund_sum) }}</span>
+            <span class="summary-tax">
+              实退未税（÷{{ afterSalePage.summary.tax_rate }}%）
+              {{ formatMoney(afterSalePage.summary.untaxed_actual_refund_sum) }}
+            </span>
             <span>应退合计 {{ formatMoney(afterSalePage.summary.refund_sum) }}</span>
             <span>明细行合计 {{ afterSalePage.summary.item_count_sum }}</span>
             <span class="summary-extra">淘系走奇门推送，非淘系由聚水潭定时同步</span>
@@ -282,6 +292,9 @@
             </ElTableColumn>
             <ElTableColumn label="实退" width="100" align="right">
               <template #default="{ row }">{{ formatMoney(row.actual_refund) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="实退未税" width="100" align="right">
+              <template #default="{ row }">{{ formatMoney(row.untaxed_actual_refund) }}</template>
             </ElTableColumn>
             <ElTableColumn prop="item_count" label="明细" width="70" align="center" />
             <ElTableColumn label="操作" width="80" fixed="right">
@@ -318,6 +331,7 @@
           <ElDescriptionsItem label="内部单号">{{ orderDetail.order.o_id || "-" }}</ElDescriptionsItem>
           <ElDescriptionsItem label="买家">{{ orderDetail.order.buyer_nick || "-" }}</ElDescriptionsItem>
           <ElDescriptionsItem label="买家实付">{{ formatMoney(orderDetail.order.buyer_paid_amount) }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="接单未税">{{ formatMoney(orderDetail.order.untaxed_amount) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="应付金额">{{ formatMoney(orderDetail.order.pay_amount) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="支付时间">{{ formatTime(orderDetail.order.pay_date) }}</ElDescriptionsItem>
           <ElDescriptionsItem label="上游修改">{{ formatTime(orderDetail.order.modified_time) }}</ElDescriptionsItem>
@@ -406,6 +420,9 @@
           </ElDescriptionsItem>
           <ElDescriptionsItem label="实退金额">
             {{ formatMoney(afterSaleDetail.after_sale.actual_refund) }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="实退未税">
+            {{ formatMoney(afterSaleDetail.after_sale.untaxed_actual_refund) }}
           </ElDescriptionsItem>
           <ElDescriptionsItem label="运费">
             {{ formatMoney(afterSaleDetail.after_sale.freight) }}
@@ -507,14 +524,27 @@ const orderPage = reactive({
   page_no: 1,
   page_size: 20,
   total: 0,
-  summary: { order_count: 0, buyer_paid_amount_sum: 0, item_count_sum: 0 },
+  summary: {
+    order_count: 0,
+    buyer_paid_amount_sum: 0,
+    untaxed_amount_sum: 0,
+    tax_rate: 13,
+    item_count_sum: 0,
+  },
 });
 const batchPage = reactive({ page_no: 1, page_size: 20, total: 0 });
 const afterSalePage = reactive({
   page_no: 1,
   page_size: 20,
   total: 0,
-  summary: { after_sale_count: 0, actual_refund_sum: 0, refund_sum: 0, item_count_sum: 0 },
+  summary: {
+    after_sale_count: 0,
+    actual_refund_sum: 0,
+    untaxed_actual_refund_sum: 0,
+    tax_rate: 13,
+    refund_sum: 0,
+    item_count_sum: 0,
+  },
 });
 
 const orderVisible = ref(false);
@@ -594,7 +624,14 @@ async function loadOrders() {
     const data = res.data?.data;
     orders.value = data?.items ?? [];
     orderPage.total = data?.total ?? 0;
-    orderPage.summary = data?.summary ?? { order_count: 0, buyer_paid_amount_sum: 0, item_count_sum: 0 };
+    orderPage.summary =
+      data?.summary ?? {
+        order_count: 0,
+        buyer_paid_amount_sum: 0,
+        untaxed_amount_sum: 0,
+        tax_rate: 13,
+        item_count_sum: 0,
+      };
   } catch (error) {
     orders.value = [];
     ElMessage.error("查询零售订单失败");
@@ -660,7 +697,14 @@ async function loadAfterSales() {
     afterSales.value = data?.items ?? [];
     afterSalePage.total = data?.total ?? 0;
     afterSalePage.summary =
-      data?.summary ?? { after_sale_count: 0, actual_refund_sum: 0, refund_sum: 0, item_count_sum: 0 };
+      data?.summary ?? {
+        after_sale_count: 0,
+        actual_refund_sum: 0,
+        untaxed_actual_refund_sum: 0,
+        tax_rate: 13,
+        refund_sum: 0,
+        item_count_sum: 0,
+      };
   } catch (error) {
     afterSales.value = [];
     ElMessage.error("查询零售售后失败");
@@ -828,6 +872,11 @@ onMounted(async () => {
   .summary-extra,
   .muted {
     color: var(--el-text-color-secondary);
+  }
+
+  .summary-tax {
+    font-weight: 600;
+    color: var(--el-color-primary);
   }
 
   .pager {

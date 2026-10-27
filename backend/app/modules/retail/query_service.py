@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config.setting import settings
 
 from .model import (
     RetailAfterSaleItemModel,
@@ -24,6 +27,27 @@ def _dt(value: datetime | None) -> str | None:
 
 def _num(value: Any) -> float | None:
     return round(float(value), 4) if value is not None else None
+
+
+def retail_tax_rate() -> float:
+    """零售税率（百分比），默认 13；配置异常时回退 13。"""
+    try:
+        rate = float(settings.RETAIL_TAX_RATE)
+    except (TypeError, ValueError):
+        return 13.0
+    return rate if rate >= 0 else 13.0
+
+
+def untaxed(value: Any, rate: float | None = None) -> float | None:
+    """含税金额折算未税：金额 / (1 + 税率/100)，保留 2 位小数。"""
+    if value is None:
+        return None
+    rate = retail_tax_rate() if rate is None else rate
+    amount = Decimal(str(value))
+    if rate <= 0:
+        return float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    divisor = Decimal("1") + Decimal(str(rate)) / Decimal("100")
+    return float((amount / divisor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def _order_row(row: RetailOrderModel) -> dict[str, Any]:
@@ -46,6 +70,7 @@ def _order_row(row: RetailOrderModel) -> dict[str, Any]:
         "pay_amount": _num(row.pay_amount),
         "buyer_paid_amount": _num(row.buyer_paid_amount),
         "seller_income_amount": _num(row.seller_income_amount),
+        "untaxed_amount": untaxed(row.buyer_paid_amount),
         "freight": _num(row.freight),
         "free_amount": _num(row.free_amount),
         "receiver_state": row.receiver_state,
@@ -131,6 +156,7 @@ def _aftersale_row(row: RetailAfterSaleModel) -> dict[str, Any]:
         "payment": _num(row.payment),
         "free_amount": _num(row.free_amount),
         "actual_refund": _num(row.actual_refund),
+        "untaxed_actual_refund": untaxed(row.actual_refund),
         "buyer_apply_refund": _num(row.buyer_apply_refund),
         "receive_refund": _num(row.receive_refund),
         "seller_real_refund": _num(row.seller_real_refund),
@@ -238,6 +264,8 @@ class RetailQueryService:
                 .limit(page_size)
             )
         ).scalars().all()
+        tax_rate = retail_tax_rate()
+        paid_sum = _num(amounts[0]) if amounts else 0
         return {
             "items": [_order_row(row) for row in rows],
             "total": int(total),
@@ -246,7 +274,9 @@ class RetailQueryService:
             "has_next": page_no * page_size < int(total),
             "summary": {
                 "order_count": int(total),
-                "buyer_paid_amount_sum": _num(amounts[0]) if amounts else 0,
+                "buyer_paid_amount_sum": paid_sum,
+                "untaxed_amount_sum": untaxed(paid_sum, tax_rate),
+                "tax_rate": tax_rate,
                 "item_count_sum": int(amounts[1]) if amounts else 0,
             },
         }
@@ -385,6 +415,8 @@ class RetailQueryService:
                 .limit(page_size)
             )
         ).scalars().all()
+        tax_rate = retail_tax_rate()
+        actual_sum = _num(sums[0]) if sums else 0
         return {
             "items": [_aftersale_row(row) for row in rows],
             "total": int(total),
@@ -393,7 +425,9 @@ class RetailQueryService:
             "has_next": page_no * page_size < int(total),
             "summary": {
                 "after_sale_count": int(total),
-                "actual_refund_sum": _num(sums[0]) if sums else 0,
+                "actual_refund_sum": actual_sum,
+                "untaxed_actual_refund_sum": untaxed(actual_sum, tax_rate),
+                "tax_rate": tax_rate,
                 "refund_sum": _num(sums[1]) if sums else 0,
                 "item_count_sum": int(sums[2]) if sums else 0,
             },
