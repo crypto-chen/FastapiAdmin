@@ -24,18 +24,26 @@ from app.modules.metadata.model import (
     SourceSystemModel,
 )
 from app.modules.openapi.model import OpenApiLogModel
+from app.modules.retail.aftersale_service import RetailAfterSaleSyncService
 from app.modules.retail.model import (
+    RetailAfterSaleItemModel,
+    RetailAfterSaleModel,
     RetailOrderItemModel,
     RetailOrderModel,
     RetailShopModel,
     RetailSyncBatchModel,
 )
 from app.modules.retail.query_service import RetailQueryService
-from app.modules.retail.schema import RetailBatchQueryParam, RetailOrderQueryParam
+from app.modules.retail.schema import (
+    RetailAfterSaleQueryParam,
+    RetailBatchQueryParam,
+    RetailOrderQueryParam,
+)
 from app.modules.retail.service import DEFAULT_RETAIL_PUSH_JOB_NAME, RetailSyncService
 from app.modules.retail.shop_service import RetailShopService
 
 SAMPLE_PATH = Path(__file__).parent / "data" / "qimen_retail_sample.json"
+AFTER_SALE_SAMPLE_PATH = Path(__file__).parent / "data" / "qimen_aftersale_sample.json"
 
 _TABLES = (
     "sys_user",
@@ -44,6 +52,8 @@ _TABLES = (
     "retail_order",
     "retail_order_item",
     "retail_shop",
+    "retail_after_sale",
+    "retail_after_sale_item",
     "meta_source_system",
     "meta_source_object",
     "meta_sync_job",
@@ -381,6 +391,119 @@ def test_shop_sync_upserts(retail_client: TestClient) -> None:
 
 
 def test_admin_retail_routes_registered(retail_client: TestClient) -> None:
-    for path in ("/retail/orders/page", "/retail/batches/page", "/retail/periods"):
+    for path in (
+        "/retail/orders/page",
+        "/retail/batches/page",
+        "/retail/periods",
+        "/retail/aftersales/page",
+    ):
         assert retail_client.get(path).status_code in (401, 403)
     assert retail_client.post("/retail/shops/sync").status_code in (401, 403)
+    assert retail_client.post("/retail/aftersales/pull").status_code in (401, 403)
+
+
+def test_after_sale_push_upsert_and_replay(retail_client: TestClient) -> None:
+    """免鉴权推送售后单：新增 → 幂等重放 → 内容不变 → 旧版本跳过。"""
+    async def _clean() -> None:
+        async with async_db_session() as db, db.begin():
+            await db.execute(delete(RetailAfterSaleItemModel))
+            await db.execute(delete(RetailAfterSaleModel))
+
+    asyncio.run(_clean())
+    payload = json.loads(AFTER_SALE_SAMPLE_PATH.read_text(encoding="utf-8"))
+    first = retail_client.post("/open/v1/retail/aftersales/sync", json=payload)
+    assert first.status_code == 200, first.text
+    data = first.json()["data"]
+    assert data["received"] == 2
+    assert data["created"] == 2
+    assert data["failed"] == 0
+    assert data["item_count"] == 2
+    assert data["periods"] == ["2026-10"]
+
+    # 同一份 body 命中 payload hash 幂等键 → 直接重放首次结果
+    replay = retail_client.post("/open/v1/retail/aftersales/sync", json=payload)
+    assert replay.status_code == 200
+    assert replay.json()["data"]["duplicate"] is True
+
+    # 换一个 request_id 再推一次 → 内容未变化，计 unchanged
+    unchanged = retail_client.post(
+        "/open/v1/retail/aftersales/sync",
+        json=payload,
+        headers={"X-Request-ID": "as-test-2"},
+    )
+    assert unchanged.status_code == 200
+    assert unchanged.json()["data"]["unchanged"] == 2
+
+    # 同一个 request_id 重复推 → 重放
+    repeat = retail_client.post(
+        "/open/v1/retail/aftersales/sync",
+        json=payload,
+        headers={"X-Request-ID": "as-test-2"},
+    )
+    assert repeat.json()["data"]["duplicate"] is True
+
+    async def _check() -> None:
+        async with async_db_session() as db:
+            rows = (await db.execute(select(RetailAfterSaleModel))).scalars().all()
+            assert len(rows) == 2
+            row = next(item for item in rows if item.as_id == "900000001")
+            assert row.shop_name == "示例旗舰店"
+            assert row.status == "Confirmed"
+            assert row.period_value == "2026-10"
+            assert float(row.actual_refund) == 194.0
+            items = (
+                await db.execute(
+                    select(RetailAfterSaleItemModel).where(
+                        RetailAfterSaleItemModel.after_sale_id == row.id
+                    )
+                )
+            ).scalars().all()
+            assert len(items) == 1
+            assert items[0].sku_id == "SKU-DEMO-001"
+
+    asyncio.run(_check())
+
+
+def test_after_sale_stale_modified_skipped(retail_client: TestClient) -> None:
+    """同一售后单推送更旧的 modified 时标记 stale，不覆盖已落库数据。"""
+    payload = json.loads(AFTER_SALE_SAMPLE_PATH.read_text(encoding="utf-8"))
+    row = payload["data"]["datas"][0]
+    stale_row = dict(row)
+    stale_row["modified"] = "2026-10-21 00:00:00"
+    stale_row["remark"] = "旧版本备注"
+
+    async def _push() -> None:
+        async with async_db_session() as db, db.begin():
+            result = await RetailAfterSaleSyncService(db, app_id="stale_test").pull_refunds(
+                [stale_row],
+                source="qimen",
+                request_id="stale-1",
+            )
+            assert result.stale == 1
+            assert result.updated == 0
+        async with async_db_session() as db:
+            stored = (
+                await db.execute(
+                    select(RetailAfterSaleModel).where(RetailAfterSaleModel.as_id == "900000001")
+                )
+            ).scalars().first()
+            assert stored is not None
+            assert stored.remark == "尺码不合适"
+
+    asyncio.run(_push())
+
+
+def test_after_sale_query_page_and_summary(retail_client: TestClient) -> None:
+    async def _query() -> None:
+        async with async_db_session() as db:
+            service = RetailQueryService(db)
+            page = await service.page_aftersales(
+                RetailAfterSaleQueryParam(period_value="2026-10"), 1, 20
+            )
+            assert page["total"] == 2
+            assert page["summary"]["actual_refund_sum"] == 282.0
+            detail = await service.aftersale_detail(page["items"][0]["id"])
+            assert detail["after_sale"]["as_id"] in {"900000001", "900000002"}
+            assert len(detail["items"]) == 1
+
+    asyncio.run(_query())

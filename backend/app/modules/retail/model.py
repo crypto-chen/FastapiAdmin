@@ -211,3 +211,137 @@ class RetailOrderItemModel(ModelMixin):
         String(64), default=None, nullable=True, comment="来源组合装SKU"
     )
     raw: Mapped[dict | None] = mapped_column(JSON, default=None, nullable=True, comment="原始明细 JSON")
+
+
+class RetailAfterSaleModel(ModelMixin):
+    """零售售后/退货退款单（聚水潭非淘系拉取 + 奇门淘系推送）。"""
+
+    __tablename__: str = "retail_after_sale"
+    __table_args__: tuple = (
+        UniqueConstraint("as_key", name="uq_retail_after_sale_key"),
+        Index("ix_retail_after_sale_period_shop", "period_value", "shop_id"),
+        Index("ix_retail_after_sale_modified", "modified_time"),
+        {"comment": "零售售后/退货退款单"},
+    )
+    __data_scope_exempt__: bool = True
+
+    as_key: Mapped[str] = mapped_column(String(180), nullable=False, comment="唯一键(source:as_id/outer_as_id)")
+    source: Mapped[str] = mapped_column(String(32), default="jushuitan", nullable=False, index=True, comment="来源")
+    as_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="售后单号")
+    outer_as_id: Mapped[str | None] = mapped_column(String(128), default=None, nullable=True, comment="平台售后单号")
+    o_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="订单内部单号")
+    so_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, index=True, comment="订单线上单号")
+    shop_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False, index=True, comment="店铺编号")
+    shop_name: Mapped[str | None] = mapped_column(String(128), default=None, nullable=True, comment="店铺名称")
+    shop_site: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="平台/站点")
+    type: Mapped[str | None] = mapped_column(String(32), default=None, nullable=True, comment="售后类型")
+    status: Mapped[str | None] = mapped_column(String(32), default=None, nullable=True, index=True, comment="售后状态")
+    shop_status: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="平台售后状态")
+    good_status: Mapped[str | None] = mapped_column(String(32), default=None, nullable=True, comment="货物状态")
+    order_status: Mapped[str | None] = mapped_column(String(32), default=None, nullable=True, comment="原订单状态")
+    as_date: Mapped[datetime | None] = mapped_column(DateTime, default=None, nullable=True, comment="申请时间")
+    registered_time: Mapped[datetime | None] = mapped_column(
+        DateTime, default=None, nullable=True, comment="登记时间"
+    )
+    modified_time: Mapped[datetime | None] = mapped_column(DateTime, default=None, nullable=True, comment="修改时间")
+    confirm_date: Mapped[datetime | None] = mapped_column(DateTime, default=None, nullable=True, comment="确认时间")
+    period_value: Mapped[str] = mapped_column(String(16), nullable=False, index=True, comment="归属期间(YYYY-MM)")
+    refund: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="商品应退金额")
+    payment: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="补偿金额")
+    free_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="优惠/差额")
+    freight: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="卖家应退运费")
+    actual_refund: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="实退金额(freight+refund-payment-free_amount)"
+    )
+    buyer_apply_refund: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="线上申请金额"
+    )
+    receive_refund: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="实际退给买家金额"
+    )
+    seller_real_refund: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="商家实退+平台补贴"
+    )
+    buyer_paid_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="营收小计-买家实付"
+    )
+    seller_income_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="营收小计-卖家实收"
+    )
+    platform_promotion: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="平台补贴"
+    )
+    platform_free_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="平台补贴(营收小计)"
+    )
+    government_free_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="政府补贴"
+    )
+    warehouse: Mapped[str | None] = mapped_column(String(128), default=None, nullable=True, comment="退回仓库")
+    wms_co_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="收货仓编码")
+    l_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="退回物流单号")
+    logistics_company: Mapped[str | None] = mapped_column(
+        String(128), default=None, nullable=True, comment="退回物流公司"
+    )
+    remark: Mapped[str | None] = mapped_column(Text, default=None, nullable=True, comment="备注")
+    result: Mapped[str | None] = mapped_column(Text, default=None, nullable=True, comment="处理结果")
+    node: Mapped[str | None] = mapped_column(Text, default=None, nullable=True, comment="线下备注")
+    currency: Mapped[str | None] = mapped_column(String(16), default=None, nullable=True, comment="币种")
+    item_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="明细行数")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, comment="内容 SHA256")
+    last_batch_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="最近同步批次")
+    raw: Mapped[dict | None] = mapped_column(JSON, default=None, nullable=True, comment="原始售后 JSON")
+
+
+class RetailAfterSaleItemModel(ModelMixin):
+    """零售售后/退货退款明细。"""
+
+    __tablename__: str = "retail_after_sale_item"
+    __table_args__: tuple = (
+        UniqueConstraint("after_sale_id", "line_key", name="uq_retail_after_sale_item_line"),
+        Index("ix_retail_after_sale_item_sku", "sku_id"),
+        {"comment": "零售售后/退货退款明细"},
+    )
+    __data_scope_exempt__: bool = True
+
+    after_sale_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("retail_after_sale.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="售后单ID",
+    )
+    line_key: Mapped[str] = mapped_column(String(128), nullable=False, comment="行唯一键(asi_id 或行哈希)")
+    asi_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="售后子单号")
+    sku_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="SKU编码")
+    i_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="款式编码")
+    name: Mapped[str | None] = mapped_column(String(512), default=None, nullable=True, comment="商品名称")
+    properties_value: Mapped[str | None] = mapped_column(
+        String(512), default=None, nullable=True, comment="规格属性"
+    )
+    qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="申请数量")
+    r_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="实收退货数量")
+    defective_qty: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="次品数量"
+    )
+    price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="单价")
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None, nullable=True, comment="申请金额")
+    shop_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="线上明细金额"
+    )
+    buyer_paid_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="买家实付"
+    )
+    seller_income_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), default=None, nullable=True, comment="卖家实收"
+    )
+    type: Mapped[str | None] = mapped_column(String(32), default=None, nullable=True, comment="明细类型")
+    is_gift: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, comment="是否赠品")
+    sku_type: Mapped[str | None] = mapped_column(String(32), default=None, nullable=True, comment="商品类型")
+    combine_sku_id: Mapped[str | None] = mapped_column(
+        String(64), default=None, nullable=True, comment="组合商品编码"
+    )
+    outer_oi_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="子订单号")
+    raw_so_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="原始线上订单号")
+    receive_date: Mapped[datetime | None] = mapped_column(DateTime, default=None, nullable=True, comment="入仓时间")
+    raw: Mapped[dict | None] = mapped_column(JSON, default=None, nullable=True, comment="原始明细 JSON")

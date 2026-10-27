@@ -16,6 +16,7 @@ from app.core.exceptions import CustomException
 from app.modules.openapi.route_class import OpenApiLogRoute
 from app.modules.openapi.security import CODE_PARAM_INVALID
 
+from .aftersale_service import RetailAfterSaleSyncService
 from .service import MAX_REQUEST_BYTES, RetailSyncService
 
 OpenRetailRouter = APIRouter(
@@ -69,4 +70,50 @@ async def sync_retail_orders(
         msg = "同步完成，请继续推送下一页"
     else:
         msg = "零售订单同步完成"
+    return SuccessResponse(data=result.model_dump(), msg=msg)
+
+
+@OpenRetailRouter.post(
+    "/aftersales/sync",
+    summary="接收零售售后/退货退款数据（奇门淘系）",
+    response_model=ResponseSchema[dict],
+)
+async def sync_retail_after_sales(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(db_getter)],
+) -> JSONResponse:
+    """外部系统主动推送售后单，按 ``source + as_id`` 幂等写入。
+
+    - 无需 Authorization；body 兼容 ``after_sales``/``aftersales``/``refunds``/
+      ``orders``/``datas``/``data``/裸数组，聚水潭原样返回体可直接提交；
+    - ``X-Request-ID`` 或 body 内 ``request_id`` 作为幂等键，重复提交返回首次结果；
+    - 上游 ``modified`` 更旧时跳过；内容一致计 unchanged；
+    - 落库表 ``retail_after_sale`` / ``retail_after_sale_item``，页面「零售售后」可见。
+    """
+    raw_body = await request.body()
+    if len(raw_body) > MAX_REQUEST_BYTES:
+        raise CustomException(
+            msg=f"请求体过大：{len(raw_body)} 字节，上限 {MAX_REQUEST_BYTES} 字节",
+            code=CODE_PARAM_INVALID,
+            status_code=413,
+        )
+    try:
+        payload = RetailSyncService.parse_body(raw_body)
+    except ValueError as exc:
+        raise CustomException(
+            msg=f"请求体不是合法 JSON：{exc}",
+            code=CODE_PARAM_INVALID,
+            status_code=400,
+        ) from exc
+    result = await RetailAfterSaleSyncService(db, app_id="public").sync(
+        payload,
+        request_id=request.headers.get("X-Request-ID"),
+        raw_body=raw_body,
+    )
+    if result.duplicate:
+        msg = "重复请求，返回首次处理结果"
+    elif result.failed:
+        msg = "同步完成，部分售后单处理失败，请查看 errors"
+    else:
+        msg = "零售售后单同步完成"
     return SuccessResponse(data=result.model_dump(), msg=msg)

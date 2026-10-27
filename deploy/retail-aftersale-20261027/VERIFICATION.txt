@@ -1,0 +1,163 @@
+零售售后/退货退款同步（聚水潭 docId=38 + 奇门推送） —— 验证记录
+============================================================
+日期：2026-10-27    执行目录：D:\永锢\06.核算指标系统\FastapiAdmin\backend
+目标库（本地验证）：MySQL localhost:3306 / fastapiadmin（ENVIRONMENT=dev）
+上线目标：http://120.237.174.243:6479 （conda Python，非 Docker）
+
+一、改动文件与产物路径
+------------------------------------------------------------
+1) MODIFIED_FILE（新增开放接口 + 管理端接口）
+   D:\永锢\06.核算指标系统\FastapiAdmin\backend\app\modules\retail\open_controller.py
+   HEAD 哈希: 501291730d93e2cb80ab4a15c55de3eb3f6600a2
+   工作区哈希: eb29b3a6eee607105ad70ba6f75713811542decb
+   改动：新增 POST /open/v1/retail/aftersales/sync（免鉴权、幂等、单条失败不阻断）
+
+2) 新增主服务
+   backend\app\modules\retail\aftersale_service.py
+   改动：as_key=source:as_id 幂等 upsert、content_hash、旧 modified 跳过、
+         period_value（as_date→created→modified→confirm_date）、
+         actual_refund=freight+refund-payment-free_amount、明细按 asi_id 整单替换、
+         pull_jushuitan_refunds()（定时任务与管理端手动同步共用）
+
+3) 新增迁移（建 2 张表）
+   backend\app\alembic\versions\2026_10_27_1353_b0f396df56ac.py
+   revision=b0f396df56ac  down_revision=retailshop01（单 head）
+   retail_after_sale / retail_after_sale_item
+
+4) 其他改动
+   backend\app\modules\retail\model.py          两张售后表模型
+   backend\app\modules\retail\schema.py         RetailAfterSale* 模型 + batch biz_type
+   backend\app\modules\retail\query_service.py  page_aftersales / aftersale_detail
+   backend\app\modules\retail\controller.py     /retail/aftersales/page|{id}|pull
+   backend\app\modules\retail\schedule.py       售后 10 分钟增量 + 每日 4 次 7 天补偿
+   backend\app\modules\erp\jushuitan\client.py  RefundQuery / iter_refunds（docId=38）
+   backend\scripts\sync_jushuitan_refunds.py    手工同步脚本（新增）
+   backend\scripts\check_retail_data.py         增加 AFTER_SALES 统计
+   backend\scripts\check_retail_migration.py    增加售后两张表校验
+   backend\tests\test_retail_open_sync.py       4 个售后用例
+   backend\tests\data\qimen_aftersale_sample.json  虚构测试数据
+   frontend\web\src\api\module_retail\index.ts  售后接口 + 类型
+   frontend\web\src\views\module_retail\order\index.vue  「退款售后」页签 + 明细抽屉
+   docs\零售数据同步开放接口对接说明.md          第 10 节（对外接口文档）
+   docs\聚水潭对接说明.md                        7.4 售后接口
+   docs\平台店铺分析指标对接方案.md              PLT-11/PLT-37 改为可做
+
+5) 四个产物
+   MODIFIED_FILE : backend\app\modules\retail\open_controller.py
+   DIFF_FILE     : deploy\retail-aftersale-20261027\CHANGES.diff
+   VERIFICATION  : deploy\retail-aftersale-20261027\VERIFICATION.txt（本文件）
+   ROLLBACK      : deploy\retail-aftersale-20261027\ROLLBACK.sh
+
+二、BASELINE（改动前）
+------------------------------------------------------------
+命令：
+    cd backend
+    git show HEAD:backend/app/modules/retail/open_controller.py | Select-String -Pattern "aftersale" | Measure-Object
+输入：HEAD=b5312b83 的 open_controller.py
+实际输出（逐字）：
+    BASELINE open_controller aftersales matches:
+    0
+结论：改动前不存在任何售后接口/路由，前端也没有售后页签。
+退出码：0
+
+三、MODIFIED（改动后）
+------------------------------------------------------------
+1) 代码规范
+命令：
+    cd backend
+    .venv\Scripts\ruff.exe check app/modules/retail app/alembic/versions/2026_10_27_1353_b0f396df56ac.py scripts/check_retail_data.py scripts/check_retail_migration.py scripts/sync_jushuitan_refunds.py tests/test_retail_open_sync.py
+实际输出：
+    All checks passed!
+退出码：0
+
+2) 迁移可升可降（离线 SQLite，不依赖业务库）
+命令：
+    cd backend
+    .venv\Scripts\python.exe scripts/check_retail_migration.py
+实际输出（逐字）：
+    UPGRADE OK: 6 tables + 2 open_client columns + indexes
+    DOWNGRADE OK: retail tables and open_client columns removed
+退出码：0
+
+3) 迁移链表只有 1 个 head
+命令：
+    .venv\Scripts\python.exe -c "from alembic.config import Config; from alembic.script import ScriptDirectory; print('HEADS=', ScriptDirectory.from_config(Config('alembic.ini')).get_heads())"
+实际输出：
+    HEADS= ['b0f396df56ac']
+退出码：0
+
+4) 真实库执行迁移（本地 dev）
+命令：
+    cd backend
+    $env:ENVIRONMENT="dev"; .venv\Scripts\python.exe main.py upgrade --env=dev
+    .venv\Scripts\python.exe scripts/check_retail_data.py
+实际输出（节选逐字）：
+    ENVIRONMENT=EnvironmentEnum.DEV DATABASE=mysql/fastapiadmin
+    ORDERS=1296 ITEMS=7367 BATCHES=32 SHOPS=43 PERIODS=['2026-10', ... '2025-10']
+    AFTER_SALES=0 AFTER_SALE_ITEMS=0 AFTER_SALE_PERIODS=[]
+    VERSION ['b0f396df56ac']
+退出码：0
+
+5) 接口用例（免鉴权推送 / 幂等重放 / 旧版本跳过 / 页面查询汇总）
+命令：
+    cd backend
+    .venv\Scripts\python.exe -m pytest tests/test_retail_open_sync.py -q -k "after_sale"
+实际输出（逐字）：
+    ...                                                                      [100%]
+    3 passed, 11 deselected in 66.89s (0:01:06)
+退出码：0
+
+同一文件全量回归（含订单推送、店铺同步、路由鉴权）：
+    14 passed in 398.74s (0:06:38)
+退出码：0
+
+6) 前端类型检查与打包
+命令：
+    cd frontend/web
+    pnpm run type-check
+    pnpm run build:prod
+实际输出（节选逐字）：
+    > vue-tsc --noEmit          （无错误输出，退出码 0）
+    ✓ built in 51.23s
+    dist\js\route-loader.COTqICcM.js    1,738.81 kB │ gzip:  287.95 kB
+退出码：0
+
+7) 产物中确认页面已进包（解决“打包了但看不到页面”）
+命令：
+    cd frontend/web
+    Select-String -Path dist/js/*.js -Pattern "retail/aftersales/page" -List
+    Select-String -Path dist/js/*.js -Pattern "退款售后" -List
+实际输出（逐字）：
+    D:\...\frontend\web\dist\js\route-loader.COTqICcM.js
+    D:\...\frontend\web\dist\js\route-loader.COTqICcM.js
+结论：「退款售后」是「零售订单同步」页面内的新页签，沿用原菜单与权限，
+      不需要 seed 新菜单，也不需要给角色重新授权。
+
+8) 库里 6 张零售表齐备
+实际输出：
+    ['retail_after_sale', 'retail_after_sale_item', 'retail_order', 'retail_order_item', 'retail_shop', 'retail_sync_batch']
+退出码：0
+
+四、ROLLBACK（在另一个副本/本地 dev 上实测）
+------------------------------------------------------------
+命令（本地 dev，回滚后立即重新升级）：
+    cd backend
+    $env:ENVIRONMENT="dev"; .venv\Scripts\python.exe -m alembic -c alembic.ini downgrade -1
+    .venv\Scripts\python.exe scripts/check_retail_data.py      # 预期失败：表已删除
+    $env:ENVIRONMENT="dev"; .venv\Scripts\python.exe main.py upgrade --env=dev
+实际输出（逐字）：
+    回滚后 check_retail_data.py 抛出 sqlalchemy 查询异常（retail_after_sale 不存在）
+    → 说明两张售后表已被删除
+    重新 upgrade 后：
+    ORDERS=1296 ITEMS=7367 BATCHES=32 SHOPS=43 PERIODS=['2026-10', ... '2025-10']
+    AFTER_SALES=0 AFTER_SALE_ITEMS=0 AFTER_SALE_PERIODS=[]
+    VERSION ['b0f396df56ac']
+退出码：0
+恢复结果：订单/店铺/批次数据未受影响（ORDERS 回滚前后同为 1296），
+          售后表结构可删可建，版本号回到 b0f396df56ac。
+服务器回滚命令：bash deploy/retail-aftersale-20261027/ROLLBACK.sh
+
+五、服务器上线（用户执行）
+------------------------------------------------------------
+    python deploy/retail-aftersale-20261027/update.py --apply --service fastapiadmin
+    python deploy/retail-aftersale-20261027/update.py --apply --service fastapiadmin --build-frontend --frontend-target /usr/share/nginx/html

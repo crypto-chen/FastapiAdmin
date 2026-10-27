@@ -76,7 +76,46 @@ class RetailOrderQueryParam(BaseModel):
 class RetailBatchQueryParam(BaseModel):
     """管理端推送批次查询参数。"""
 
+    biz_type: str | None = Field(default=None, max_length=16, description="业务类型: order/after_sale")
     request_id: str | None = Field(default=None, max_length=128, description="请求ID（模糊）")
     app_id: str | None = Field(default=None, max_length=64, description="调用方标识")
     source: str | None = Field(default=None, max_length=32, description="来源")
     status: str | None = Field(default=None, max_length=16, description="批次状态")
+
+
+class RetailAfterSaleErrorSchema(BaseModel):
+    """售后单处理错误。"""
+
+    index: int = Field(..., description="售后单在本次请求中的下标")
+    as_id: str | None = Field(default=None, description="售后单号")
+    reason: str = Field(..., description="失败原因")
+
+
+class RetailAfterSaleResultSchema(BaseModel):
+    """售后同步结果。"""
+
+    batch_id: str = Field(..., description="本系统批次ID")
+    request_id: str | None = Field(default=None, description="调用方请求ID")
+    duplicate: bool = Field(default=False, description="是否命中幂等重放")
+    received: int = Field(default=0, description="收到的售后单数")
+    created: int = Field(default=0, description="新增售后单数")
+    updated: int = Field(default=0, description="更新售后单数")
+    unchanged: int = Field(default=0, description="内容未变化数")
+    stale: int = Field(default=0, description="旧版本跳过数")
+    failed: int = Field(default=0, description="失败数")
+    item_count: int = Field(default=0, description="落库明细行数")
+    periods: list[str] = Field(default_factory=list, description="涉及期间")
+    errors: list[RetailAfterSaleErrorSchema] = Field(default_factory=list, description="逐单错误")
+
+
+class RetailAfterSaleQueryParam(BaseModel):
+    """管理端售后查询参数。"""
+
+    period_value: str | None = Field(default=None, max_length=16, description="期间(YYYY-MM)")
+    shop_id: int | None = Field(default=None, ge=0, description="店铺编号")
+    shop_name: str | None = Field(default=None, max_length=128, description="店铺名称（模糊）")
+    as_id: str | None = Field(default=None, max_length=128, description="售后单号（模糊）")
+    so_id: str | None = Field(default=None, max_length=64, description="订单号（模糊）")
+    status: str | None = Field(default=None, max_length=32, description="售后状态")
+    type: str | None = Field(default=None, max_length=32, description="售后类型")
+    keyword: str | None = Field(default=None, max_length=128, description="售后单/订单/店铺/买家模糊搜索")

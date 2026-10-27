@@ -1,0 +1,94 @@
+{
+  "code": 0,
+  "msg": "ok",
+  "data": {
+    "page_size": 50,
+    "page_index": 1,
+    "has_next": false,
+    "data_count": 2,
+    "datas": [
+      {
+        "as_id": 900000001,
+        "outer_as_id": "RF2026102400001",
+        "o_id": 880000001,
+        "so_id": "TB2026102400001",
+        "shop_id": 900001,
+        "shop_name": "示例旗舰店",
+        "shop_site": "淘宝",
+        "type": "退货退款",
+        "status": "Confirmed",
+        "shop_status": "退款成功",
+        "good_status": "已收到货",
+        "order_status": "Sent",
+        "as_date": "2026-10-20 10:12:00",
+        "created": "2026-10-20 10:12:05",
+        "modified": "2026-10-22 09:30:11",
+        "confirm_date": "2026-10-22 09:30:00",
+        "refund": 199.0,
+        "payment": 0,
+        "free_amount": 5.0,
+        "freight": 0,
+        "buyer_apply_refund": 199.0,
+        "receive_refund": 194.0,
+        "seller_real_refund": 194.0,
+        "buyer_paid_amount": 199.0,
+        "seller_income_amount": 189.05,
+        "l_id": "SF1234567890",
+        "logistics_company": "顺丰速运",
+        "warehouse": "示例仓",
+        "remark": "尺码不合适",
+        "result": "已退款",
+        "currency": "CNY",
+        "items": [
+          {
+            "asi_id": 900000011,
+            "sku_id": "SKU-DEMO-001",
+            "i_id": "I-DEMO-001",
+            "name": "铝合金外壳 示例款",
+            "properties_value": "银色",
+            "qty": 1,
+            "r_qty": 1,
+            "defective_qty": 0,
+            "price": 199.0,
+            "amount": 199.0,
+            "shop_amount": 199.0,
+            "outer_oi_id": "TB2026102400001-1",
+            "raw_so_id": "TB2026102400001"
+          }
+        ]
+      },
+      {
+        "as_id": 900000002,
+        "outer_as_id": "RF2026102400002",
+        "o_id": 880000002,
+        "so_id": "PDD2026102300002",
+        "shop_id": 900002,
+        "shop_name": "示例专营店",
+        "shop_site": "拼多多",
+        "type": "仅退款",
+        "status": "WaitConfirm",
+        "good_status": "未收到货",
+        "as_date": "2026-10-24 16:40:00",
+        "created": "2026-10-24 16:40:03",
+        "modified": "2026-10-24 16:40:03",
+        "refund": 88.0,
+        "payment": 0,
+        "free_amount": 0,
+        "freight": 0,
+        "remark": "拍错了",
+        "currency": "CNY",
+        "items": [
+          {
+            "asi_id": 900000021,
+            "sku_id": "SKU-DEMO-002",
+            "name": "机箱 示例款",
+            "qty": 1,
+            "r_qty": 0,
+            "price": 88.0,
+            "amount": 88.0
+          }
+        ]
+      }
+    ]
+  }
+}

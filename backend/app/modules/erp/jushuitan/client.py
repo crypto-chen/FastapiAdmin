@@ -36,6 +36,8 @@ TEST_BASE_URL = "https://dev-api.jushuitan.com"
 SALES_OUTBOUND_QUERY_PATH = "/open/orders/out/simple/query"
 # 订单查询（docType=4 & docId=22）：不返回淘系/拼多多订单
 ORDER_QUERY_PATH = "/open/orders/single/query"
+# 售后（退货退款）查询
+REFUND_QUERY_PATH = "/open/refund/single/query"
 # 店铺查询（用于连通性自检，docId=1）
 SHOPS_QUERY_PATH = "/open/shops/query"
 
@@ -45,6 +47,8 @@ MAX_WINDOW_DAYS = 7
 MAX_PAGE_SIZE = 50
 # 订单查询 page_size 最大 100
 MAX_ORDER_PAGE_SIZE = 100
+# 售后查询 page_size 最大 50
+MAX_REFUND_PAGE_SIZE = 50
 # 100 次/分钟 → 两次请求间隔不小于 0.6 秒，留一点余量
 MIN_REQUEST_INTERVAL = 0.62
 # 出库单状态：已出库
@@ -119,6 +123,37 @@ class OrderQuery(BaseModel):
     is_get_total: bool = Field(default=True, description="是否返回总条数/总页数")
     order_types: list[str] | None = Field(default=None, description="订单类型")
     archive: bool | None = Field(default=None, description="是否查询历史订单")
+
+    def to_biz(self) -> dict[str, Any]:
+        return self.model_dump(exclude_none=True)
+
+
+class RefundQuery(BaseModel):
+    """售后（退货退款）查询 ``biz`` 参数（docId=38）。
+
+    该接口不返回淘系/拼多多售后单；淘系走奇门，拼多多走方舟。
+    """
+
+    shop_id: int | None = Field(default=None, description="店铺编号")
+    is_offline_shop: bool | None = Field(default=None, description="是否线下店铺")
+    date_type: int = Field(default=0, ge=0, le=2, description="0=修改时间 1=创建时间 2=确认时间")
+    modified_begin: str | None = Field(default=None, description="起始时间 yyyy-MM-dd HH:mm:ss")
+    modified_end: str | None = Field(default=None, description="结束时间，间隔不超过 7 天")
+    so_ids: list[str] | None = Field(default=None, description="线上订单号")
+    shop_buyer_ids: list[str] | None = Field(default=None, description="买家账号")
+    page_index: int = Field(default=1, ge=1, description="页码")
+    page_size: int = Field(default=MAX_REFUND_PAGE_SIZE, ge=1, le=MAX_REFUND_PAGE_SIZE, description="每页最大 50")
+    o_ids: list[int] | None = Field(default=None, description="内部订单号")
+    as_ids: list[int] | None = Field(default=None, description="售后单号")
+    status: str | None = Field(default=None, description="售后状态")
+    start_ts: int | None = Field(default=None, description="行版本号，增量防漏单")
+    is_get_total: bool = Field(default=True, description="是否返回总条数/总页数")
+    good_status: str | None = Field(default=None, description="货物状态")
+    type: str | None = Field(default=None, description="售后类型")
+    owner_co_id: str | None = Field(default=None, description="货主编码")
+    archive: bool | None = Field(default=None, description="是否查询归档数据")
+    l_id: str | None = Field(default=None, description="退回物流单号")
+    is_get_promotion: bool = Field(default=True, description="是否返回营收小计金额")
 
     def to_biz(self) -> dict[str, Any]:
         return self.model_dump(exclude_none=True)
@@ -276,6 +311,60 @@ class JushuitanClient:
             if not bool(data.get("has_next")) or not rows:
                 break
             page_index += 1
+
+    async def query_refunds(self, biz: RefundQuery | dict[str, Any]) -> dict[str, Any]:
+        """单次售后查询（一页）。"""
+        payload = biz.to_biz() if isinstance(biz, RefundQuery) else dict(biz)
+        return await self.call(REFUND_QUERY_PATH, payload)
+
+    async def query_refunds_page(
+        self,
+        begin: datetime,
+        end: datetime,
+        page_index: int = 1,
+        page_size: int = MAX_REFUND_PAGE_SIZE,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        query = RefundQuery(
+            modified_begin=begin.strftime(TIME_FORMAT),
+            modified_end=end.strftime(TIME_FORMAT),
+            page_index=page_index,
+            page_size=page_size,
+            **extra,
+        )
+        return await self.query_refunds(query)
+
+    async def iter_refunds(
+        self,
+        begin: datetime,
+        end: datetime,
+        page_size: int = MAX_REFUND_PAGE_SIZE,
+        **extra: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """按时间段翻页拉取售后单，超过 7 天自动分段，按 as_id/outer_as_id 去重。"""
+        seen: set[Any] = set()
+        for window_begin, window_end in split_windows(begin, end):
+            page_index = 1
+            while True:
+                data = await self.query_refunds_page(
+                    window_begin,
+                    window_end,
+                    page_index=page_index,
+                    page_size=page_size,
+                    **extra,
+                )
+                rows = data.get("datas") if isinstance(data.get("datas"), list) else []
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    key = row.get("as_id") or row.get("outer_as_id") or json.dumps(row, sort_keys=True, default=str)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    yield row
+                if not bool(data.get("has_next")) or not rows:
+                    break
+                page_index += 1
 
     async def query_sales_outbound(self, biz: SalesOutboundQuery | dict[str, Any]) -> dict[str, Any]:
         """单次销售出库查询（一页）。"""

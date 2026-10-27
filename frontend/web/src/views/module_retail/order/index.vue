@@ -151,6 +151,9 @@
             </ElTableColumn>
             <ElTableColumn prop="request_id" label="请求ID" min-width="190" show-overflow-tooltip />
             <ElTableColumn prop="source" label="来源" width="90" />
+            <ElTableColumn label="类型" width="80" align="center">
+              <template #default="{ row }">{{ row.biz_type === "after_sale" ? "售后" : "订单" }}</template>
+            </ElTableColumn>
             <ElTableColumn label="状态" width="100" align="center">
               <template #default="{ row }">
                 <ElTag :type="batchStatusType(row.status)" size="small">{{ batchStatusText(row.status) }}</ElTag>
@@ -184,6 +187,119 @@
               layout="total, sizes, prev, pager, next, jumper"
               @current-change="loadBatches"
               @size-change="queryBatches"
+            />
+          </div>
+        </ElTabPane>
+        <ElTabPane label="退款售后" name="aftersales">
+          <div class="toolbar">
+            <ElSelect v-model="afterSaleSearch.period_value" placeholder="期间" clearable style="width: 120px">
+              <ElOption v-for="item in periods" :key="item" :label="item" :value="item" />
+            </ElSelect>
+            <ElInputNumber
+              v-model="afterSaleSearch.shop_id"
+              :min="0"
+              :controls="false"
+              placeholder="店铺ID"
+              style="width: 120px"
+            />
+            <ElInput
+              v-model="afterSaleSearch.shop_name"
+              placeholder="店铺名称"
+              clearable
+              style="width: 150px"
+              @keyup.enter="queryAfterSales"
+            />
+            <ElInput
+              v-model="afterSaleSearch.as_id"
+              placeholder="售后单号"
+              clearable
+              style="width: 170px"
+              @keyup.enter="queryAfterSales"
+            />
+            <ElInput
+              v-model="afterSaleSearch.so_id"
+              placeholder="订单号"
+              clearable
+              style="width: 170px"
+              @keyup.enter="queryAfterSales"
+            />
+            <ElSelect v-model="afterSaleSearch.type" placeholder="售后类型" clearable style="width: 130px">
+              <ElOption label="退货退款" value="退货退款" />
+              <ElOption label="仅退款" value="仅退款" />
+              <ElOption label="换货" value="换货" />
+            </ElSelect>
+            <ElInput
+              v-model="afterSaleSearch.keyword"
+              placeholder="售后/订单/店铺/备注"
+              clearable
+              style="width: 190px"
+              @keyup.enter="queryAfterSales"
+            />
+            <ElButton type="primary" :loading="afterSaleLoading" @click="queryAfterSales">查询</ElButton>
+            <ElButton @click="resetAfterSaleSearch">重置</ElButton>
+            <ElButton
+              v-hasPerm="'module_retail:shop:sync'"
+              type="success"
+              plain
+              :loading="afterSaleSyncing"
+              @click="handlePullAfterSales"
+            >
+              同步聚水潭售后
+            </ElButton>
+          </div>
+
+          <div class="summary">
+            <span>售后单 {{ afterSalePage.summary.after_sale_count }} 张</span>
+            <span>实退合计 {{ formatMoney(afterSalePage.summary.actual_refund_sum) }}</span>
+            <span>应退合计 {{ formatMoney(afterSalePage.summary.refund_sum) }}</span>
+            <span>明细行合计 {{ afterSalePage.summary.item_count_sum }}</span>
+            <span class="summary-extra">淘系走奇门推送，非淘系由聚水潭定时同步</span>
+          </div>
+
+          <ElTable v-loading="afterSaleLoading" :data="afterSales" border stripe height="calc(100vh - 360px)">
+            <ElTableColumn prop="period_value" label="期间" width="90" fixed />
+            <ElTableColumn prop="source" label="来源" width="90" />
+            <ElTableColumn label="店铺" min-width="170" show-overflow-tooltip>
+              <template #default="{ row }">
+                {{ row.shop_name || "-" }}<span class="muted"> / {{ row.shop_id }}</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="售后单号" min-width="170" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.as_id || row.outer_as_id || "-" }}</template>
+            </ElTableColumn>
+            <ElTableColumn prop="so_id" label="订单号" min-width="180" show-overflow-tooltip />
+            <ElTableColumn prop="type" label="类型" width="100" />
+            <ElTableColumn label="状态" width="110" align="center">
+              <template #default="{ row }">
+                <ElTag :type="afterSaleStatusType(row.status)" size="small">{{ row.status || "-" }}</ElTag>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="申请时间" width="165">
+              <template #default="{ row }">{{ formatTime(row.as_date) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="应退" width="100" align="right">
+              <template #default="{ row }">{{ formatMoney(row.refund) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="实退" width="100" align="right">
+              <template #default="{ row }">{{ formatMoney(row.actual_refund) }}</template>
+            </ElTableColumn>
+            <ElTableColumn prop="item_count" label="明细" width="70" align="center" />
+            <ElTableColumn label="操作" width="80" fixed="right">
+              <template #default="{ row }">
+                <ElButton link type="primary" @click="openAfterSale(row as RetailAfterSaleRow)">明细</ElButton>
+              </template>
+            </ElTableColumn>
+          </ElTable>
+
+          <div class="pager">
+            <ElPagination
+              v-model:current-page="afterSalePage.page_no"
+              v-model:page-size="afterSalePage.page_size"
+              :total="afterSalePage.total"
+              :page-sizes="[20, 50, 100]"
+              layout="total, sizes, prev, pager, next, jumper"
+              @current-change="loadAfterSales"
+              @size-change="queryAfterSales"
             />
           </div>
         </ElTabPane>
@@ -262,6 +378,82 @@
         </div>
       </template>
     </ElDrawer>
+
+    <ElDrawer v-model="afterSaleVisible" title="售后单明细" size="780px">
+      <template v-if="afterSaleDetail">
+        <ElDescriptions :column="2" border>
+          <ElDescriptionsItem label="期间">{{ afterSaleDetail.after_sale.period_value }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="状态">{{ afterSaleDetail.after_sale.status || "-" }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="售后单号">
+            {{ afterSaleDetail.after_sale.as_id || "-" }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="平台单号">
+            {{ afterSaleDetail.after_sale.outer_as_id || "-" }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="店铺">
+            {{ afterSaleDetail.after_sale.shop_name || "-" }} /
+            {{ afterSaleDetail.after_sale.shop_id }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="平台">{{ afterSaleDetail.after_sale.shop_site || "-" }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="订单号">{{ afterSaleDetail.after_sale.so_id || "-" }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="内部单号">{{ afterSaleDetail.after_sale.o_id || "-" }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="售后类型">{{ afterSaleDetail.after_sale.type || "-" }}</ElDescriptionsItem>
+          <ElDescriptionsItem label="货物状态">
+            {{ afterSaleDetail.after_sale.good_status || "-" }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="商品应退">
+            {{ formatMoney(afterSaleDetail.after_sale.refund) }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="实退金额">
+            {{ formatMoney(afterSaleDetail.after_sale.actual_refund) }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="运费">
+            {{ formatMoney(afterSaleDetail.after_sale.freight) }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="补偿/优惠">
+            {{ formatMoney(afterSaleDetail.after_sale.payment) }} /
+            {{ formatMoney(afterSaleDetail.after_sale.free_amount) }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="申请时间">
+            {{ formatTime(afterSaleDetail.after_sale.as_date) }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="确认时间">
+            {{ formatTime(afterSaleDetail.after_sale.confirm_date) }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="退回物流">
+            {{ afterSaleDetail.after_sale.logistics_company || "-" }}
+            {{ afterSaleDetail.after_sale.l_id || "" }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="退回仓库">
+            {{ afterSaleDetail.after_sale.warehouse || "-" }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="备注" :span="2">
+            {{ afterSaleDetail.after_sale.remark || "-" }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="最近批次" :span="2">
+            {{ afterSaleDetail.after_sale.last_batch_id || "-" }}
+          </ElDescriptionsItem>
+        </ElDescriptions>
+
+        <ElTable :data="afterSaleDetail.items" border stripe class="detail-table">
+          <ElTableColumn prop="sku_id" label="SKU" min-width="130" show-overflow-tooltip />
+          <ElTableColumn prop="name" label="商品名称" min-width="220" show-overflow-tooltip />
+          <ElTableColumn prop="properties_value" label="规格" min-width="140" show-overflow-tooltip />
+          <ElTableColumn label="申请数量" width="90" align="right">
+            <template #default="{ row }">{{ row.qty ?? "-" }}</template>
+          </ElTableColumn>
+          <ElTableColumn label="实退数量" width="90" align="right">
+            <template #default="{ row }">{{ row.r_qty ?? "-" }}</template>
+          </ElTableColumn>
+          <ElTableColumn label="单价" width="90" align="right">
+            <template #default="{ row }">{{ formatMoney(row.price) }}</template>
+          </ElTableColumn>
+          <ElTableColumn label="金额" width="100" align="right">
+            <template #default="{ row }">{{ formatMoney(row.amount) }}</template>
+          </ElTableColumn>
+        </ElTable>
+      </template>
+    </ElDrawer>
   </div>
 </template>
 
@@ -270,6 +462,8 @@ import { onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import {
   RetailAPI,
+  type RetailAfterSaleDetail,
+  type RetailAfterSaleRow,
   type RetailBatchDetail,
   type RetailBatchRow,
   type RetailOrderDetail,
@@ -283,8 +477,11 @@ const periods = ref<string[]>([]);
 const orderLoading = ref(false);
 const batchLoading = ref(false);
 const shopSyncing = ref(false);
+const afterSaleLoading = ref(false);
+const afterSaleSyncing = ref(false);
 const orders = ref<RetailOrderRow[]>([]);
 const batches = ref<RetailBatchRow[]>([]);
+const afterSales = ref<RetailAfterSaleRow[]>([]);
 
 const orderSearch = reactive<{
   period_value?: string;
@@ -296,6 +493,15 @@ const orderSearch = reactive<{
   keyword?: string;
 }>({});
 const batchSearch = reactive<{ request_id?: string; source?: string; status?: string }>({});
+const afterSaleSearch = reactive<{
+  period_value?: string;
+  shop_id?: number;
+  shop_name?: string;
+  as_id?: string;
+  so_id?: string;
+  type?: string;
+  keyword?: string;
+}>({});
 
 const orderPage = reactive({
   page_no: 1,
@@ -304,11 +510,19 @@ const orderPage = reactive({
   summary: { order_count: 0, buyer_paid_amount_sum: 0, item_count_sum: 0 },
 });
 const batchPage = reactive({ page_no: 1, page_size: 20, total: 0 });
+const afterSalePage = reactive({
+  page_no: 1,
+  page_size: 20,
+  total: 0,
+  summary: { after_sale_count: 0, actual_refund_sum: 0, refund_sum: 0, item_count_sum: 0 },
+});
 
 const orderVisible = ref(false);
 const orderDetail = ref<RetailOrderDetail | null>(null);
 const batchVisible = ref(false);
 const batchDetail = ref<RetailBatchDetail | null>(null);
+const afterSaleVisible = ref(false);
+const afterSaleDetail = ref<RetailAfterSaleDetail | null>(null);
 
 function formatTime(value?: string | null) {
   if (!value) return "-";
@@ -330,6 +544,13 @@ function orderStatusType(status?: string | null) {
 function batchStatusType(status: string) {
   if (status === "failed") return "danger";
   if (status === "partial" || status === "running") return "warning";
+  return "success";
+}
+
+function afterSaleStatusType(status?: string | null) {
+  if (!status) return "info";
+  if (["WaitConfirm", "WaitReturn", "WaitReceive"].includes(status)) return "warning";
+  if (["Refused", "Closed", "Cancel"].includes(status)) return "danger";
   return "success";
 }
 
@@ -421,6 +642,90 @@ async function handleSyncShops() {
   }
 }
 
+async function loadAfterSales() {
+  afterSaleLoading.value = true;
+  try {
+    const res = await RetailAPI.afterSales({
+      period_value: afterSaleSearch.period_value,
+      shop_id: afterSaleSearch.shop_id ?? undefined,
+      shop_name: afterSaleSearch.shop_name || undefined,
+      as_id: afterSaleSearch.as_id || undefined,
+      so_id: afterSaleSearch.so_id || undefined,
+      type: afterSaleSearch.type || undefined,
+      keyword: afterSaleSearch.keyword || undefined,
+      page_no: afterSalePage.page_no,
+      page_size: afterSalePage.page_size,
+    });
+    const data = res.data?.data;
+    afterSales.value = data?.items ?? [];
+    afterSalePage.total = data?.total ?? 0;
+    afterSalePage.summary =
+      data?.summary ?? { after_sale_count: 0, actual_refund_sum: 0, refund_sum: 0, item_count_sum: 0 };
+  } catch (error) {
+    afterSales.value = [];
+    ElMessage.error("查询零售售后失败");
+    console.error(error);
+  } finally {
+    afterSaleLoading.value = false;
+  }
+}
+
+async function handlePullAfterSales() {
+  afterSaleSyncing.value = true;
+  try {
+    const res = await RetailAPI.pullAfterSales({
+      period_value: afterSaleSearch.period_value || undefined,
+      days: 7,
+    });
+    const data = (res.data?.data ?? {}) as {
+      received?: number;
+      created?: number;
+      updated?: number;
+      unchanged?: number;
+      failed?: number;
+    };
+    ElMessage.success(
+      `售后同步完成：收到 ${data.received ?? 0}，新增 ${data.created ?? 0}，` +
+        `更新 ${data.updated ?? 0}，未变 ${data.unchanged ?? 0}，失败 ${data.failed ?? 0}`,
+    );
+    queryAfterSales();
+  } catch (error) {
+    ElMessage.error("同步聚水潭售后失败，请查看后端日志");
+    console.error(error);
+  } finally {
+    afterSaleSyncing.value = false;
+  }
+}
+
+function queryAfterSales() {
+  afterSalePage.page_no = 1;
+  loadAfterSales();
+}
+
+function resetAfterSaleSearch() {
+  Object.assign(afterSaleSearch, {
+    period_value: undefined,
+    shop_id: undefined,
+    shop_name: "",
+    as_id: "",
+    so_id: "",
+    type: undefined,
+    keyword: "",
+  });
+  queryAfterSales();
+}
+
+async function openAfterSale(row: RetailAfterSaleRow) {
+  try {
+    const res = await RetailAPI.afterSaleDetail(row.id);
+    afterSaleDetail.value = res.data?.data ?? null;
+    afterSaleVisible.value = true;
+  } catch (error) {
+    ElMessage.error("加载售后明细失败");
+    console.error(error);
+  }
+}
+
 function queryOrders() {
   orderPage.page_no = 1;
   loadOrders();
@@ -474,6 +779,9 @@ async function openBatch(row: RetailBatchRow) {
 function handleTabChange(name: string | number) {
   if (name === "batches" && !batches.value.length) {
     loadBatches();
+  }
+  if (name === "aftersales" && !afterSales.value.length) {
+    loadAfterSales();
   }
 }
 

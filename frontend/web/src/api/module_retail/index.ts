@@ -76,6 +76,7 @@ export interface RetailOrderDetail {
 export interface RetailBatchRow {
   id: number;
   app_id: string;
+  biz_type?: string;
   request_id?: string | null;
   source: string;
   status: string;
@@ -112,10 +113,106 @@ export interface RetailOrderQuery {
 }
 
 export interface RetailBatchQuery {
+  biz_type?: string;
   request_id?: string;
   app_id?: string;
   source?: string;
   status?: string;
+  page_no?: number;
+  page_size?: number;
+}
+
+export interface RetailAfterSaleItem {
+  id: number;
+  asi_id?: string | null;
+  sku_id?: string | null;
+  i_id?: string | null;
+  name?: string | null;
+  properties_value?: string | null;
+  qty?: number | null;
+  r_qty?: number | null;
+  defective_qty?: number | null;
+  price?: number | null;
+  amount?: number | null;
+  shop_amount?: number | null;
+  buyer_paid_amount?: number | null;
+  seller_income_amount?: number | null;
+  type?: string | null;
+  is_gift: boolean;
+  outer_oi_id?: string | null;
+}
+
+export interface RetailAfterSaleRow {
+  id: number;
+  source: string;
+  period_value: string;
+  as_id?: string | null;
+  outer_as_id?: string | null;
+  o_id?: string | null;
+  so_id?: string | null;
+  shop_id: number;
+  shop_name?: string | null;
+  shop_site?: string | null;
+  type?: string | null;
+  status?: string | null;
+  shop_status?: string | null;
+  good_status?: string | null;
+  order_status?: string | null;
+  as_date?: string | null;
+  registered_time?: string | null;
+  modified_time?: string | null;
+  confirm_date?: string | null;
+  refund?: number | null;
+  freight?: number | null;
+  payment?: number | null;
+  free_amount?: number | null;
+  actual_refund?: number | null;
+  buyer_apply_refund?: number | null;
+  receive_refund?: number | null;
+  seller_real_refund?: number | null;
+  buyer_paid_amount?: number | null;
+  seller_income_amount?: number | null;
+  l_id?: string | null;
+  logistics_company?: string | null;
+  warehouse?: string | null;
+  remark?: string | null;
+  item_count: number;
+  last_batch_id?: string | null;
+  created_time?: string | null;
+  updated_time?: string | null;
+}
+
+export interface RetailAfterSalePageResult extends RetailPageResult<RetailAfterSaleRow> {
+  summary: {
+    after_sale_count: number;
+    actual_refund_sum: number;
+    refund_sum: number;
+    item_count_sum: number;
+  };
+}
+
+export interface RetailAfterSaleDetail {
+  after_sale: RetailAfterSaleRow & {
+    platform_promotion?: number | null;
+    platform_free_amount?: number | null;
+    government_free_amount?: number | null;
+    currency?: string | null;
+    result?: string | null;
+    node?: string | null;
+    wms_co_id?: string | null;
+  };
+  items: RetailAfterSaleItem[];
+}
+
+export interface RetailAfterSaleQuery {
+  period_value?: string;
+  shop_id?: number;
+  shop_name?: string;
+  as_id?: string;
+  so_id?: string;
+  status?: string;
+  type?: string;
+  keyword?: string;
   page_no?: number;
   page_size?: number;
 }
@@ -155,6 +252,27 @@ export const RetailAPI = {
     return request<ApiResponse<RetailBatchDetail>>({
       url: `/retail/batches/${id}`,
       method: "get",
+    });
+  },
+  afterSales(params: RetailAfterSaleQuery) {
+    return request<ApiResponse<RetailAfterSalePageResult>>({
+      url: "/retail/aftersales/page",
+      method: "get",
+      params,
+    });
+  },
+  afterSaleDetail(id: number) {
+    return request<ApiResponse<RetailAfterSaleDetail>>({
+      url: `/retail/aftersales/${id}`,
+      method: "get",
+    });
+  },
+  pullAfterSales(params: { period_value?: string; days?: number }) {
+    return request<ApiResponse<Record<string, unknown>>>({
+      url: "/retail/aftersales/pull",
+      method: "post",
+      params,
+      timeout: 120 * 1000,
     });
   },
 };

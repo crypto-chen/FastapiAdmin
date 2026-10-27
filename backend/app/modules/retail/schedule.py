@@ -23,12 +23,15 @@ from app.core.schedule_plan import SYNC_SCHEDULE_TIMES, build_daily_trigger
 from app.modules.erp.jushuitan.model import JushuitanConnectionModel
 from app.modules.erp.jushuitan.service import build_client
 
+from .aftersale_service import pull_jushuitan_refunds
 from .service import RetailSyncService
 from .shop_service import sync_jushuitan_shops
 
 RETAIL_ORDER_SYNC_JOB_ID = "retail_order_sync:jushuitan:10m"
 RETAIL_ORDER_SYNC_DAILY_JOB_ID = "retail_order_sync:jushuitan:daily"
 RETAIL_SHOP_SYNC_JOB_ID = "retail_shop_sync:jushuitan:daily"
+RETAIL_AFTERSALE_SYNC_JOB_ID = "retail_aftersale_sync:jushuitan:10m"
+RETAIL_AFTERSALE_SYNC_DAILY_JOB_ID = "retail_aftersale_sync:jushuitan:daily"
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -114,6 +117,32 @@ async def execute_retail_shop_sync_job() -> None:
         logger.warning(f"聚水潭店铺同步跳过：{exc}")
 
 
+async def execute_retail_aftersale_sync_job(
+    lookback_minutes: int | None = None,
+    max_rows: int | None = None,
+) -> None:
+    """拉取聚水潭非淘系售后单（退货退款）并写入零售售后表。"""
+    minutes = int(lookback_minutes or settings.RETAIL_ORDER_SYNC_LOOKBACK_MINUTES)
+    end = datetime.now().replace(microsecond=0)
+    begin = end - timedelta(minutes=max(minutes, 1))
+    try:
+        async with async_db_session() as db, db.begin():
+            result = await pull_jushuitan_refunds(
+                db,
+                begin,
+                end,
+                connection_id=settings.RETAIL_ORDER_SYNC_CONNECTION_ID,
+                max_rows=max_rows,
+            )
+        logger.info(
+            f"聚水潭售后同步完成 {begin:%H:%M}~{end:%H:%M}："
+            f"收到 {result.received}，新增 {result.created}，更新 {result.updated}，"
+            f"未变 {result.unchanged}，失败 {result.failed}"
+        )
+    except ValueError as exc:
+        logger.warning(f"聚水潭售后同步跳过：{exc}")
+
+
 def register_retail_order_sync_job() -> None:
     """注册/刷新 10 分钟增量与每日 7 天补偿任务。"""
     interval = max(int(settings.RETAIL_ORDER_SYNC_INTERVAL_MINUTES), 1)
@@ -121,6 +150,8 @@ def register_retail_order_sync_job() -> None:
         RETAIL_ORDER_SYNC_JOB_ID,
         RETAIL_ORDER_SYNC_DAILY_JOB_ID,
         RETAIL_SHOP_SYNC_JOB_ID,
+        RETAIL_AFTERSALE_SYNC_JOB_ID,
+        RETAIL_AFTERSALE_SYNC_DAILY_JOB_ID,
     ):
         try:
             scheduler.remove_job(job_id)
@@ -159,6 +190,28 @@ def register_retail_order_sync_job() -> None:
         max_instances=1,
         misfire_grace_time=3600,
     )
+    scheduler.add_job(
+        func=execute_retail_aftersale_sync_job,
+        trigger=IntervalTrigger(minutes=interval, timezone="Asia/Shanghai"),
+        id=RETAIL_AFTERSALE_SYNC_JOB_ID,
+        name=f"聚水潭零售售后同步（每 {interval} 分钟）",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=600,
+        next_run_time=datetime.now(CN_TZ) + timedelta(seconds=45),
+    )
+    scheduler.add_job(
+        func=execute_retail_aftersale_sync_job,
+        trigger=build_daily_trigger(SYNC_SCHEDULE_TIMES),
+        args=[7 * 24 * 60, None],
+        id=RETAIL_AFTERSALE_SYNC_DAILY_JOB_ID,
+        name="聚水潭零售售后 7 天补偿",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
 
 
 async def reconcile_retail_order_sync_jobs() -> None:
@@ -168,6 +221,8 @@ async def reconcile_retail_order_sync_jobs() -> None:
             f"聚水潭零售订单同步任务已注册: {RETAIL_ORDER_SYNC_JOB_ID}"
             f"（每 {settings.RETAIL_ORDER_SYNC_INTERVAL_MINUTES} 分钟）"
             f"，每日 00:00/07:00/12:00/18:00 补偿最近 7 天并同步店铺/平台名称"
+            f"；售后同步任务: {RETAIL_AFTERSALE_SYNC_JOB_ID}"
+            f"（每 {settings.RETAIL_ORDER_SYNC_INTERVAL_MINUTES} 分钟）"
         )
     except Exception as exc:  # noqa: BLE001
         logger.error(f"注册聚水潭零售订单同步任务失败: {exc}")

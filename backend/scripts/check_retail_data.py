@@ -21,6 +21,8 @@ from app.core.base_model import MappedBase  # noqa: E402
 from app.core.database import async_db_session, async_engine  # noqa: E402
 from app.modules.metadata.model import MetaSyncJobModel  # noqa: E402
 from app.modules.retail.model import (  # noqa: E402
+    RetailAfterSaleItemModel,
+    RetailAfterSaleModel,
     RetailOrderItemModel,
     RetailOrderModel,
     RetailShopModel,
@@ -51,6 +53,23 @@ async def main() -> None:
         print(
             f"ORDERS={order_count} ITEMS={item_count} BATCHES={batch_count} "
             f"SHOPS={shop_count} PERIODS={list(periods)}"
+        )
+        after_sale_count = (
+            await db.execute(select(func.count(RetailAfterSaleModel.id)))
+        ).scalar() or 0
+        after_sale_item_count = (
+            await db.execute(select(func.count(RetailAfterSaleItemModel.id)))
+        ).scalar() or 0
+        after_sale_periods = (
+            await db.execute(
+                select(RetailAfterSaleModel.period_value)
+                .distinct()
+                .order_by(RetailAfterSaleModel.period_value.desc())
+            )
+        ).scalars().all()
+        print(
+            f"AFTER_SALES={after_sale_count} AFTER_SALE_ITEMS={after_sale_item_count} "
+            f"AFTER_SALE_PERIODS={list(after_sale_periods)}"
         )
 
         rows = (
