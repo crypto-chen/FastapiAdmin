@@ -256,6 +256,23 @@ def test_order_query_biz_and_iter_orders():
     assert client.query_orders_page.await_count == 2
 
 
+def test_iter_shops_paginates():
+    client = JushuitanClient(JushuitanClientConfig(app_key="ak", app_secret="as", access_token="at"))
+    client.query_shops = AsyncMock(
+        side_effect=[
+            {"datas": [{"shop_id": 1, "shop_site": "淘宝天猫"}], "has_next": True},
+            {"datas": [{"shop_id": 2, "shop_site": "小红书"}], "has_next": False},
+        ]
+    )
+
+    async def _collect():
+        return [row async for row in client.iter_shops()]
+
+    rows = asyncio.run(_collect())
+    assert [row["shop_id"] for row in rows] == [1, 2]
+    assert client.query_shops.await_count == 2
+
+
 def test_extract_sales_outbound_for_metric():
     """指标引擎取数：度量值 = 未税金额，命中行数 = 单据数。"""
     config = {

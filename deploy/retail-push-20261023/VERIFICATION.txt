@@ -38,10 +38,15 @@ Automatic schedule:
 
 Unit tests:
   python -m pytest tests/test_jushuitan.py -q
-  Result: 20 passed
+  Result: 21 passed
 
   python -m pytest tests/test_retail_open_sync.py -q -k pull_orders
   Result: 1 passed
+
+Shop query:
+  python scripts/list_jushuitan_shops.py --name "聚水潭默认连接" --output shops.csv
+  Result: 43 shops exported; fields include shop_id, shop_name, shop_site,
+  platform_shop_name, session_status.
 
 Local push test:
   python deploy/retail-push-20261023/test_sync.py --url http://127.0.0.1:8001/open/v1/retail/orders/sync

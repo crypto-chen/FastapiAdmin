@@ -241,9 +241,41 @@ class JushuitanClient:
     # ------------------------------------------------------------------ #
     async def test_connection(self) -> dict[str, Any]:
         """连通性自检：调用店铺查询，返回首个店铺信息（无店铺时返回空字典）。"""
-        data = await self.call(SHOPS_QUERY_PATH, {"page_index": 1, "page_size": 1})
+        data = await self.query_shops(page_index=1, page_size=1)
         shops = data.get("datas") if isinstance(data.get("datas"), list) else []
         return shops[0] if shops else {}
+
+    async def query_shops(
+        self,
+        page_index: int = 1,
+        page_size: int = 100,
+        shop_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """店铺查询（docId=1）：返回店铺编号、名称、平台站点、平台店铺名等。"""
+        biz: dict[str, Any] = {
+            "page_index": max(int(page_index), 1),
+            "page_size": max(1, min(int(page_size), 100)),
+        }
+        if shop_ids:
+            biz["shop_ids"] = shop_ids
+        return await self.call(SHOPS_QUERY_PATH, biz)
+
+    async def iter_shops(
+        self,
+        page_size: int = 100,
+        shop_ids: list[int] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """翻页拉取全部店铺。"""
+        page_index = 1
+        while True:
+            data = await self.query_shops(page_index=page_index, page_size=page_size, shop_ids=shop_ids)
+            rows = data.get("datas") if isinstance(data.get("datas"), list) else []
+            for row in rows:
+                if isinstance(row, dict):
+                    yield row
+            if not bool(data.get("has_next")) or not rows:
+                break
+            page_index += 1
 
     async def query_sales_outbound(self, biz: SalesOutboundQuery | dict[str, Any]) -> dict[str, Any]:
         """单次销售出库查询（一页）。"""
