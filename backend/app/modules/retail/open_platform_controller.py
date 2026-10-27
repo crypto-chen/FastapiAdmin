@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.response import ResponseSchema, SuccessResponse
@@ -18,7 +19,9 @@ from app.core.exceptions import CustomException
 from app.modules.openapi.dependencies import OpenClientDep
 from app.modules.openapi.route_class import OpenApiLogRoute
 from app.modules.openapi.security import CODE_METRIC_FORBIDDEN
+from app.modules.platform.service import normalize_platform
 
+from .model import RetailShopModel
 from .query_service import RetailQueryService
 
 OpenRetailPlatformRouter = APIRouter(
@@ -49,6 +52,7 @@ async def platform_analysis(
         str | None, Query(max_length=16, description="期间 YYYY-MM，缺省=全部期间")
     ] = None,
     shop_id: Annotated[int | None, Query(ge=0, description="店铺编号，缺省=全部店铺")] = None,
+    platform: Annotated[str | None, Query(max_length=32, description="平台（归一：天猫/京东/拼多多/抖音/其他）")] = None,
 ) -> JSONResponse:
     """按「期间 × 店铺」返回平台渠道分析指标。
 
@@ -63,6 +67,32 @@ async def platform_analysis(
     """
     _ensure_allowed(client)
     result = await RetailQueryService(db).analysis_summary(period_value, shop_id)
+
+    # 补平台维度（retail_shop.shop_site → 归一平台），并按平台过滤
+    site_rows = (
+        await db.execute(
+            select(RetailShopModel.shop_id, RetailShopModel.shop_site).where(
+                RetailShopModel.is_deleted == False  # noqa: E712
+            )
+        )
+    ).all()
+    site_map = {int(row[0]): row[1] for row in site_rows}
+    target = (platform or "").strip()
+    filtered: list[dict] = []
+    for item in result.get("items") or []:
+        site = site_map.get(int(item["shop_id"]))
+        item["shop_site"] = site
+        item["platform"] = normalize_platform(site)
+        if target and item["platform"] != target:
+            continue
+        filtered.append(item)
+    if target:
+        result["items"] = filtered
+        result["total"] = {
+            **result.get("total", {}),
+            "shop_count": len({(row["period_value"], row["shop_id"]) for row in filtered}),
+        }
+
     result["app_id"] = client.app_id
     result["generated_at"] = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
     return SuccessResponse(data=result, msg="查询平台渠道分析指标成功")

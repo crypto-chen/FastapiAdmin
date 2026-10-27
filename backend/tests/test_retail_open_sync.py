@@ -642,5 +642,13 @@ def test_platform_analysis_requires_client_flag(retail_client: TestClient) -> No
     assert {"tax_rate", "settlement_rate", "items", "total"} <= set(data)
     assert {"intake_untaxed", "shipment_untaxed", "return_untaxed",
             "net_shipment_untaxed", "settlement_income_untaxed"} <= set(data["total"])
+    # 每行带平台维度（shop_site 归一）；按平台过滤不报错
+    for row in data["items"]:
+        assert {"platform", "shop_site"} <= set(row)
+    filtered = retail_client.get(
+        "/open/v1/retail/platform/analysis", headers=headers, params={"platform": "其他"}
+    )
+    assert filtered.status_code == 200
+    assert all(row["platform"] == "其他" for row in filtered.json()["data"]["items"])
     # 未带令牌直接 401
     assert retail_client.get("/open/v1/retail/platform/analysis").status_code == 401
