@@ -275,3 +275,42 @@
 5) 回滚
     RETAIL_SHIPPED_STATUSES 改回 Sent 即恢复默认口径；不需要迁移。
     「平台店铺分析」页签与 /retail/analysis/summary 随代码提交回退即可移除。
+
+八、追加：退货退款 = 取消单 + 发货后申请退款（同日确认）
+------------------------------------------------------------
+改动：
+    backend\app\config\setting.py               新增 RETAIL_CANCELLED_STATUSES: str = "Cancelled"
+    backend\app\modules\retail\query_service.py  cancelled_statuses()；analysis_summary 重写：
+                                                接单含取消单、出货只算已发货、退货 = 取消 + 发货后售后
+    backend\tests\test_retail_open_sync.py       更新断言（含「未发货订单上的售后不计入」）
+    frontend\web\src\api\module_retail\index.ts  cancelled_* / return_untaxed 字段
+    frontend\web\src\views\module_retail\order\index.vue  新增取消/售后/退货退款列
+    docs\平台店铺分析指标对接方案.md             PLT-11 取数 SQL 与口径
+
+1) 单元测试（4 订单 + 2 售后）
+命令：
+    cd backend
+    .venv\Scripts\python.exe -m pytest tests/test_retail_open_sync.py -q
+实际输出（逐字）：
+    ...............                                                          [100%]
+    15 passed in 398.01s (0:06:38)
+用例断言（逐字）：
+    total["order_count"] == 4             # 取消单也计入接单
+    total["shipped_order_count"] == 2
+    total["cancelled_order_count"] == 1
+    total["intake_untaxed"] == 1042.48    # 1178 ÷ 1.13
+    total["shipment_untaxed"] == 300.0    # 339 ÷ 1.13（只算已发货）
+    total["cancelled_untaxed"] == -442.48 # 500 ÷ 1.13
+    total["refund_untaxed"] == -50.0      # 56.5 ÷ 1.13（A2 挂在未发货单上，被排除）
+    total["return_untaxed"] == -492.48
+    total["net_shipment_untaxed"] == -192.48
+    total["return_rate"] == 1.6416        # 492.48 ÷ 300（净额≤0 时用出货额）
+退出码：0
+
+2) 前端
+命令：
+    cd frontend/web
+    pnpm run type-check
+实际输出：
+    > vue-tsc --noEmit   （无错误）
+退出码：0

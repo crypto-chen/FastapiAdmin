@@ -166,10 +166,10 @@ index 00000000..b05a2c3c
 +    op.drop_table('retail_after_sale')
 +    # ### end Alembic commands ###
 diff --git a/backend/app/config/setting.py b/backend/app/config/setting.py
-index 1176030f..a330429a 100755
+index 1176030f..93fc44b3 100755
 --- a/backend/app/config/setting.py
 +++ b/backend/app/config/setting.py
-@@ -169,6 +169,12 @@ class Settings(BaseSettings):
+@@ -169,6 +169,14 @@ class Settings(BaseSettings):
      RETAIL_ORDER_SYNC_LOOKBACK_MINUTES: int = 30  # 每次同步回看分钟数
      RETAIL_ORDER_SYNC_MAX_ROWS: int = 20000  # 单次最多拉取订单数
      RETAIL_ORDER_SYNC_CONNECTION_ID: int | None = None  # 指定聚水潭连接；空=第一个启用连接
@@ -179,6 +179,8 @@ index 1176030f..a330429a 100755
 +    # 「货物出货」口径：订单状态命中即视为已发货（逗号分隔）；默认 Sent（已发货）
 +    # 需要把「发货中」也算进来时改成 Sent,Delivering
 +    RETAIL_SHIPPED_STATUSES: str = "Sent"
++    # 「退货退款」中的取消单状态（逗号分隔）；取消单金额全额计入退货退款
++    RETAIL_CANCELLED_STATUSES: str = "Cancelled"
  
      # ================================================= #
      # ********************* 日志配置 ******************* #
@@ -1052,7 +1054,7 @@ index 50129173..eb29b3a6 100644
 +        msg = "零售售后单同步完成"
 +    return SuccessResponse(data=result.model_dump(), msg=msg)
 diff --git a/backend/app/modules/retail/query_service.py b/backend/app/modules/retail/query_service.py
-index 794261e5..02c0b923 100644
+index 794261e5..408c92df 100644
 --- a/backend/app/modules/retail/query_service.py
 +++ b/backend/app/modules/retail/query_service.py
 @@ -3,13 +3,22 @@
@@ -1063,7 +1065,7 @@ index 794261e5..02c0b923 100644
  from typing import Any
  
 -from sqlalchemy import func, or_, select
-+from sqlalchemy import case, func, or_, select
++from sqlalchemy import and_, case, func, or_, select
  from sqlalchemy.ext.asyncio import AsyncSession
  
 -from .model import RetailOrderItemModel, RetailOrderModel, RetailSyncBatchModel
@@ -1081,7 +1083,7 @@ index 794261e5..02c0b923 100644
  
  
  def _dt(value: datetime | None) -> str | None:
-@@ -20,7 +29,36 @@ def _num(value: Any) -> float | None:
+@@ -20,7 +29,43 @@ def _num(value: Any) -> float | None:
      return round(float(value), 4) if value is not None else None
  
  
@@ -1113,12 +1115,19 @@ index 794261e5..02c0b923 100644
 +    return items or ["Sent"]
 +
 +
++def cancelled_statuses() -> list[str]:
++    """计为退货退款的取消状态；默认 Cancelled（聚水潭「取消」）。"""
++    raw = getattr(settings, "RETAIL_CANCELLED_STATUSES", "Cancelled") or "Cancelled"
++    items = [part.strip() for part in str(raw).split(",") if part.strip()]
++    return items or ["Cancelled"]
++
++
  def _order_row(row: RetailOrderModel) -> dict[str, Any]:
 +    is_shipped = (row.status or "") in shipped_statuses()
      return {
          "id": row.id,
          "source": row.source,
-@@ -40,6 +78,10 @@ def _order_row(row: RetailOrderModel) -> dict[str, Any]:
+@@ -40,6 +85,10 @@ def _order_row(row: RetailOrderModel) -> dict[str, Any]:
          "pay_amount": _num(row.pay_amount),
          "buyer_paid_amount": _num(row.buyer_paid_amount),
          "seller_income_amount": _num(row.seller_income_amount),
@@ -1129,7 +1138,7 @@ index 794261e5..02c0b923 100644
          "freight": _num(row.freight),
          "free_amount": _num(row.free_amount),
          "receiver_state": row.receiver_state,
-@@ -80,6 +122,7 @@ def _batch_row(row: RetailSyncBatchModel) -> dict[str, Any]:
+@@ -80,6 +129,7 @@ def _batch_row(row: RetailSyncBatchModel) -> dict[str, Any]:
      return {
          "id": row.id,
          "app_id": row.app_id,
@@ -1137,7 +1146,7 @@ index 794261e5..02c0b923 100644
          "request_id": row.request_id,
          "source": row.source,
          "status": row.status,
-@@ -98,6 +141,71 @@ def _batch_row(row: RetailSyncBatchModel) -> dict[str, Any]:
+@@ -98,6 +148,71 @@ def _batch_row(row: RetailSyncBatchModel) -> dict[str, Any]:
      }
  
  
@@ -1209,7 +1218,7 @@ index 794261e5..02c0b923 100644
  class RetailQueryService:
      def __init__(self, db: AsyncSession) -> None:
          self.db = db
-@@ -155,6 +263,27 @@ class RetailQueryService:
+@@ -155,6 +270,27 @@ class RetailQueryService:
                  select(
                      func.coalesce(func.sum(RetailOrderModel.buyer_paid_amount), 0),
                      func.coalesce(func.sum(RetailOrderModel.item_count), 0),
@@ -1237,7 +1246,7 @@ index 794261e5..02c0b923 100644
                  ).where(*conditions)
              )
          ).first()
-@@ -167,6 +296,9 @@ class RetailQueryService:
+@@ -167,6 +303,9 @@ class RetailQueryService:
                  .limit(page_size)
              )
          ).scalars().all()
@@ -1247,7 +1256,7 @@ index 794261e5..02c0b923 100644
          return {
              "items": [_order_row(row) for row in rows],
              "total": int(total),
-@@ -175,7 +307,12 @@ class RetailQueryService:
+@@ -175,7 +314,12 @@ class RetailQueryService:
              "has_next": page_no * page_size < int(total),
              "summary": {
                  "order_count": int(total),
@@ -1261,7 +1270,7 @@ index 794261e5..02c0b923 100644
                  "item_count_sum": int(amounts[1]) if amounts else 0,
              },
          }
-@@ -197,6 +334,19 @@ class RetailQueryService:
+@@ -197,6 +341,19 @@ class RetailQueryService:
          self, search: RetailBatchQueryParam, page_no: int, page_size: int
      ) -> dict[str, Any]:
          conditions = [RetailSyncBatchModel.is_deleted == False]  # noqa: E712
@@ -1281,7 +1290,7 @@ index 794261e5..02c0b923 100644
          if search.request_id and search.request_id.strip():
              conditions.append(RetailSyncBatchModel.request_id.like(f"%{search.request_id.strip()}%"))
          if search.app_id and search.app_id.strip():
-@@ -238,3 +388,250 @@ class RetailQueryService:
+@@ -238,3 +395,330 @@ class RetailQueryService:
              }
          )
          return data
@@ -1398,17 +1407,20 @@ index 794261e5..02c0b923 100644
 +    ) -> dict[str, Any]:
 +        """按「期间 × 店铺」输出平台店铺分析口径（PLT-08/09/11/12/37）。
 +
-+        - 接单未税 PLT-08：该期间全部有效订单买家实付 ÷ 1.13；
++        - 接单未税 PLT-08：该期间订单买家实付 ÷ 1.13（含后续取消的单）；
 +        - 货物出货未税 PLT-09：**订单状态已发货**（默认 ``Sent``）的订单金额 ÷ 1.13；
-+        - 退货退款 PLT-11：售后实退 ÷ 1.13（负数）；
++        - 退货退款 PLT-11（负数，2026-10-27 确认口径）：
++          「订单状态=取消」的订单金额 + 「发货后申请退款」的售后实退，均 ÷ 1.13；
++        - 未发货订单上的售后（订单仍是 WaitConfirm/Delivering）不计入，避免与取消重复；
 +        - 对外出货净额 PLT-12 = PLT-09 + PLT-11；
-+        - 退货率 PLT-37 = |PLT-11| ÷ PLT-12。
++        - 退货率 PLT-37 = |PLT-11| ÷ PLT-12（PLT-12 ≤ 0 时改用 PLT-09 作分母）。
 +        """
 +        statuses = shipped_statuses()
++        cancelled = cancelled_statuses()
 +        tax_rate = retail_tax_rate()
 +        order_conditions = [
 +            RetailOrderModel.is_deleted == False,  # noqa: E712
-+            RetailOrderModel.status.notin_(["Cancelled", "Delete"]),
++            RetailOrderModel.status.notin_(["Delete"]),
 +        ]
 +        refund_conditions = [RetailAfterSaleModel.is_deleted == False]  # noqa: E712
 +        if period_value and period_value.strip():
@@ -1442,6 +1454,21 @@ index 794261e5..02c0b923 100644
 +                    func.coalesce(
 +                        func.sum(case((RetailOrderModel.status.in_(statuses), 1), else_=0)), 0
 +                    ),
++                    func.coalesce(
++                        func.sum(
++                            case(
++                                (
++                                    RetailOrderModel.status.in_(cancelled),
++                                    RetailOrderModel.buyer_paid_amount,
++                                ),
++                                else_=0,
++                            )
++                        ),
++                        0,
++                    ),
++                    func.coalesce(
++                        func.sum(case((RetailOrderModel.status.in_(cancelled), 1), else_=0)), 0
++                    ),
 +                )
 +                .where(*order_conditions)
 +                .group_by(RetailOrderModel.period_value, RetailOrderModel.shop_id)
@@ -1464,17 +1491,63 @@ index 794261e5..02c0b923 100644
 +            (str(row[0]), int(row[1])): float(row[2] or 0) for row in refund_rows
 +        }
 +
++        # 「发货后申请退款」判定：售后单能匹配到订单，且订单状态已发货。
++        # 匹配不到订单的售后单（如淘系订单未推送）仍计入，避免漏退款。
++        order_state = (
++            select(
++                RetailOrderModel.shop_id.label("shop_id"),
++                RetailOrderModel.so_id.label("so_id"),
++                func.min(RetailOrderModel.status).label("status"),
++            )
++            .where(
++                RetailOrderModel.is_deleted == False,  # noqa: E712
++                RetailOrderModel.so_id.isnot(None),
++            )
++            .group_by(RetailOrderModel.shop_id, RetailOrderModel.so_id)
++            .subquery()
++        )
++        not_shipped_rows = (
++            await self.db.execute(
++                select(
++                    RetailAfterSaleModel.period_value,
++                    RetailAfterSaleModel.shop_id,
++                    func.coalesce(func.sum(RetailAfterSaleModel.actual_refund), 0),
++                )
++                .join(
++                    order_state,
++                    and_(
++                        order_state.c.shop_id == RetailAfterSaleModel.shop_id,
++                        order_state.c.so_id == RetailAfterSaleModel.so_id,
++                    ),
++                )
++                .where(
++                    *refund_conditions,
++                    order_state.c.status.notin_(statuses),
++                )
++                .group_by(RetailAfterSaleModel.period_value, RetailAfterSaleModel.shop_id)
++            )
++        ).all()
++        not_shipped_index = {
++            (str(row[0]), int(row[1])): float(row[2] or 0) for row in not_shipped_rows
++        }
++
 +        items: list[dict[str, Any]] = []
-+        total_intake = total_shipment = total_refund = 0.0
-+        total_orders = total_shipped = 0
++        total_intake = total_shipment = total_refund = total_cancelled = 0.0
++        total_orders = total_shipped = total_cancelled_orders = 0
 +        seen_refund_keys: set[tuple[str, int]] = set()
 +        for row in order_rows:
 +            period, shop = str(row[0]), int(row[1])
 +            intake = untaxed(row[4], tax_rate) or 0.0
 +            shipment = untaxed(row[5], tax_rate) or 0.0
-+            refund = untaxed(refund_index.get((period, shop), 0.0), tax_rate) or 0.0
++            gross_refund = refund_index.get((period, shop), 0.0)
++            refund = untaxed(
++                max(gross_refund - not_shipped_index.get((period, shop), 0.0), 0.0), tax_rate
++            ) or 0.0
++            cancelled_amount = untaxed(row[7], tax_rate) or 0.0
 +            seen_refund_keys.add((period, shop))
-+            net = round(shipment - refund, 2)
++            return_total = round(cancelled_amount + refund, 2)
++            net = round(shipment - return_total, 2)
++            rate_base = net if net > 0 else shipment
 +            items.append(
 +                {
 +                    "period_value": period,
@@ -1482,24 +1555,31 @@ index 794261e5..02c0b923 100644
 +                    "shop_name": row[2],
 +                    "order_count": int(row[3]),
 +                    "shipped_order_count": int(row[6]),
++                    "cancelled_order_count": int(row[8]),
 +                    "intake_untaxed": intake,
 +                    "shipment_untaxed": shipment,
++                    "cancelled_untaxed": round(-cancelled_amount, 2),
 +                    "refund_untaxed": round(-refund, 2),
++                    "return_untaxed": round(-return_total, 2),
 +                    "net_shipment_untaxed": net,
-+                    "return_rate": round(refund / net, 4) if net else 0.0,
++                    "return_rate": round(return_total / rate_base, 4) if rate_base else 0.0,
 +                }
 +            )
 +            total_orders += int(row[3])
 +            total_shipped += int(row[6])
++            total_cancelled_orders += int(row[8])
 +            total_intake += intake
 +            total_shipment += shipment
 +            total_refund += refund
++            total_cancelled += cancelled_amount
 +
 +        # 只有售后、没有当期订单的店铺也要露出来（否则退货被吞掉）
 +        for (period, shop), amount in refund_index.items():
 +            if (period, shop) in seen_refund_keys:
 +                continue
-+            refund = untaxed(amount, tax_rate) or 0.0
++            refund = untaxed(
++                max(amount - not_shipped_index.get((period, shop), 0.0), 0.0), tax_rate
++            ) or 0.0
 +            items.append(
 +                {
 +                    "period_value": period,
@@ -1507,29 +1587,38 @@ index 794261e5..02c0b923 100644
 +                    "shop_name": None,
 +                    "order_count": 0,
 +                    "shipped_order_count": 0,
++                    "cancelled_order_count": 0,
 +                    "intake_untaxed": 0.0,
 +                    "shipment_untaxed": 0.0,
++                    "cancelled_untaxed": 0.0,
 +                    "refund_untaxed": round(-refund, 2),
++                    "return_untaxed": round(-refund, 2),
 +                    "net_shipment_untaxed": round(-refund, 2),
 +                    "return_rate": 0.0,
 +                }
 +            )
 +            total_refund += refund
 +
-+        net_total = round(total_shipment - total_refund, 2)
++        return_total = round(total_cancelled + total_refund, 2)
++        net_total = round(total_shipment - return_total, 2)
++        rate_base = net_total if net_total > 0 else total_shipment
 +        return {
 +            "tax_rate": tax_rate,
 +            "shipped_statuses": statuses,
++            "cancelled_statuses": cancelled,
 +            "items": items,
 +            "total": {
 +                "shop_count": len({(item["period_value"], item["shop_id"]) for item in items}),
 +                "order_count": total_orders,
 +                "shipped_order_count": total_shipped,
++                "cancelled_order_count": total_cancelled_orders,
 +                "intake_untaxed": round(total_intake, 2),
 +                "shipment_untaxed": round(total_shipment, 2),
++                "cancelled_untaxed": round(-total_cancelled, 2),
 +                "refund_untaxed": round(-total_refund, 2),
++                "return_untaxed": round(-return_total, 2),
 +                "net_shipment_untaxed": net_total,
-+                "return_rate": round(total_refund / net_total, 4) if net_total else 0.0,
++                "return_rate": round(return_total / rate_base, 4) if rate_base else 0.0,
 +            },
 +        }
 diff --git a/backend/app/modules/retail/schedule.py b/backend/app/modules/retail/schedule.py
@@ -2017,7 +2106,7 @@ index 00000000..2cd495a9
 +  }
 +}
 diff --git a/backend/tests/test_retail_open_sync.py b/backend/tests/test_retail_open_sync.py
-index e59ccbad..e08845fe 100644
+index e59ccbad..27a5ed0a 100644
 --- a/backend/tests/test_retail_open_sync.py
 +++ b/backend/tests/test_retail_open_sync.py
 @@ -24,18 +24,26 @@ from app.modules.metadata.model import (
@@ -2072,7 +2161,7 @@ index e59ccbad..e08845fe 100644
              detail = await service.order_detail(int(page["items"][0]["id"]))
              assert detail["order"]["period_value"] == "2026-10"
              assert detail["items"]
-@@ -381,6 +399,176 @@ def test_shop_sync_upserts(retail_client: TestClient) -> None:
+@@ -381,6 +399,183 @@ def test_shop_sync_upserts(retail_client: TestClient) -> None:
  
  
  def test_admin_retail_routes_registered(retail_client: TestClient) -> None:
@@ -2222,6 +2311,9 @@ index e59ccbad..e08845fe 100644
 +    refunds = [
 +        {"as_id": "AS-A1", "so_id": "AS-S1", "shop_id": 1, "as_date": "2026-10-10 00:00:00",
 +         "refund": 56.5, "freight": 0, "payment": 0, "free_amount": 0, "status": "Confirmed"},
++        # 订单还是 WaitConfirm（未发货）→ 不算「发货后申请退款」，不计入退货
++        {"as_id": "AS-A2", "so_id": "AS-S3", "shop_id": 1, "as_date": "2026-10-11 00:00:00",
++         "refund": 113.0, "freight": 0, "payment": 0, "free_amount": 0, "status": "Confirmed"},
 +    ]
 +
 +    async def _run() -> None:
@@ -2238,20 +2330,24 @@ index e59ccbad..e08845fe 100644
 +            total = data["total"]
 +            assert data["shipped_statuses"] == ["Sent"]
 +            assert data["tax_rate"] == 13.0
-+            # 取消单不入接单/出货
-+            assert total["order_count"] == 3
++            # 取消单计入接单与退货，但不入出货
++            assert total["order_count"] == 4
 +            assert total["shipped_order_count"] == 2
-+            # 接单未税 = 678 ÷ 1.13；出货未税 = 339 ÷ 1.13（只算已发货）
-+            assert total["intake_untaxed"] == 600.0
++            assert total["cancelled_order_count"] == 1
++            # 接单未税 = 1178 ÷ 1.13；出货未税 = 339 ÷ 1.13（只算已发货）
++            assert total["intake_untaxed"] == 1042.48
 +            assert total["shipment_untaxed"] == 300.0
-+            # 退货未税 = 56.5 ÷ 1.13 = 50，负数冲减
++            # 退货退款 = 取消单 500 ÷ 1.13 + 发货后售后 56.5 ÷ 1.13（未发货订单上的售后不算）
++            assert total["cancelled_untaxed"] == -442.48
 +            assert total["refund_untaxed"] == -50.0
-+            assert total["net_shipment_untaxed"] == 250.0
-+            assert total["return_rate"] == 0.2
++            assert total["return_untaxed"] == -492.48
++            assert total["net_shipment_untaxed"] == -192.48
++            # 净额为负时以出货额作退货率分母：492.48 ÷ 300
++            assert total["return_rate"] == 1.6416
 +
 +    asyncio.run(_run())
 diff --git "a/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md" "b/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md"
-index a42eb69a..0facb42e 100644
+index a42eb69a..cf28ff1f 100644
 --- "a/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md"
 +++ "b/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md"
 @@ -21,7 +21,7 @@
@@ -2272,7 +2368,7 @@ index a42eb69a..0facb42e 100644
 -| PLT-11 | 退货退款 | 🟡 | 聚水潭售后/平台账单 | 当前只有退款状态/数量，缺金额 |
 +| PLT-08 | 接单未税 | ✅ | `retail_order.buyer_paid_amount` | 含税 ÷ 1.13（默认 13%，可配 `RETAIL_TAX_RATE`） |
 +| PLT-09 | 货物出货未税 | ✅ | `retail_order`（status=Sent） | 已发货订单金额 ÷ 1.13，按订单期间 |
-+| PLT-11 | 退货退款 | ✅ | `retail_after_sale.actual_refund` | 实退含税 ÷ 1.13 后取负号 |
++| PLT-11 | 退货退款 | ✅ | 取消订单 + 发货后售后 | 取消单金额 + 实退，÷ 1.13 后取负号 |
  | PLT-12 | 对外出货净额 | 🟡 | 计算 | `PLT-09 + PLT-11`（PLT-11 为负数） |
  | PLT-13 | 营销结算收入10% | 🟡 | 计算 | `PLT-12 × 10%` |
  | PLT-14 | 平台费 | 🔴 | 平台账单 | 月初预算、月末实际，需录入表 |
@@ -2281,7 +2377,7 @@ index a42eb69a..0facb42e 100644
  | PLT-31 | 回款及时率 | 🟡 | 计算 | `PLT-30÷PLT-08` |
  | PLT-36 | 推广ROI | 🔴 | 计算 | 纯零售可简化为 `PLT-08÷PLT-15`，但 PLT-15 未接入 |
 -| PLT-37 | 退货率 | 🟡 | 计算 | `ABS(PLT-11)÷PLT-12` |
-+| PLT-37 | 退货率 | ✅ | 计算 | `ABS(PLT-11)÷PLT-12` |
++| PLT-37 | 退货率 | ✅ | 计算 | `ABS(PLT-11)÷PLT-12`（PLT-12≤0 时用 PLT-09） |
  | PLT-38 | 客单价 | 🟡 | 计算 | `PLT-08÷接单量` |
  | PLT-39 | 线索数量 | 🔴 | CRM/平台后台 | 无线索数据源 |
  | PLT-40 | 成交线索数量 | 🔴 | CRM | 无线索成交标记 |
@@ -2313,20 +2409,20 @@ index a42eb69a..0facb42e 100644
  ```
  
 -从 `meta_sync_run.rows_json.datas` 拆出 `dwd_retail_outbound`：
+-
+-```text
+-io_id, shop_id, io_date, status,
+-amount = items.auto（sale_amount → buyer_paid_amount → seller_income_amount）
+-```
 +- 已发货：订单状态 `Sent`（`RETAIL_SHIPPED_STATUSES` 可配，例如加上 `Delivering` 把「发货中」也算进来）；
 +- 未发货（`WaitConfirm`/`Delivering` 未纳入时）不计；
 +- `Cancelled`/`Delete` 既不接入接单也不入出货；
 +- 期间与接单一致，用 `retail_order.period_value`（保证 PLT-08、PLT-09、PLT-11 同期同店可比）。
  
--```text
--io_id, shop_id, io_date, status,
--amount = items.auto（sale_amount → buyer_paid_amount → seller_income_amount）
--```
+-然后：
 +已实现接口：`GET /api/v1/retail/analysis/summary?period_value=2026-10`，返回
 +`items[]`（期间 × 店铺）与 `total`：
  
--然后：
--
 -```text
 -PLT-09 = SUM(amount) ÷ (1 + 税率 / 100)
 +```json
@@ -2343,29 +2439,48 @@ index a42eb69a..0facb42e 100644
  
  ### 4.4 PLT-12 / PLT-13 / PLT-23
  
-@@ -151,7 +157,20 @@ PLT-13 = PLT-12 × 10%
+@@ -151,7 +157,39 @@ PLT-13 = PLT-12 × 10%
  PLT-23 = PLT-13 × 4%
  ```
  
 -`PLT-11` 没有退款金额时，先只能做“退款件数/退款单数”，不能做金额口径。
-+PLT-11 取数（表 `retail_after_sale`，已对接）：
++PLT-11 取数（2026-10-27 确认口径：**取消单 + 发货后申请退款**）：
 +
 +```sql
-+SELECT period_value, shop_id, -SUM(actual_refund) AS refund_amount
-+FROM retail_after_sale
-+WHERE is_deleted = 0
++-- ① 取消单：订单状态 Cancelled，金额全额计入退货
++SELECT period_value, shop_id, SUM(buyer_paid_amount) AS amount
++FROM retail_order
++WHERE is_deleted = 0 AND status IN ('Cancelled')
 +GROUP BY period_value, shop_id;
++
++-- ② 发货后申请退款：售后单能匹配到订单，且订单状态已发货（Sent）
++--    匹配不到订单的售后单仍计入（避免淘系订单未推送导致漏退款）
++SELECT a.period_value, a.shop_id, SUM(a.actual_refund) AS amount
++FROM retail_after_sale a
++LEFT JOIN retail_order o
++       ON o.shop_id = a.shop_id AND o.so_id = a.so_id AND o.is_deleted = 0
++WHERE a.is_deleted = 0
++  AND (o.id IS NULL OR o.status IN ('Sent'))
++GROUP BY a.period_value, a.shop_id;
++
++-- PLT-11（负数）= -(① + ②) ÷ 1.13
 +```
 +
 +- 非淘系：聚水潭售后接口 `RefundQuery`（docId=38）每 10 分钟增量 + 每日 7 天补偿；
 +- 淘系：奇门推送 `POST /open/v1/retail/aftersales/sync`（免鉴权）；
 +- `actual_refund = freight + refund - payment - free_amount`；
 +- 未税口径：`actual_refund ÷ 1.13`（默认 13%，`RETAIL_TAX_RATE` 可配）；
-+- 只统计已完成的退款（`status` 已确认/退款成功），未完成单不冲减 PLT-09。
++- 未发货订单上的售后（订单仍是 `WaitConfirm`/`Delivering`）不计入，避免和取消单重复；
++- 取消状态可用 `RETAIL_CANCELLED_STATUSES` 调整（默认 `Cancelled`）。
++
++接口已实现：`GET /retail/analysis/summary` 的 `total.cancelled_untaxed`（取消）、
++`total.refund_untaxed`（发货后售后）、`total.return_untaxed`（PLT-11 合计）。
++
++> 退货率 PLT-37 = |PLT-11| ÷ PLT-12；当 PLT-12 ≤ 0（退货大于出货）时改用 PLT-09 作分母。
  
  ### 4.5 PLT-38 客单价
  
-@@ -248,7 +267,7 @@ CRM 产品分类（52 个） → 铝壳/机箱/功放/铝型材外壳/防水外
+@@ -248,7 +286,7 @@ CRM 产品分类（52 个） → 铝壳/机箱/功放/铝型材外壳/防水外
  
  | 指标 | 缺什么 | 建议来源 |
  | --- | --- | --- |
@@ -2602,7 +2717,7 @@ index 3dc1fb8e..6d19f89f 100644
 +点「明细」看 SKU 与金额；右上「同步聚水潭售后」可手动拉取非淘系售后（权限
 +`module_retail:shop:sync`，查询权限 `module_retail:order:query`）。
 diff --git a/frontend/web/src/api/module_retail/index.ts b/frontend/web/src/api/module_retail/index.ts
-index a8871028..86c2a3d9 100644
+index a8871028..9f16ab88 100644
 --- a/frontend/web/src/api/module_retail/index.ts
 +++ b/frontend/web/src/api/module_retail/index.ts
 @@ -47,6 +47,7 @@ export interface RetailOrderRow {
@@ -2638,7 +2753,7 @@ index a8871028..86c2a3d9 100644
    request_id?: string;
    app_id?: string;
    source?: string;
-@@ -120,6 +125,133 @@ export interface RetailBatchQuery {
+@@ -120,6 +125,140 @@ export interface RetailBatchQuery {
    page_size?: number;
  }
  
@@ -2746,9 +2861,12 @@ index a8871028..86c2a3d9 100644
 +  shop_name?: string | null;
 +  order_count: number;
 +  shipped_order_count: number;
++  cancelled_order_count: number;
 +  intake_untaxed: number;
 +  shipment_untaxed: number;
++  cancelled_untaxed: number;
 +  refund_untaxed: number;
++  return_untaxed: number;
 +  net_shipment_untaxed: number;
 +  return_rate: number;
 +}
@@ -2756,14 +2874,18 @@ index a8871028..86c2a3d9 100644
 +export interface RetailAnalysisResult {
 +  tax_rate: number;
 +  shipped_statuses: string[];
++  cancelled_statuses: string[];
 +  items: RetailAnalysisRow[];
 +  total: {
 +    shop_count: number;
 +    order_count: number;
 +    shipped_order_count: number;
++    cancelled_order_count: number;
 +    intake_untaxed: number;
 +    shipment_untaxed: number;
++    cancelled_untaxed: number;
 +    refund_untaxed: number;
++    return_untaxed: number;
 +    net_shipment_untaxed: number;
 +    return_rate: number;
 +  };
@@ -2772,7 +2894,7 @@ index a8871028..86c2a3d9 100644
  export const RetailAPI = {
    syncShops() {
      return request<ApiResponse<Record<string, unknown>>>({
-@@ -157,4 +289,32 @@ export const RetailAPI = {
+@@ -157,4 +296,32 @@ export const RetailAPI = {
        method: "get",
      });
    },
@@ -2806,7 +2928,7 @@ index a8871028..86c2a3d9 100644
 +  },
  };
 diff --git a/frontend/web/src/views/module_retail/order/index.vue b/frontend/web/src/views/module_retail/order/index.vue
-index 0297fcb6..6c2f5737 100644
+index 0297fcb6..77bcc7d6 100644
 --- a/frontend/web/src/views/module_retail/order/index.vue
 +++ b/frontend/web/src/views/module_retail/order/index.vue
 @@ -68,7 +68,10 @@
@@ -2841,7 +2963,7 @@ index 0297fcb6..6c2f5737 100644
              <ElTableColumn label="状态" width="100" align="center">
                <template #default="{ row }">
                  <ElTag :type="batchStatusType(row.status)" size="small">{{ batchStatusText(row.status) }}</ElTag>
-@@ -187,6 +196,182 @@
+@@ -187,6 +196,192 @@
              />
            </div>
          </ElTabPane>
@@ -2987,10 +3109,13 @@ index 0297fcb6..6c2f5737 100644
 +
 +          <div class="summary">
 +            <span>店铺 {{ analysis.total.shop_count }} 个</span>
-+            <span>订单 {{ analysis.total.order_count }} 张 / 已发货 {{ analysis.total.shipped_order_count }} 张</span>
++            <span>
++              订单 {{ analysis.total.order_count }} 张 / 已发货 {{ analysis.total.shipped_order_count }} 张 /
++              取消 {{ analysis.total.cancelled_order_count }} 张
++            </span>
 +            <span>接单未税 {{ formatMoney(analysis.total.intake_untaxed) }}</span>
 +            <span class="summary-tax">出货未税 {{ formatMoney(analysis.total.shipment_untaxed) }}</span>
-+            <span>退货未税 {{ formatMoney(analysis.total.refund_untaxed) }}</span>
++            <span>退货退款未税 {{ formatMoney(analysis.total.return_untaxed) }}</span>
 +            <span class="summary-tax">净额 {{ formatMoney(analysis.total.net_shipment_untaxed) }}</span>
 +            <span>退货率 {{ formatRate(analysis.total.return_rate) }}</span>
 +          </div>
@@ -3004,14 +3129,21 @@ index 0297fcb6..6c2f5737 100644
 +            </ElTableColumn>
 +            <ElTableColumn prop="order_count" label="订单数" width="90" align="right" />
 +            <ElTableColumn prop="shipped_order_count" label="已发货" width="90" align="right" />
++            <ElTableColumn prop="cancelled_order_count" label="取消单" width="90" align="right" />
 +            <ElTableColumn label="接单未税" width="120" align="right">
 +              <template #default="{ row }">{{ formatMoney(row.intake_untaxed) }}</template>
 +            </ElTableColumn>
 +            <ElTableColumn label="出货未税" width="120" align="right">
 +              <template #default="{ row }">{{ formatMoney(row.shipment_untaxed) }}</template>
 +            </ElTableColumn>
-+            <ElTableColumn label="退货未税" width="120" align="right">
++            <ElTableColumn label="取消未税" width="120" align="right">
++              <template #default="{ row }">{{ formatMoney(row.cancelled_untaxed) }}</template>
++            </ElTableColumn>
++            <ElTableColumn label="售后未税" width="120" align="right">
 +              <template #default="{ row }">{{ formatMoney(row.refund_untaxed) }}</template>
++            </ElTableColumn>
++            <ElTableColumn label="退货退款" width="120" align="right">
++              <template #default="{ row }">{{ formatMoney(row.return_untaxed) }}</template>
 +            </ElTableColumn>
 +            <ElTableColumn label="净额" width="120" align="right">
 +              <template #default="{ row }">{{ formatMoney(row.net_shipment_untaxed) }}</template>
@@ -3024,7 +3156,7 @@ index 0297fcb6..6c2f5737 100644
        </ElTabs>
      </ElCard>
  
-@@ -202,6 +387,7 @@
+@@ -202,6 +397,7 @@
            <ElDescriptionsItem label="内部单号">{{ orderDetail.order.o_id || "-" }}</ElDescriptionsItem>
            <ElDescriptionsItem label="买家">{{ orderDetail.order.buyer_nick || "-" }}</ElDescriptionsItem>
            <ElDescriptionsItem label="买家实付">{{ formatMoney(orderDetail.order.buyer_paid_amount) }}</ElDescriptionsItem>
@@ -3032,7 +3164,7 @@ index 0297fcb6..6c2f5737 100644
            <ElDescriptionsItem label="应付金额">{{ formatMoney(orderDetail.order.pay_amount) }}</ElDescriptionsItem>
            <ElDescriptionsItem label="支付时间">{{ formatTime(orderDetail.order.pay_date) }}</ElDescriptionsItem>
            <ElDescriptionsItem label="上游修改">{{ formatTime(orderDetail.order.modified_time) }}</ElDescriptionsItem>
-@@ -262,6 +448,85 @@
+@@ -262,6 +458,85 @@
          </div>
        </template>
      </ElDrawer>
@@ -3118,7 +3250,7 @@ index 0297fcb6..6c2f5737 100644
    </div>
  </template>
  
-@@ -270,6 +535,9 @@ import { onMounted, reactive, ref } from "vue";
+@@ -270,6 +545,9 @@ import { onMounted, reactive, ref } from "vue";
  import { ElMessage } from "element-plus";
  import {
    RetailAPI,
@@ -3128,7 +3260,7 @@ index 0297fcb6..6c2f5737 100644
    type RetailBatchDetail,
    type RetailBatchRow,
    type RetailOrderDetail,
-@@ -283,8 +551,12 @@ const periods = ref<string[]>([]);
+@@ -283,8 +561,12 @@ const periods = ref<string[]>([]);
  const orderLoading = ref(false);
  const batchLoading = ref(false);
  const shopSyncing = ref(false);
@@ -3141,7 +3273,7 @@ index 0297fcb6..6c2f5737 100644
  
  const orderSearch = reactive<{
    period_value?: string;
-@@ -296,19 +568,65 @@ const orderSearch = reactive<{
+@@ -296,19 +578,69 @@ const orderSearch = reactive<{
    keyword?: string;
  }>({});
  const batchSearch = reactive<{ request_id?: string; source?: string; status?: string }>({});
@@ -3193,14 +3325,18 @@ index 0297fcb6..6c2f5737 100644
 +const analysis = ref<RetailAnalysisResult>({
 +  tax_rate: 13,
 +  shipped_statuses: ["Sent"],
++  cancelled_statuses: ["Cancelled"],
 +  items: [],
 +  total: {
 +    shop_count: 0,
 +    order_count: 0,
 +    shipped_order_count: 0,
++    cancelled_order_count: 0,
 +    intake_untaxed: 0,
 +    shipment_untaxed: 0,
++    cancelled_untaxed: 0,
 +    refund_untaxed: 0,
++    return_untaxed: 0,
 +    net_shipment_untaxed: 0,
 +    return_rate: 0,
 +  },
@@ -3208,7 +3344,7 @@ index 0297fcb6..6c2f5737 100644
  
  function formatTime(value?: string | null) {
    if (!value) return "-";
-@@ -320,6 +638,11 @@ function formatMoney(value?: number | null) {
+@@ -320,6 +652,11 @@ function formatMoney(value?: number | null) {
    return Number(value).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
  }
  
@@ -3220,7 +3356,7 @@ index 0297fcb6..6c2f5737 100644
  function orderStatusType(status?: string | null) {
    if (!status) return "info";
    if (["Cancelled", "Delete", "Refunded"].includes(status)) return "danger";
-@@ -333,6 +656,13 @@ function batchStatusType(status: string) {
+@@ -333,6 +670,13 @@ function batchStatusType(status: string) {
    return "success";
  }
  
@@ -3234,7 +3370,7 @@ index 0297fcb6..6c2f5737 100644
  function batchStatusText(status: string) {
    const labels: Record<string, string> = {
      success: "成功",
-@@ -373,7 +703,14 @@ async function loadOrders() {
+@@ -373,7 +717,14 @@ async function loadOrders() {
      const data = res.data?.data;
      orders.value = data?.items ?? [];
      orderPage.total = data?.total ?? 0;
@@ -3250,7 +3386,7 @@ index 0297fcb6..6c2f5737 100644
    } catch (error) {
      orders.value = [];
      ElMessage.error("查询零售订单失败");
-@@ -421,6 +758,122 @@ async function handleSyncShops() {
+@@ -421,6 +772,122 @@ async function handleSyncShops() {
    }
  }
  
@@ -3373,7 +3509,7 @@ index 0297fcb6..6c2f5737 100644
  function queryOrders() {
    orderPage.page_no = 1;
    loadOrders();
-@@ -475,6 +928,12 @@ function handleTabChange(name: string | number) {
+@@ -475,6 +942,12 @@ function handleTabChange(name: string | number) {
    if (name === "batches" && !batches.value.length) {
      loadBatches();
    }
@@ -3386,7 +3522,7 @@ index 0297fcb6..6c2f5737 100644
  }
  
  onMounted(async () => {
-@@ -522,6 +981,11 @@ onMounted(async () => {
+@@ -522,6 +995,11 @@ onMounted(async () => {
      color: var(--el-text-color-secondary);
    }
  

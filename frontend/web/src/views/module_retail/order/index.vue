@@ -338,10 +338,13 @@
 
           <div class="summary">
             <span>店铺 {{ analysis.total.shop_count }} 个</span>
-            <span>订单 {{ analysis.total.order_count }} 张 / 已发货 {{ analysis.total.shipped_order_count }} 张</span>
+            <span>
+              订单 {{ analysis.total.order_count }} 张 / 已发货 {{ analysis.total.shipped_order_count }} 张 /
+              取消 {{ analysis.total.cancelled_order_count }} 张
+            </span>
             <span>接单未税 {{ formatMoney(analysis.total.intake_untaxed) }}</span>
             <span class="summary-tax">出货未税 {{ formatMoney(analysis.total.shipment_untaxed) }}</span>
-            <span>退货未税 {{ formatMoney(analysis.total.refund_untaxed) }}</span>
+            <span>退货退款未税 {{ formatMoney(analysis.total.return_untaxed) }}</span>
             <span class="summary-tax">净额 {{ formatMoney(analysis.total.net_shipment_untaxed) }}</span>
             <span>退货率 {{ formatRate(analysis.total.return_rate) }}</span>
           </div>
@@ -355,14 +358,21 @@
             </ElTableColumn>
             <ElTableColumn prop="order_count" label="订单数" width="90" align="right" />
             <ElTableColumn prop="shipped_order_count" label="已发货" width="90" align="right" />
+            <ElTableColumn prop="cancelled_order_count" label="取消单" width="90" align="right" />
             <ElTableColumn label="接单未税" width="120" align="right">
               <template #default="{ row }">{{ formatMoney(row.intake_untaxed) }}</template>
             </ElTableColumn>
             <ElTableColumn label="出货未税" width="120" align="right">
               <template #default="{ row }">{{ formatMoney(row.shipment_untaxed) }}</template>
             </ElTableColumn>
-            <ElTableColumn label="退货未税" width="120" align="right">
+            <ElTableColumn label="取消未税" width="120" align="right">
+              <template #default="{ row }">{{ formatMoney(row.cancelled_untaxed) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="售后未税" width="120" align="right">
               <template #default="{ row }">{{ formatMoney(row.refund_untaxed) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="退货退款" width="120" align="right">
+              <template #default="{ row }">{{ formatMoney(row.return_untaxed) }}</template>
             </ElTableColumn>
             <ElTableColumn label="净额" width="120" align="right">
               <template #default="{ row }">{{ formatMoney(row.net_shipment_untaxed) }}</template>
@@ -615,14 +625,18 @@ const afterSaleDetail = ref<RetailAfterSaleDetail | null>(null);
 const analysis = ref<RetailAnalysisResult>({
   tax_rate: 13,
   shipped_statuses: ["Sent"],
+  cancelled_statuses: ["Cancelled"],
   items: [],
   total: {
     shop_count: 0,
     order_count: 0,
     shipped_order_count: 0,
+    cancelled_order_count: 0,
     intake_untaxed: 0,
     shipment_untaxed: 0,
+    cancelled_untaxed: 0,
     refund_untaxed: 0,
+    return_untaxed: 0,
     net_shipment_untaxed: 0,
     return_rate: 0,
   },

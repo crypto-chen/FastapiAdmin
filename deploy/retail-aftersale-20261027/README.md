@@ -142,3 +142,23 @@ PLT-09 = SUM(buyer_paid_amount WHERE status IN ('Sent')) ÷ 1.13
 - 新增页签：**零售订单同步 → 平台店铺分析**。
 
 无需迁移，更新脚本同第 1 节。
+
+## 9. 追加：退货退款 = 取消单 + 发货后申请退款（同日确认）
+
+```text
+PLT-11（负数） = -(取消单金额 + 发货后售后实退) ÷ 1.13
+PLT-12          = PLT-09 + PLT-11
+PLT-37          = |PLT-11| ÷ PLT-12（PLT-12≤0 时改用 PLT-09）
+```
+
+- ① 取消单：`retail_order.status = 'Cancelled'`，金额全额计入（`RETAIL_CANCELLED_STATUSES` 可配）；
+- ② 发货后申请退款：售后单能匹配到订单且订单状态为 `Sent`（已发货）；
+- 未发货订单上的售后（仍是 `WaitConfirm`/`Delivering`）不计入，避免与取消重复；
+- 匹配不到订单的售后单仍计入，避免淘系订单未推送导致漏退款。
+
+`GET /retail/analysis/summary` 返回：
+`cancelled_untaxed`（取消）、`refund_untaxed`（发货后售后）、`return_untaxed`（PLT-11 合计）、
+`net_shipment_untaxed`（PLT-12）、`return_rate`（PLT-37）。
+页面「平台店铺分析」新增「取消单 / 取消未税 / 售后未税 / 退货退款」列。
+
+无需迁移，更新脚本同第 1 节。

@@ -175,6 +175,8 @@ class Settings(BaseSettings):
     # 「货物出货」口径：订单状态命中即视为已发货（逗号分隔）；默认 Sent（已发货）
     # 需要把「发货中」也算进来时改成 Sent,Delivering
     RETAIL_SHIPPED_STATUSES: str = "Sent"
+    # 「退货退款」中的取消单状态（逗号分隔）；取消单金额全额计入退货退款
+    RETAIL_CANCELLED_STATUSES: str = "Cancelled"
 
     # ================================================= #
     # ********************* 日志配置 ******************* #

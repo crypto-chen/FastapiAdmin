@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.setting import settings
@@ -55,6 +55,13 @@ def shipped_statuses() -> list[str]:
     raw = getattr(settings, "RETAIL_SHIPPED_STATUSES", "Sent") or "Sent"
     items = [part.strip() for part in str(raw).split(",") if part.strip()]
     return items or ["Sent"]
+
+
+def cancelled_statuses() -> list[str]:
+    """计为退货退款的取消状态；默认 Cancelled（聚水潭「取消」）。"""
+    raw = getattr(settings, "RETAIL_CANCELLED_STATUSES", "Cancelled") or "Cancelled"
+    items = [part.strip() for part in str(raw).split(",") if part.strip()]
+    return items or ["Cancelled"]
 
 
 def _order_row(row: RetailOrderModel) -> dict[str, Any]:
@@ -501,17 +508,20 @@ class RetailQueryService:
     ) -> dict[str, Any]:
         """按「期间 × 店铺」输出平台店铺分析口径（PLT-08/09/11/12/37）。
 
-        - 接单未税 PLT-08：该期间全部有效订单买家实付 ÷ 1.13；
+        - 接单未税 PLT-08：该期间订单买家实付 ÷ 1.13（含后续取消的单）；
         - 货物出货未税 PLT-09：**订单状态已发货**（默认 ``Sent``）的订单金额 ÷ 1.13；
-        - 退货退款 PLT-11：售后实退 ÷ 1.13（负数）；
+        - 退货退款 PLT-11（负数，2026-10-27 确认口径）：
+          「订单状态=取消」的订单金额 + 「发货后申请退款」的售后实退，均 ÷ 1.13；
+        - 未发货订单上的售后（订单仍是 WaitConfirm/Delivering）不计入，避免与取消重复；
         - 对外出货净额 PLT-12 = PLT-09 + PLT-11；
-        - 退货率 PLT-37 = |PLT-11| ÷ PLT-12。
+        - 退货率 PLT-37 = |PLT-11| ÷ PLT-12（PLT-12 ≤ 0 时改用 PLT-09 作分母）。
         """
         statuses = shipped_statuses()
+        cancelled = cancelled_statuses()
         tax_rate = retail_tax_rate()
         order_conditions = [
             RetailOrderModel.is_deleted == False,  # noqa: E712
-            RetailOrderModel.status.notin_(["Cancelled", "Delete"]),
+            RetailOrderModel.status.notin_(["Delete"]),
         ]
         refund_conditions = [RetailAfterSaleModel.is_deleted == False]  # noqa: E712
         if period_value and period_value.strip():
@@ -545,6 +555,21 @@ class RetailQueryService:
                     func.coalesce(
                         func.sum(case((RetailOrderModel.status.in_(statuses), 1), else_=0)), 0
                     ),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    RetailOrderModel.status.in_(cancelled),
+                                    RetailOrderModel.buyer_paid_amount,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
+                    func.coalesce(
+                        func.sum(case((RetailOrderModel.status.in_(cancelled), 1), else_=0)), 0
+                    ),
                 )
                 .where(*order_conditions)
                 .group_by(RetailOrderModel.period_value, RetailOrderModel.shop_id)
@@ -567,17 +592,63 @@ class RetailQueryService:
             (str(row[0]), int(row[1])): float(row[2] or 0) for row in refund_rows
         }
 
+        # 「发货后申请退款」判定：售后单能匹配到订单，且订单状态已发货。
+        # 匹配不到订单的售后单（如淘系订单未推送）仍计入，避免漏退款。
+        order_state = (
+            select(
+                RetailOrderModel.shop_id.label("shop_id"),
+                RetailOrderModel.so_id.label("so_id"),
+                func.min(RetailOrderModel.status).label("status"),
+            )
+            .where(
+                RetailOrderModel.is_deleted == False,  # noqa: E712
+                RetailOrderModel.so_id.isnot(None),
+            )
+            .group_by(RetailOrderModel.shop_id, RetailOrderModel.so_id)
+            .subquery()
+        )
+        not_shipped_rows = (
+            await self.db.execute(
+                select(
+                    RetailAfterSaleModel.period_value,
+                    RetailAfterSaleModel.shop_id,
+                    func.coalesce(func.sum(RetailAfterSaleModel.actual_refund), 0),
+                )
+                .join(
+                    order_state,
+                    and_(
+                        order_state.c.shop_id == RetailAfterSaleModel.shop_id,
+                        order_state.c.so_id == RetailAfterSaleModel.so_id,
+                    ),
+                )
+                .where(
+                    *refund_conditions,
+                    order_state.c.status.notin_(statuses),
+                )
+                .group_by(RetailAfterSaleModel.period_value, RetailAfterSaleModel.shop_id)
+            )
+        ).all()
+        not_shipped_index = {
+            (str(row[0]), int(row[1])): float(row[2] or 0) for row in not_shipped_rows
+        }
+
         items: list[dict[str, Any]] = []
-        total_intake = total_shipment = total_refund = 0.0
-        total_orders = total_shipped = 0
+        total_intake = total_shipment = total_refund = total_cancelled = 0.0
+        total_orders = total_shipped = total_cancelled_orders = 0
         seen_refund_keys: set[tuple[str, int]] = set()
         for row in order_rows:
             period, shop = str(row[0]), int(row[1])
             intake = untaxed(row[4], tax_rate) or 0.0
             shipment = untaxed(row[5], tax_rate) or 0.0
-            refund = untaxed(refund_index.get((period, shop), 0.0), tax_rate) or 0.0
+            gross_refund = refund_index.get((period, shop), 0.0)
+            refund = untaxed(
+                max(gross_refund - not_shipped_index.get((period, shop), 0.0), 0.0), tax_rate
+            ) or 0.0
+            cancelled_amount = untaxed(row[7], tax_rate) or 0.0
             seen_refund_keys.add((period, shop))
-            net = round(shipment - refund, 2)
+            return_total = round(cancelled_amount + refund, 2)
+            net = round(shipment - return_total, 2)
+            rate_base = net if net > 0 else shipment
             items.append(
                 {
                     "period_value": period,
@@ -585,24 +656,31 @@ class RetailQueryService:
                     "shop_name": row[2],
                     "order_count": int(row[3]),
                     "shipped_order_count": int(row[6]),
+                    "cancelled_order_count": int(row[8]),
                     "intake_untaxed": intake,
                     "shipment_untaxed": shipment,
+                    "cancelled_untaxed": round(-cancelled_amount, 2),
                     "refund_untaxed": round(-refund, 2),
+                    "return_untaxed": round(-return_total, 2),
                     "net_shipment_untaxed": net,
-                    "return_rate": round(refund / net, 4) if net else 0.0,
+                    "return_rate": round(return_total / rate_base, 4) if rate_base else 0.0,
                 }
             )
             total_orders += int(row[3])
             total_shipped += int(row[6])
+            total_cancelled_orders += int(row[8])
             total_intake += intake
             total_shipment += shipment
             total_refund += refund
+            total_cancelled += cancelled_amount
 
         # 只有售后、没有当期订单的店铺也要露出来（否则退货被吞掉）
         for (period, shop), amount in refund_index.items():
             if (period, shop) in seen_refund_keys:
                 continue
-            refund = untaxed(amount, tax_rate) or 0.0
+            refund = untaxed(
+                max(amount - not_shipped_index.get((period, shop), 0.0), 0.0), tax_rate
+            ) or 0.0
             items.append(
                 {
                     "period_value": period,
@@ -610,28 +688,37 @@ class RetailQueryService:
                     "shop_name": None,
                     "order_count": 0,
                     "shipped_order_count": 0,
+                    "cancelled_order_count": 0,
                     "intake_untaxed": 0.0,
                     "shipment_untaxed": 0.0,
+                    "cancelled_untaxed": 0.0,
                     "refund_untaxed": round(-refund, 2),
+                    "return_untaxed": round(-refund, 2),
                     "net_shipment_untaxed": round(-refund, 2),
                     "return_rate": 0.0,
                 }
             )
             total_refund += refund
 
-        net_total = round(total_shipment - total_refund, 2)
+        return_total = round(total_cancelled + total_refund, 2)
+        net_total = round(total_shipment - return_total, 2)
+        rate_base = net_total if net_total > 0 else total_shipment
         return {
             "tax_rate": tax_rate,
             "shipped_statuses": statuses,
+            "cancelled_statuses": cancelled,
             "items": items,
             "total": {
                 "shop_count": len({(item["period_value"], item["shop_id"]) for item in items}),
                 "order_count": total_orders,
                 "shipped_order_count": total_shipped,
+                "cancelled_order_count": total_cancelled_orders,
                 "intake_untaxed": round(total_intake, 2),
                 "shipment_untaxed": round(total_shipment, 2),
+                "cancelled_untaxed": round(-total_cancelled, 2),
                 "refund_untaxed": round(-total_refund, 2),
+                "return_untaxed": round(-return_total, 2),
                 "net_shipment_untaxed": net_total,
-                "return_rate": round(total_refund / net_total, 4) if net_total else 0.0,
+                "return_rate": round(return_total / rate_base, 4) if rate_base else 0.0,
             },
         }

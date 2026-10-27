@@ -229,9 +229,12 @@ export interface RetailAnalysisRow {
   shop_name?: string | null;
   order_count: number;
   shipped_order_count: number;
+  cancelled_order_count: number;
   intake_untaxed: number;
   shipment_untaxed: number;
+  cancelled_untaxed: number;
   refund_untaxed: number;
+  return_untaxed: number;
   net_shipment_untaxed: number;
   return_rate: number;
 }
@@ -239,14 +242,18 @@ export interface RetailAnalysisRow {
 export interface RetailAnalysisResult {
   tax_rate: number;
   shipped_statuses: string[];
+  cancelled_statuses: string[];
   items: RetailAnalysisRow[];
   total: {
     shop_count: number;
     order_count: number;
     shipped_order_count: number;
+    cancelled_order_count: number;
     intake_untaxed: number;
     shipment_untaxed: number;
+    cancelled_untaxed: number;
     refund_untaxed: number;
+    return_untaxed: number;
     net_shipment_untaxed: number;
     return_rate: number;
   };

@@ -544,6 +544,9 @@ def test_analysis_summary_counts_only_shipped_orders(retail_client: TestClient) 
     refunds = [
         {"as_id": "AS-A1", "so_id": "AS-S1", "shop_id": 1, "as_date": "2026-10-10 00:00:00",
          "refund": 56.5, "freight": 0, "payment": 0, "free_amount": 0, "status": "Confirmed"},
+        # 订单还是 WaitConfirm（未发货）→ 不算「发货后申请退款」，不计入退货
+        {"as_id": "AS-A2", "so_id": "AS-S3", "shop_id": 1, "as_date": "2026-10-11 00:00:00",
+         "refund": 113.0, "freight": 0, "payment": 0, "free_amount": 0, "status": "Confirmed"},
     ]
 
     async def _run() -> None:
@@ -560,15 +563,19 @@ def test_analysis_summary_counts_only_shipped_orders(retail_client: TestClient) 
             total = data["total"]
             assert data["shipped_statuses"] == ["Sent"]
             assert data["tax_rate"] == 13.0
-            # 取消单不入接单/出货
-            assert total["order_count"] == 3
+            # 取消单计入接单与退货，但不入出货
+            assert total["order_count"] == 4
             assert total["shipped_order_count"] == 2
-            # 接单未税 = 678 ÷ 1.13；出货未税 = 339 ÷ 1.13（只算已发货）
-            assert total["intake_untaxed"] == 600.0
+            assert total["cancelled_order_count"] == 1
+            # 接单未税 = 1178 ÷ 1.13；出货未税 = 339 ÷ 1.13（只算已发货）
+            assert total["intake_untaxed"] == 1042.48
             assert total["shipment_untaxed"] == 300.0
-            # 退货未税 = 56.5 ÷ 1.13 = 50，负数冲减
+            # 退货退款 = 取消单 500 ÷ 1.13 + 发货后售后 56.5 ÷ 1.13（未发货订单上的售后不算）
+            assert total["cancelled_untaxed"] == -442.48
             assert total["refund_untaxed"] == -50.0
-            assert total["net_shipment_untaxed"] == 250.0
-            assert total["return_rate"] == 0.2
+            assert total["return_untaxed"] == -492.48
+            assert total["net_shipment_untaxed"] == -192.48
+            # 净额为负时以出货额作退货率分母：492.48 ÷ 300
+            assert total["return_rate"] == 1.6416
 
     asyncio.run(_run())
