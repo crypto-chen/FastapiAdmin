@@ -237,6 +237,7 @@ export interface RetailAnalysisRow {
   return_untaxed: number;
   net_shipment_untaxed: number;
   settlement_income_untaxed: number;
+  hq_allocation_untaxed: number;
   return_rate: number;
 }
 
@@ -258,6 +259,7 @@ export interface RetailAnalysisResult {
     return_untaxed: number;
     net_shipment_untaxed: number;
     settlement_income_untaxed: number;
+    hq_allocation_untaxed: number;
     return_rate: number;
   };
 }

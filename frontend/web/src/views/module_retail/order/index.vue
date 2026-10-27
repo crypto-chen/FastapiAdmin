@@ -386,6 +386,9 @@
             <ElTableColumn label="营销结算收入" width="130" align="right">
               <template #default="{ row }">{{ formatMoney(row.settlement_income_untaxed) }}</template>
             </ElTableColumn>
+            <ElTableColumn label="总部分摊4%" width="130" align="right">
+              <template #default="{ row }">{{ formatMoney(row.hq_allocation_untaxed) }}</template>
+            </ElTableColumn>
             <ElTableColumn label="退货率" width="100" align="right">
               <template #default="{ row }">{{ formatRate(row.return_rate) }}</template>
             </ElTableColumn>
@@ -649,6 +652,7 @@ const analysis = ref<RetailAnalysisResult>({
     return_untaxed: 0,
     net_shipment_untaxed: 0,
     settlement_income_untaxed: 0,
+    hq_allocation_untaxed: 0,
     return_rate: 0,
   },
 });
