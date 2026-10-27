@@ -73,6 +73,7 @@
         <span>退货退款 {{ formatNumber(summary.return_untaxed_sum) }}</span>
         <span>对外出货净额 {{ formatNumber(summary.net_shipment_sum) }}</span>
         <span>结算收入10% {{ formatNumber(summary.settlement_income_sum) }}</span>
+        <span>总部分摊4% {{ formatNumber(summary.hq_allocation_sum) }}</span>
         <span>退货率 {{ formatPercent(summary.return_rate) }}</span>
       </div>
 
@@ -158,7 +159,7 @@
           <div class="rank-sub">
             订单 {{ item.order_count }} 张 · 接单未税 {{ formatNumber(item.intake_untaxed) }} · 出货未税
             {{ formatNumber(item.shipment_untaxed) }} · 结算收入10% {{ formatNumber(item.settlement_income) }} ·
-            退货率 {{ formatPercent(item.return_rate) }}
+            总部分摊4% {{ formatNumber(item.hq_allocation) }} · 退货率 {{ formatPercent(item.return_rate) }}
           </div>
         </div>
         <ElEmpty v-if="!(stats.top_platforms || []).length" description="暂无数据" />

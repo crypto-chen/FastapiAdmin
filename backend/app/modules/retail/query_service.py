@@ -73,6 +73,15 @@ def settlement_rate() -> float:
     return rate if rate >= 0 else 10.0
 
 
+def hq_allocation_rate() -> float:
+    """总部分摊比例（百分比），默认 4%：PLT-23 = PLT-13 × 4%。"""
+    try:
+        rate = float(getattr(settings, "RETAIL_HQ_ALLOCATION_RATE", 4.0))
+    except (TypeError, ValueError):
+        return 4.0
+    return rate if rate >= 0 else 4.0
+
+
 def _order_row(row: RetailOrderModel) -> dict[str, Any]:
     is_shipped = (row.status or "") in shipped_statuses()
     return {
@@ -529,6 +538,7 @@ class RetailQueryService:
         statuses = shipped_statuses()
         cancelled = cancelled_statuses()
         rate_pct = settlement_rate()
+        hq_pct = hq_allocation_rate()
         tax_rate = retail_tax_rate()
         order_conditions = [
             RetailOrderModel.is_deleted == False,  # noqa: E712
@@ -660,6 +670,7 @@ class RetailQueryService:
             return_total = round(cancelled_amount + refund, 2)
             net = round(shipment - return_total, 2)
             settlement = round(net * rate_pct / 100, 2)
+            hq_allocation = round(settlement * hq_pct / 100, 2)
             rate_base = net if net > 0 else shipment
             items.append(
                 {
@@ -676,6 +687,7 @@ class RetailQueryService:
                     "return_untaxed": round(-return_total, 2),
                     "net_shipment_untaxed": net,
                     "settlement_income_untaxed": settlement,
+                    "hq_allocation_untaxed": hq_allocation,
                     "return_rate": round(return_total / rate_base, 4) if rate_base else 0.0,
                 }
             )
@@ -709,6 +721,9 @@ class RetailQueryService:
                     "return_untaxed": round(-refund, 2),
                     "net_shipment_untaxed": round(-refund, 2),
                     "settlement_income_untaxed": round(-refund * rate_pct / 100, 2),
+                    "hq_allocation_untaxed": round(
+                        -refund * rate_pct / 100 * hq_pct / 100, 2
+                    ),
                     "return_rate": 0.0,
                 }
             )
@@ -717,10 +732,12 @@ class RetailQueryService:
         return_total = round(total_cancelled + total_refund, 2)
         net_total = round(total_shipment - return_total, 2)
         settlement_total = round(net_total * rate_pct / 100, 2)
+        hq_total = round(settlement_total * hq_pct / 100, 2)
         rate_base = net_total if net_total > 0 else total_shipment
         return {
             "tax_rate": tax_rate,
             "settlement_rate": rate_pct,
+            "hq_allocation_rate": hq_pct,
             "shipped_statuses": statuses,
             "cancelled_statuses": cancelled,
             "items": items,
@@ -736,6 +753,7 @@ class RetailQueryService:
                 "return_untaxed": round(-return_total, 2),
                 "net_shipment_untaxed": net_total,
                 "settlement_income_untaxed": settlement_total,
+                "hq_allocation_untaxed": hq_total,
                 "return_rate": round(return_total / rate_base, 4) if rate_base else 0.0,
             },
         }

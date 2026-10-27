@@ -179,6 +179,8 @@ class Settings(BaseSettings):
     RETAIL_CANCELLED_STATUSES: str = "Cancelled"
     # 营销结算收入比例（%）：PLT-13 = 对外出货净额 × 10%
     RETAIL_SETTLEMENT_RATE: float = 10.0
+    # 总部分摊比例（%）：PLT-23 = 营销结算收入(PLT-13) × 4%
+    RETAIL_HQ_ALLOCATION_RATE: float = 4.0
 
     # ================================================= #
     # ********************* 日志配置 ******************* #

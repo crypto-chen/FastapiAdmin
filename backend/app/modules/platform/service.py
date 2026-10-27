@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.retail.model import RetailOrderModel, RetailShopModel
 from app.modules.retail.query_service import (
     RetailQueryService,
+    hq_allocation_rate,
     retail_tax_rate,
     settlement_rate,
 )
@@ -21,7 +22,18 @@ from .fields import PLATFORM_FIELDS
 from .schema import PlatformAnalysisQueryParam
 
 # 需要求和的金额/数量字段（比率字段由分子分母重算）
-SUM_FIELDS = ("PLT-04", "PLT-05", "PLT-06", "PLT-08", "PLT-09", "PLT-10", "PLT-11", "PLT-12", "PLT-13")
+SUM_FIELDS = (
+    "PLT-04",
+    "PLT-05",
+    "PLT-06",
+    "PLT-08",
+    "PLT-09",
+    "PLT-10",
+    "PLT-11",
+    "PLT-12",
+    "PLT-13",
+    "PLT-23",
+)
 NUMERIC_FIELDS = {item["field_code"] for item in PLATFORM_FIELDS if item["data_type"] in {"number", "percent"}}
 
 PLATFORM_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -70,6 +82,9 @@ def _row(
     return_total = round(cancelled + refund, 2)
     return_abs = abs(return_total)
     net = round(shipment + return_total, 2)
+    settlement = round(net * settlement_rate() / 100, 2)
+    # 总部分摊 PLT-23 = 营销结算收入 PLT-13 × 4%（符号与 PLT-13 一致；结算收益里按 -PLT-23 扣减）
+    hq_allocation = round(settlement * hq_allocation_rate() / 100, 2)
     return {
         "id": row_id,
         "is_aggregate": {"detail": 0, "platform": 1, "total": 2}.get(level, 0),
@@ -87,7 +102,8 @@ def _row(
         "PLT-10": round(cancelled, 2),
         "PLT-11": return_total,
         "PLT-12": net,
-        "PLT-13": round(net * settlement_rate() / 100, 2),
+        "PLT-13": settlement,
+        "PLT-23": hq_allocation,
         "PLT-37": _rate(return_abs, net, shipment),
     }
 
@@ -264,6 +280,7 @@ class PlatformAnalysisService:
             "return_untaxed_sum": round(-return_abs, 2),
             "net_shipment_sum": net,
             "settlement_income_sum": round(net * settlement_rate() / 100, 2),
+            "hq_allocation_sum": _sum("PLT-23"),
             "return_rate": _rate(return_abs, net, shipment),
             "top_platforms": sorted(
                 [
@@ -274,6 +291,7 @@ class PlatformAnalysisService:
                         "shipment_untaxed": row["PLT-09"],
                         "net_shipment": row["PLT-12"],
                         "settlement_income": row["PLT-13"],
+                        "hq_allocation": row["PLT-23"],
                         "return_rate": row["PLT-37"],
                     }
                     for row in platform_rows
