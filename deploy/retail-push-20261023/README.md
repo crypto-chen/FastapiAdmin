@@ -117,3 +117,9 @@ python scripts/sync_jushuitan_orders.py --name "聚水潭默认连接" \
 
 后端启动后会自动注册：**每 10 分钟拉最近 30 分钟**，以及 **每天 02:10 拉最近 7 天**。
 只需重启后端，不需要额外配置 Windows 任务计划。
+
+店铺/平台名称每天 **02:05** 自动同步到 `retail_shop`；立即执行：
+
+```bash
+python scripts/sync_jushuitan_shops.py
+```

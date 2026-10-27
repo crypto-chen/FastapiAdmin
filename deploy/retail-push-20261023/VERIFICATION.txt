@@ -14,7 +14,7 @@ Backend lint:
 Migration:
   python scripts/check_retail_migration.py
   Result:
-    UPGRADE OK: 3 tables + 2 open_client columns + indexes
+    UPGRADE OK: 4 tables + 2 open_client columns + indexes
     DOWNGRADE OK: retail tables and open_client columns removed
 
 Frontend:
@@ -47,6 +47,15 @@ Shop query:
   python scripts/list_jushuitan_shops.py --name "聚水潭默认连接" --output shops.csv
   Result: 43 shops exported; fields include shop_id, shop_name, shop_site,
   platform_shop_name, session_status.
+
+Shop master sync:
+  python scripts/sync_jushuitan_shops.py
+  Result: received=43, created=43, updated=0, failed=0
+  retail_shop rows=43; platform values include 淘宝天猫 / 小红书 / 拼多多 / 商家自有商城.
+
+Combined backend tests:
+  python -m pytest tests/test_retail_open_sync.py tests/test_jushuitan.py -q
+  Result: 32 passed in 329.40s
 
 Local push test:
   python deploy/retail-push-20261023/test_sync.py --url http://127.0.0.1:8001/open/v1/retail/orders/sync

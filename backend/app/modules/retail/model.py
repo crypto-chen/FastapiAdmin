@@ -69,6 +69,46 @@ class RetailSyncBatchModel(ModelMixin):
     raw_payload: Mapped[dict | None] = mapped_column(JSON, default=None, nullable=True, comment="原始请求体(超限时省略)")
 
 
+class RetailShopModel(ModelMixin):
+    """零售店铺/平台主数据（聚水潭店铺查询同步）。"""
+
+    __tablename__: str = "retail_shop"
+    __table_args__: tuple = (
+        UniqueConstraint("source", "shop_id", name="uq_retail_shop_source_shop"),
+        Index("ix_retail_shop_site", "shop_site"),
+        {"comment": "零售店铺/平台主数据"},
+    )
+    __data_scope_exempt__: bool = True
+
+    source: Mapped[str] = mapped_column(
+        String(32), default="jushuitan", nullable=False, index=True, comment="来源"
+    )
+    shop_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True, comment="店铺编号")
+    shop_name: Mapped[str | None] = mapped_column(String(128), default=None, nullable=True, comment="聚水潭店铺名称")
+    shop_site: Mapped[str | None] = mapped_column(
+        String(64), default=None, nullable=True, comment="平台/站点"
+    )
+    platform_shop_name: Mapped[str | None] = mapped_column(
+        String(128), default=None, nullable=True, comment="平台店铺名称"
+    )
+    co_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="公司编号")
+    nick: Mapped[str | None] = mapped_column(String(128), default=None, nullable=True, comment="授权账号")
+    session_status: Mapped[int | None] = mapped_column(
+        Integer, default=None, nullable=True, comment="授权状态(0未授权 1已过期 2已授权 3无需授权)"
+    )
+    session_expired: Mapped[str | None] = mapped_column(
+        String(64), default=None, nullable=True, comment="授权过期时间"
+    )
+    group_id: Mapped[int | None] = mapped_column(Integer, default=None, nullable=True, comment="分组ID")
+    group_name: Mapped[str | None] = mapped_column(String(128), default=None, nullable=True, comment="分组名称")
+    shop_url: Mapped[str | None] = mapped_column(String(255), default=None, nullable=True, comment="店铺网址")
+    short_name: Mapped[str | None] = mapped_column(String(128), default=None, nullable=True, comment="店铺简称")
+    synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, nullable=True, comment="最近同步时间"
+    )
+    raw: Mapped[dict | None] = mapped_column(JSON, default=None, nullable=True, comment="原始店铺 JSON")
+
+
 class RetailOrderModel(ModelMixin):
     """零售订单头（外部推送）。"""
 

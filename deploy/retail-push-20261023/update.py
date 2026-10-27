@@ -42,6 +42,7 @@ def run(
     cwd: Path,
     apply: bool,
     env_extra: dict[str, str] | None = None,
+    required: bool = True,
 ) -> None:
     log("$ " + " ".join(str(item) for item in cmd))
     if not apply:
@@ -63,7 +64,10 @@ def run(
     if result.stderr.strip():
         log(result.stderr.strip())
     if result.returncode != 0:
-        raise SystemExit(f"命令失败（退出码 {result.returncode}）：{' '.join(cmd)}")
+        message = f"命令失败（退出码 {result.returncode}）：{' '.join(cmd)}"
+        if required:
+            raise SystemExit(message)
+        log("WARN " + message)
 
 
 def build_frontend(apply: bool, target: str | None) -> None:
@@ -115,6 +119,14 @@ def main() -> None:
     run([sys.executable, "main.py", "upgrade", "--env", args.env], BACKEND, args.apply, backend_env)
     run([sys.executable, "scripts/seed_retail_push_job.py"], BACKEND, args.apply, backend_env)
     run([sys.executable, "scripts/seed_retail_menu.py"], BACKEND, args.apply, backend_env)
+    # 店铺同步依赖已配置的聚水潭凭据；失败不阻断代码更新/重启
+    run(
+        [sys.executable, "scripts/sync_jushuitan_shops.py"],
+        BACKEND,
+        args.apply,
+        backend_env,
+        required=False,
+    )
     run([sys.executable, "scripts/check_retail_migration.py"], BACKEND, args.apply, backend_env)
 
     if args.build_frontend:

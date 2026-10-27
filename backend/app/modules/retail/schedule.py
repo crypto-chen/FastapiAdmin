@@ -1,7 +1,7 @@
 """聚水潭非淘系零售订单定时拉取。
 
 - 每 10 分钟拉取最近 30 分钟（按修改时间），覆盖新增/变更订单；
-- 每天 02:10 拉取最近 7 天，补齐延迟状态变化与漏单；
+- 每天 00:00/07:00/12:00/18:00 拉取最近 7 天，补齐延迟状态变化与漏单；
 - 写入 `retail_order` / `retail_order_item`，页面「开放接口 → 零售订单同步」可见。
 
 聚水潭订单查询接口不返回淘系/拼多多订单；淘系走奇门，拼多多走方舟。
@@ -12,7 +12,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 
@@ -20,13 +19,16 @@ from app.config.setting import settings
 from app.core.ap_scheduler import scheduler
 from app.core.database import async_db_session
 from app.core.logger import logger
+from app.core.schedule_plan import SYNC_SCHEDULE_TIMES, build_daily_trigger
 from app.modules.erp.jushuitan.model import JushuitanConnectionModel
 from app.modules.erp.jushuitan.service import build_client
 
 from .service import RetailSyncService
+from .shop_service import RetailShopService
 
 RETAIL_ORDER_SYNC_JOB_ID = "retail_order_sync:jushuitan:10m"
 RETAIL_ORDER_SYNC_DAILY_JOB_ID = "retail_order_sync:jushuitan:daily"
+RETAIL_SHOP_SYNC_JOB_ID = "retail_shop_sync:jushuitan:daily"
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -97,10 +99,33 @@ async def execute_retail_order_sync_job(
     )
 
 
+async def execute_retail_shop_sync_job() -> None:
+    """同步聚水潭店铺/平台名称到 retail_shop。"""
+    connection = await _load_connection()
+    if connection is None:
+        logger.warning("聚水潭店铺同步跳过：没有启用的聚水潭连接")
+        return
+    async with build_client(connection) as client:
+        shops = [row async for row in client.iter_shops()]
+    if not shops:
+        logger.warning("聚水潭店铺同步：接口没有返回店铺")
+        return
+    async with async_db_session() as db, db.begin():
+        result = await RetailShopService(db).sync_shops(shops, source="jushuitan")
+    logger.info(
+        f"聚水潭店铺同步完成：收到 {result['received']}，新增 {result['created']}，"
+        f"更新 {result['updated']}，失败 {result['failed']}"
+    )
+
+
 def register_retail_order_sync_job() -> None:
     """注册/刷新 10 分钟增量与每日 7 天补偿任务。"""
     interval = max(int(settings.RETAIL_ORDER_SYNC_INTERVAL_MINUTES), 1)
-    for job_id in (RETAIL_ORDER_SYNC_JOB_ID, RETAIL_ORDER_SYNC_DAILY_JOB_ID):
+    for job_id in (
+        RETAIL_ORDER_SYNC_JOB_ID,
+        RETAIL_ORDER_SYNC_DAILY_JOB_ID,
+        RETAIL_SHOP_SYNC_JOB_ID,
+    ):
         try:
             scheduler.remove_job(job_id)
         except Exception:
@@ -119,10 +144,20 @@ def register_retail_order_sync_job() -> None:
     )
     scheduler.add_job(
         func=execute_retail_order_sync_job,
-        trigger=CronTrigger(hour=2, minute=10, timezone="Asia/Shanghai"),
+        trigger=build_daily_trigger(SYNC_SCHEDULE_TIMES),
         args=[7 * 24 * 60, settings.RETAIL_ORDER_SYNC_MAX_ROWS],
         id=RETAIL_ORDER_SYNC_DAILY_JOB_ID,
         name="聚水潭零售订单 7 天补偿",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        func=execute_retail_shop_sync_job,
+        trigger=build_daily_trigger(SYNC_SCHEDULE_TIMES),
+        id=RETAIL_SHOP_SYNC_JOB_ID,
+        name="聚水潭店铺/平台名称同步",
         replace_existing=True,
         coalesce=True,
         max_instances=1,
@@ -136,7 +171,7 @@ async def reconcile_retail_order_sync_jobs() -> None:
         logger.info(
             f"聚水潭零售订单同步任务已注册: {RETAIL_ORDER_SYNC_JOB_ID}"
             f"（每 {settings.RETAIL_ORDER_SYNC_INTERVAL_MINUTES} 分钟）"
-            f"，每日 02:10 补偿最近 7 天"
+            f"，每日 00:00/07:00/12:00/18:00 补偿最近 7 天并同步店铺/平台名称"
         )
     except Exception as exc:  # noqa: BLE001
         logger.error(f"注册聚水潭零售订单同步任务失败: {exc}")

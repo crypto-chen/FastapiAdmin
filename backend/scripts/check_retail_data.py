@@ -20,7 +20,12 @@ from app.config.setting import settings  # noqa: E402
 from app.core.base_model import MappedBase  # noqa: E402
 from app.core.database import async_db_session, async_engine  # noqa: E402
 from app.modules.metadata.model import MetaSyncJobModel  # noqa: E402
-from app.modules.retail.model import RetailOrderItemModel, RetailOrderModel, RetailSyncBatchModel  # noqa: E402
+from app.modules.retail.model import (  # noqa: E402
+    RetailOrderItemModel,
+    RetailOrderModel,
+    RetailShopModel,
+    RetailSyncBatchModel,
+)
 from app.modules.retail.service import DEFAULT_RETAIL_PUSH_JOB_NAME  # noqa: E402
 from app.modules.system.menu.model import MenuModel  # noqa: E402
 from app.modules.system.role.model import RoleMenusModel, RoleModel  # noqa: E402
@@ -35,6 +40,7 @@ async def main() -> None:
         order_count = (await db.execute(select(func.count(RetailOrderModel.id)))).scalar() or 0
         item_count = (await db.execute(select(func.count(RetailOrderItemModel.id)))).scalar() or 0
         batch_count = (await db.execute(select(func.count(RetailSyncBatchModel.id)))).scalar() or 0
+        shop_count = (await db.execute(select(func.count(RetailShopModel.id)))).scalar() or 0
         periods = (
             await db.execute(
                 select(RetailOrderModel.period_value)
@@ -42,7 +48,10 @@ async def main() -> None:
                 .order_by(RetailOrderModel.period_value.desc())
             )
         ).scalars().all()
-        print(f"ORDERS={order_count} ITEMS={item_count} BATCHES={batch_count} PERIODS={list(periods)}")
+        print(
+            f"ORDERS={order_count} ITEMS={item_count} BATCHES={batch_count} "
+            f"SHOPS={shop_count} PERIODS={list(periods)}"
+        )
 
         rows = (
             await db.execute(

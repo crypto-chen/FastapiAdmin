@@ -24,10 +24,16 @@ from app.modules.metadata.model import (
     SourceSystemModel,
 )
 from app.modules.openapi.model import OpenApiLogModel
-from app.modules.retail.model import RetailOrderItemModel, RetailOrderModel, RetailSyncBatchModel
+from app.modules.retail.model import (
+    RetailOrderItemModel,
+    RetailOrderModel,
+    RetailShopModel,
+    RetailSyncBatchModel,
+)
 from app.modules.retail.query_service import RetailQueryService
 from app.modules.retail.schema import RetailBatchQueryParam, RetailOrderQueryParam
 from app.modules.retail.service import DEFAULT_RETAIL_PUSH_JOB_NAME, RetailSyncService
+from app.modules.retail.shop_service import RetailShopService
 
 SAMPLE_PATH = Path(__file__).parent / "data" / "qimen_retail_sample.json"
 
@@ -37,6 +43,7 @@ _TABLES = (
     "retail_sync_batch",
     "retail_order",
     "retail_order_item",
+    "retail_shop",
     "meta_source_system",
     "meta_source_object",
     "meta_sync_job",
@@ -348,6 +355,29 @@ def test_pull_orders_writes_retail_tables(retail_client: TestClient) -> None:
             assert int(count) == 6
 
     asyncio.run(_pull())
+
+
+def test_shop_sync_upserts(retail_client: TestClient) -> None:
+    async def _sync() -> None:
+        async with async_db_session() as db, db.begin():
+            service = RetailShopService(db)
+            first = await service.sync_shops(
+                [{"shop_id": 1001, "shop_name": "测试店", "shop_site": "淘宝天猫", "session_status": 2}]
+            )
+            assert first["created"] == 1
+            second = await service.sync_shops(
+                [{"shop_id": 1001, "shop_name": "测试店-新", "shop_site": "淘宝天猫", "session_status": 2}]
+            )
+            assert second["updated"] == 1
+        async with async_db_session() as db:
+            row = (
+                await db.execute(select(RetailShopModel).where(RetailShopModel.shop_id == 1001))
+            ).scalars().first()
+            assert row is not None
+            assert row.shop_name == "测试店-新"
+            assert row.shop_site == "淘宝天猫"
+
+    asyncio.run(_sync())
 
 
 def test_admin_retail_routes_registered(retail_client: TestClient) -> None:

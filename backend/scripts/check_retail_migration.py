@@ -1,7 +1,7 @@
 """离线校验零售推送迁移（无需连接业务库）。
 
 在临时 SQLite 库上只创建旧版 ``open_client`` 表，然后单独执行
-``2026_10_23_1200_retailpush01`` 的 upgrade/downgrade，确认：
+``retailpush01`` / ``f246...`` / ``retailshop01`` 的 upgrade/downgrade，确认：
 
 - 三张零售表可建可删；
 - ``open_client`` 两个新字段可加可删；
@@ -26,6 +26,7 @@ MIGRATION_DIR = Path(__file__).resolve().parents[1] / "app" / "alembic" / "versi
 MIGRATION_PATHS = (
     MIGRATION_DIR / "2026_10_23_1200_retailpush01.py",
     MIGRATION_DIR / "2026_10_23_1146_f246db8af3ec.py",
+    MIGRATION_DIR / "2026_10_27_1200_retailshop01.py",
 )
 
 OLD_OPEN_CLIENT = """
@@ -67,7 +68,12 @@ def main() -> None:
 
             inspector = inspect(connection)
             tables = set(inspector.get_table_names())
-            expected_tables = {"retail_sync_batch", "retail_order", "retail_order_item"}
+            expected_tables = {
+                "retail_sync_batch",
+                "retail_order",
+                "retail_order_item",
+                "retail_shop",
+            }
             assert expected_tables <= tables, f"缺少表: {expected_tables - tables}"
             open_client_columns = {item["name"] for item in inspector.get_columns("open_client")}
             assert {"allow_retail_sync", "retail_sync_job_id"} <= open_client_columns
@@ -79,7 +85,9 @@ def main() -> None:
             assert "ix_retail_order_period_shop" in order_indexes
             item_indexes = {item["name"] for item in inspector.get_indexes("retail_order_item")}
             assert "ix_retail_order_item_sku" in item_indexes
-            print("UPGRADE OK: 3 tables + 2 open_client columns + indexes")
+            shop_indexes = {item["name"] for item in inspector.get_indexes("retail_shop")}
+            assert "ix_retail_shop_site" in shop_indexes
+            print("UPGRADE OK: 4 tables + 2 open_client columns + indexes")
 
             with Operations.context(context):
                 for migration in reversed(migrations):
