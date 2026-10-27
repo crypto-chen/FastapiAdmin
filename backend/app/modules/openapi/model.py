@@ -49,6 +49,12 @@ class OpenClientModel(ModelMixin, UserMixin):
         nullable=False,
         comment="是否允许推送零售数据(默认不开放)",
     )
+    allow_platform_analysis: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        comment="是否允许读取平台渠道分析指标(默认不开放)",
+    )
     retail_sync_job_id: Mapped[int | None] = mapped_column(
         Integer,
         default=None,

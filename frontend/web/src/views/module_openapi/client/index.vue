@@ -79,6 +79,11 @@
             {{ row.allow_product_line_detail ? "开放" : "未开放" }}
           </template>
         </ElTableColumn>
+        <ElTableColumn label="平台渠道分析" width="120" align="center">
+          <template #default="{ row }">
+            {{ row.allow_platform_analysis ? "开放" : "未开放" }}
+          </template>
+        </ElTableColumn>
         <ElTableColumn label="限流(次/分)" width="110" align="center">
           <template #default="{ row }">{{ row.rate_limit }}</template>
         </ElTableColumn>
@@ -190,6 +195,12 @@
           <ElSwitch v-model="form.allow_product_line_detail" />
           <span class="form-tip">关闭时 /open/v1/product-lines 会被拒绝（403）；开启后才能拉产品线分析明细</span>
         </ElFormItem>
+        <ElFormItem label="平台渠道分析">
+          <ElSwitch v-model="form.allow_platform_analysis" />
+          <span class="form-tip">
+            关闭时 /open/v1/retail/platform/analysis 会被拒绝（403）；开启后才能读取接单/出货/退货/净额/结算收入
+          </span>
+        </ElFormItem>
         <ElFormItem label="订单范围">
           <ElSelect v-model="form.order_scope_trade" clearable placeholder="不限" style="width: 100%">
             <ElOption label="不限" value="" />
@@ -278,6 +289,7 @@ const form = reactive({
   allow_cost_fields: false,
   allow_customer_detail: false,
   allow_product_line_detail: false,
+  allow_platform_analysis: false,
   order_scope_trade: "" as string,
   ip_whitelist: "",
   expire_time: "" as string | null,
@@ -355,6 +367,7 @@ function resetForm() {
     allow_cost_fields: false,
     allow_customer_detail: false,
     allow_product_line_detail: false,
+    allow_platform_analysis: false,
     order_scope_trade: "",
     ip_whitelist: "",
     expire_time: "",
@@ -387,6 +400,7 @@ function openEdit(row: OpenClientItem) {
     allow_cost_fields: row.allow_cost_fields,
     allow_customer_detail: row.allow_customer_detail,
     allow_product_line_detail: row.allow_product_line_detail,
+    allow_platform_analysis: row.allow_platform_analysis,
     order_scope_trade: (row.order_scope as { trade_type?: string } | null)?.trade_type ?? "",
     ip_whitelist: row.ip_whitelist ?? "",
     expire_time: row.expire_time ? row.expire_time.replace(" ", "T").slice(0, 19) : "",
@@ -410,6 +424,7 @@ function buildPayload() {
     allow_cost_fields: form.allow_cost_fields,
     allow_customer_detail: form.allow_customer_detail,
     allow_product_line_detail: form.allow_product_line_detail,
+    allow_platform_analysis: form.allow_platform_analysis,
     order_scope: form.order_scope_trade ? { trade_type: form.order_scope_trade } : null,
     ip_whitelist: form.ip_whitelist || null,
     expire_time: form.expire_time || null,

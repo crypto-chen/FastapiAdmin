@@ -29,6 +29,7 @@ MIGRATION_PATHS = (
     MIGRATION_DIR / "2026_10_23_1146_f246db8af3ec.py",
     MIGRATION_DIR / "2026_10_27_1200_retailshop01.py",
     MIGRATION_DIR / "2026_10_27_1353_b0f396df56ac.py",
+    MIGRATION_DIR / "2026_10_27_1600_retailplatform01.py",
 )
 
 OLD_OPEN_CLIENT = """
@@ -81,6 +82,7 @@ def main() -> None:
             assert expected_tables <= tables, f"缺少表: {expected_tables - tables}"
             open_client_columns = {item["name"] for item in inspector.get_columns("open_client")}
             assert {"allow_retail_sync", "retail_sync_job_id"} <= open_client_columns
+            assert "allow_platform_analysis" in open_client_columns
             allow_column = next(
                 item for item in inspector.get_columns("open_client") if item["name"] == "allow_retail_sync"
             )
@@ -108,6 +110,7 @@ def main() -> None:
             assert not (expected_tables & tables), f"downgrade 后仍存在表: {expected_tables & tables}"
             open_client_columns = {item["name"] for item in inspector.get_columns("open_client")}
             assert not ({"allow_retail_sync", "retail_sync_job_id"} & open_client_columns)
+            assert "allow_platform_analysis" not in open_client_columns
             print("DOWNGRADE OK: retail tables and open_client columns removed")
         engine.dispose()
 

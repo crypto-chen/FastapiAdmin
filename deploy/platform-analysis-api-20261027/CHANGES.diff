@@ -1,0 +1,641 @@
+diff --git a/backend/app/alembic/versions/2026_10_27_1600_retailplatform01.py b/backend/app/alembic/versions/2026_10_27_1600_retailplatform01.py
+new file mode 100644
+index 00000000..f85c01d2
+--- /dev/null
++++ b/backend/app/alembic/versions/2026_10_27_1600_retailplatform01.py
+@@ -0,0 +1,48 @@
++"""开放应用增加「允许读取平台渠道分析指标」开关。
++
++``open_client.allow_platform_analysis``：默认 False（第三方调用
++``/open/v1/retail/platform/analysis`` 返回 403），由管理端「开放接口应用」逐个应用开启。
++
++Revision ID: retailplatform01
++Revises: b0f396df56ac
++Create Date: 2026-10-27 16:00:00
++"""
++
++from collections.abc import Sequence
++
++import sqlalchemy as sa
++from alembic import op
++
++revision: str = "retailplatform01"
++down_revision: str | None = "b0f396df56ac"
++branch_labels: str | Sequence[str] | None = None
++depends_on: str | Sequence[str] | None = None
++
++
++def upgrade() -> None:
++    # 存量行较多，先加可空列 → 回填 0 → 再收紧为 NOT NULL（MySQL 直接加 NOT NULL 无默认值会失败）
++    op.add_column(
++        "open_client",
++        sa.Column(
++            "allow_platform_analysis",
++            sa.Boolean(),
++            nullable=True,
++            comment="是否允许读取平台渠道分析指标(默认不开放)",
++        ),
++    )
++    op.execute(sa.text("UPDATE open_client SET allow_platform_analysis = 0 WHERE allow_platform_analysis IS NULL"))
++    with op.batch_alter_table("open_client", schema=None) as batch_op:
++        # 与 allow_retail_sync 保持一致：不保留 server_default，避免 autogenerate 反复生成差异
++        batch_op.alter_column(
++            "allow_platform_analysis",
++            existing_type=sa.Boolean(),
++            existing_nullable=True,
++            nullable=False,
++            server_default=None,
++            existing_comment="是否允许读取平台渠道分析指标(默认不开放)",
++        )
++
++
++def downgrade() -> None:
++    with op.batch_alter_table("open_client", schema=None) as batch_op:
++        batch_op.drop_column("allow_platform_analysis")
+diff --git a/backend/app/api/open/v1/routers.py b/backend/app/api/open/v1/routers.py
+index 62d752b1..5fd7586d 100644
+--- a/backend/app/api/open/v1/routers.py
++++ b/backend/app/api/open/v1/routers.py
+@@ -10,6 +10,7 @@ from app.modules.openapi.open_controller import OpenAuthRouter, OpenMetricRouter
+ from app.modules.order.open_controller import OpenOrderRouter
+ from app.modules.product.open_controller import OpenProductLineRouter
+ from app.modules.retail.open_controller import OpenRetailRouter
++from app.modules.retail.open_platform_controller import OpenRetailPlatformRouter
+ 
+ open_v1 = APIRouter(prefix="/open/v1")
+ for controller in (
+@@ -20,5 +21,6 @@ for controller in (
+     OpenCustomerRouter,
+     OpenProductLineRouter,
+     OpenRetailRouter,
++    OpenRetailPlatformRouter,
+ ):
+     open_v1.include_router(controller)
+diff --git a/backend/app/modules/openapi/model.py b/backend/app/modules/openapi/model.py
+index bb8d4d3f..901af9ac 100644
+--- a/backend/app/modules/openapi/model.py
++++ b/backend/app/modules/openapi/model.py
+@@ -49,6 +49,12 @@ class OpenClientModel(ModelMixin, UserMixin):
+         nullable=False,
+         comment="是否允许推送零售数据(默认不开放)",
+     )
++    allow_platform_analysis: Mapped[bool] = mapped_column(
++        Boolean,
++        default=False,
++        nullable=False,
++        comment="是否允许读取平台渠道分析指标(默认不开放)",
++    )
+     retail_sync_job_id: Mapped[int | None] = mapped_column(
+         Integer,
+         default=None,
+diff --git a/backend/app/modules/openapi/schema.py b/backend/app/modules/openapi/schema.py
+index cb46feea..f50e6095 100644
+--- a/backend/app/modules/openapi/schema.py
++++ b/backend/app/modules/openapi/schema.py
+@@ -23,6 +23,7 @@ class OpenClientCreateSchema(BaseModel):
+     org_scope: list[str] | None = Field(default=None, description="允许的组织编码，空=全部启用组织")
+     allow_customer_detail: bool = Field(default=False, description="是否允许查询客户分析明细")
+     allow_product_line_detail: bool = Field(default=False, description="是否允许查询产品线分析明细")
++    allow_platform_analysis: bool = Field(default=False, description="是否允许读取平台渠道分析指标")
+     order_scope: dict | None = Field(default=None, description='订单范围，如 {"trade_type": "domestic"}，空=不限')
+     expire_time: datetime | None = Field(default=None, description="凭证到期时间，空=长期有效")
+     contact: str | None = Field(default=None, max_length=128, description="联系人")
+@@ -52,6 +53,7 @@ class OpenClientUpdateSchema(BaseModel):
+     allow_cost_fields: bool | None = Field(default=None, description="是否允许读取成本/毛利类字段")
+     allow_customer_detail: bool | None = Field(default=None, description="是否允许查询客户分析明细")
+     allow_product_line_detail: bool | None = Field(default=None, description="是否允许查询产品线分析明细")
++    allow_platform_analysis: bool | None = Field(default=None, description="是否允许读取平台渠道分析指标")
+     org_scope: list[str] | None = Field(default=None, description="允许的组织编码，空=全部启用组织")
+     order_scope: dict | None = Field(default=None, description='订单范围，如 {"trade_type": "domestic"}，空=不限')
+     expire_time: datetime | None = Field(default=None, description="凭证到期时间，空=长期有效")
+@@ -76,6 +78,7 @@ class OpenClientOutSchema(BaseSchema, UserBySchema):
+     org_scope: list[str] | None = Field(default=None, description="允许的组织编码")
+     allow_customer_detail: bool = Field(default=False, description="是否允许查询客户分析明细")
+     allow_product_line_detail: bool = Field(default=False, description="是否允许查询产品线分析明细")
++    allow_platform_analysis: bool = Field(default=False, description="是否允许读取平台渠道分析指标")
+     order_scope: dict | None = Field(default=None, description="订单范围")
+     expire_time: datetime | None = Field(default=None, description="凭证到期时间")
+     contact: str | None = Field(default=None, description="联系人")
+diff --git a/backend/app/modules/retail/open_platform_controller.py b/backend/app/modules/retail/open_platform_controller.py
+new file mode 100644
+index 00000000..a956523a
+--- /dev/null
++++ b/backend/app/modules/retail/open_platform_controller.py
+@@ -0,0 +1,68 @@
++"""对外开放：平台渠道分析指标读取（PLT-08/09/11/12/13/37）。
++
++鉴权：开放令牌 ``Authorization: Bearer <access_token>``，且应用需开启
++``allow_platform_analysis``；未开启返回 403 / 业务码 40102。
++"""
++
++from datetime import datetime
++from typing import Annotated
++from zoneinfo import ZoneInfo
++
++from fastapi import APIRouter, Depends, Query
++from fastapi.responses import JSONResponse
++from sqlalchemy.ext.asyncio import AsyncSession
++
++from app.common.response import ResponseSchema, SuccessResponse
++from app.core.dependencies import db_getter
++from app.core.exceptions import CustomException
++from app.modules.openapi.dependencies import OpenClientDep
++from app.modules.openapi.route_class import OpenApiLogRoute
++from app.modules.openapi.security import CODE_METRIC_FORBIDDEN
++
++from .query_service import RetailQueryService
++
++OpenRetailPlatformRouter = APIRouter(
++    route_class=OpenApiLogRoute,
++    prefix="/retail/platform",
++    tags=["开放接口-平台渠道分析"],
++)
++
++
++def _ensure_allowed(client) -> None:
++    if not getattr(client, "allow_platform_analysis", False):
++        raise CustomException(
++            msg="当前应用未开通「平台渠道分析指标」读取权限，请联系管理员在「开放接口应用」中开启",
++            code=CODE_METRIC_FORBIDDEN,
++            status_code=403,
++        )
++
++
++@OpenRetailPlatformRouter.get(
++    "/analysis",
++    summary="查询平台渠道分析指标（接单/出货/退货/净额/结算收入）",
++    response_model=ResponseSchema[dict],
++)
++async def platform_analysis(
++    client: OpenClientDep,
++    db: Annotated[AsyncSession, Depends(db_getter)],
++    period_value: Annotated[
++        str | None, Query(max_length=16, description="期间 YYYY-MM，缺省=全部期间")
++    ] = None,
++    shop_id: Annotated[int | None, Query(ge=0, description="店铺编号，缺省=全部店铺")] = None,
++) -> JSONResponse:
++    """按「期间 × 店铺」返回平台渠道分析指标。
++
++    字段口径见 ``docs/平台渠道分析指标开放接口对接说明.md``：
++
++    - ``intake_untaxed`` PLT-08 接单未税；
++    - ``shipment_untaxed`` PLT-09 货物出货未税（订单状态已发货）；
++    - ``return_untaxed`` PLT-11 退货退款（负数，取消单 + 发货后售后）；
++    - ``net_shipment_untaxed`` PLT-12 对外出货净额；
++    - ``settlement_income_untaxed`` PLT-13 营销结算收入（×10%）；
++    - ``return_rate`` PLT-37 退货率（小数，0.2 = 20%）。
++    """
++    _ensure_allowed(client)
++    result = await RetailQueryService(db).analysis_summary(period_value, shop_id)
++    result["app_id"] = client.app_id
++    result["generated_at"] = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
++    return SuccessResponse(data=result, msg="查询平台渠道分析指标成功")
+diff --git a/backend/scripts/check_platform_analysis_access.py b/backend/scripts/check_platform_analysis_access.py
+new file mode 100644
+index 00000000..5c1c4306
+--- /dev/null
++++ b/backend/scripts/check_platform_analysis_access.py
+@@ -0,0 +1,51 @@
++"""打印开放应用及「平台渠道分析」开关状态，便于上线后确认谁已开通。
++
++用法::
++
++    cd backend
++    python scripts/check_platform_analysis_access.py
++"""
++
++import asyncio
++import sys
++from pathlib import Path
++
++from sqlalchemy import select
++
++PROJECT_ROOT = Path(__file__).resolve().parents[1]
++if str(PROJECT_ROOT) not in sys.path:
++    sys.path.insert(0, str(PROJECT_ROOT))
++
++from app.config.setting import settings  # noqa: E402
++from app.core.base_model import MappedBase  # noqa: E402
++from app.core.database import async_db_session, async_engine  # noqa: E402
++from app.modules.openapi.model import OpenClientModel  # noqa: E402
++from app.utils.import_util import ImportUtil  # noqa: E402
++
++ImportUtil.find_models(MappedBase)
++
++
++async def main() -> None:
++    print(f"ENVIRONMENT={settings.ENVIRONMENT} DATABASE={settings.DATABASE_TYPE}/{settings.DATABASE_NAME}")
++    async with async_db_session() as db:
++        rows = (
++            await db.execute(
++                select(OpenClientModel).order_by(OpenClientModel.id.asc())
++            )
++        ).scalars().all()
++        if not rows:
++            print("暂无开放应用（在「系统管理 → 开放接口应用」创建）")
++        allowed = 0
++        for row in rows:
++            flag = "YES" if row.allow_platform_analysis else "NO"
++            allowed += 1 if row.allow_platform_analysis else 0
++            print(
++                f"id={row.id} app_id={row.app_id} name={row.name} "
++                f"status={row.status} 平台渠道分析={flag}"
++            )
++        print(f"合计 {len(rows)} 个应用，其中已开通平台渠道分析 {allowed} 个")
++    await async_engine.dispose()
++
++
++if __name__ == "__main__":
++    asyncio.run(main())
+diff --git a/backend/scripts/check_retail_migration.py b/backend/scripts/check_retail_migration.py
+index ac363e90..f3a8b389 100644
+--- a/backend/scripts/check_retail_migration.py
++++ b/backend/scripts/check_retail_migration.py
+@@ -29,6 +29,7 @@ MIGRATION_PATHS = (
+     MIGRATION_DIR / "2026_10_23_1146_f246db8af3ec.py",
+     MIGRATION_DIR / "2026_10_27_1200_retailshop01.py",
+     MIGRATION_DIR / "2026_10_27_1353_b0f396df56ac.py",
++    MIGRATION_DIR / "2026_10_27_1600_retailplatform01.py",
+ )
+ 
+ OLD_OPEN_CLIENT = """
+@@ -81,6 +82,7 @@ def main() -> None:
+             assert expected_tables <= tables, f"缺少表: {expected_tables - tables}"
+             open_client_columns = {item["name"] for item in inspector.get_columns("open_client")}
+             assert {"allow_retail_sync", "retail_sync_job_id"} <= open_client_columns
++            assert "allow_platform_analysis" in open_client_columns
+             allow_column = next(
+                 item for item in inspector.get_columns("open_client") if item["name"] == "allow_retail_sync"
+             )
+@@ -108,6 +110,7 @@ def main() -> None:
+             assert not (expected_tables & tables), f"downgrade 后仍存在表: {expected_tables & tables}"
+             open_client_columns = {item["name"] for item in inspector.get_columns("open_client")}
+             assert not ({"allow_retail_sync", "retail_sync_job_id"} & open_client_columns)
++            assert "allow_platform_analysis" not in open_client_columns
+             print("DOWNGRADE OK: retail tables and open_client columns removed")
+         engine.dispose()
+ 
+diff --git a/backend/tests/test_retail_open_sync.py b/backend/tests/test_retail_open_sync.py
+index ff439b48..8d3c0a8b 100644
+--- a/backend/tests/test_retail_open_sync.py
++++ b/backend/tests/test_retail_open_sync.py
+@@ -23,7 +23,8 @@ from app.modules.metadata.model import (
+     SourceObjectModel,
+     SourceSystemModel,
+ )
+-from app.modules.openapi.model import OpenApiLogModel
++from app.modules.openapi.model import OpenApiLogModel, OpenClientModel
++from app.modules.openapi.security import hash_app_secret
+ from app.modules.retail.aftersale_service import RetailAfterSaleSyncService
+ from app.modules.retail.model import (
+     RetailAfterSaleItemModel,
+@@ -52,6 +53,7 @@ _TABLES = (
+     "retail_order",
+     "retail_order_item",
+     "retail_shop",
++    "open_client",
+     "retail_after_sale",
+     "retail_after_sale_item",
+     "meta_source_system",
+@@ -582,3 +584,55 @@ def test_analysis_summary_counts_only_shipped_orders(retail_client: TestClient)
+             assert total["return_rate"] == 1.6416
+ 
+     asyncio.run(_run())
++
++
++def test_platform_analysis_requires_client_flag(retail_client: TestClient) -> None:
++    """平台渠道分析接口：应用未开开关返回 403/40102，开启后可读。"""
++    app_id = "pytest_platform_analysis"
++    secret = "platform-secret-123"
++
++    async def _reset(allow: bool) -> None:
++        async with async_db_session() as db, db.begin():
++            await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == app_id))
++            db.add(
++                OpenClientModel(
++                    app_id=app_id,
++                    name="平台渠道分析测试",
++                    secret_hash=await hash_app_secret(secret),
++                    status=0,
++                    token_ttl_seconds=600,
++                    rate_limit=600,
++                    allow_platform_analysis=allow,
++                )
++            )
++
++    async def _enable() -> None:
++        async with async_db_session() as db, db.begin():
++            row = (
++                await db.execute(select(OpenClientModel).where(OpenClientModel.app_id == app_id))
++            ).scalars().first()
++            assert row is not None
++            row.allow_platform_analysis = True
++
++    asyncio.run(_reset(False))
++    token_res = retail_client.post(
++        "/open/v1/auth/token", json={"app_id": app_id, "app_secret": secret}
++    )
++    assert token_res.status_code == 200, token_res.text
++    token = token_res.json()["data"]["access_token"]
++    headers = {"Authorization": f"Bearer {token}"}
++
++    denied = retail_client.get("/open/v1/retail/platform/analysis", headers=headers)
++    assert denied.status_code == 403
++    assert denied.json()["code"] == 40102
++
++    asyncio.run(_enable())
++    allowed = retail_client.get("/open/v1/retail/platform/analysis", headers=headers)
++    assert allowed.status_code == 200, allowed.text
++    data = allowed.json()["data"]
++    assert data["app_id"] == app_id
++    assert {"tax_rate", "settlement_rate", "items", "total"} <= set(data)
++    assert {"intake_untaxed", "shipment_untaxed", "return_untaxed",
++            "net_shipment_untaxed", "settlement_income_untaxed"} <= set(data["total"])
++    # 未带令牌直接 401
++    assert retail_client.get("/open/v1/retail/platform/analysis").status_code == 401
+diff --git "a/docs/\345\271\263\345\217\260\346\270\240\351\201\223\345\210\206\346\236\220\346\214\207\346\240\207\345\274\200\346\224\276\346\216\245\345\217\243\345\257\271\346\216\245\350\257\264\346\230\216.md" "b/docs/\345\271\263\345\217\260\346\270\240\351\201\223\345\210\206\346\236\220\346\214\207\346\240\207\345\274\200\346\224\276\346\216\245\345\217\243\345\257\271\346\216\245\350\257\264\346\230\216.md"
+new file mode 100644
+index 00000000..aec0ee9b
+--- /dev/null
++++ "b/docs/\345\271\263\345\217\260\346\270\240\351\201\223\345\210\206\346\236\220\346\214\207\346\240\207\345\274\200\346\224\276\346\216\245\345\217\243\345\257\271\346\216\245\350\257\264\346\230\216.md"
+@@ -0,0 +1,195 @@
++# 平台渠道分析指标开放接口对接说明
++
++> 面向第三方系统（BI / 报表 / 数据中台）：只读拉取「平台 × 店铺 × 期间」的接单、
++> 出货、退货、净额、结算收入指标。数据由零售订单与售后单实时汇总，不落缓存。
++
++服务地址：`http://120.237.174.243:6479`
++接口前缀：`/open/v1`
++
++## 1. 指标清单
++
++| 编码 | 指标 | 字段 | 口径 |
++| --- | --- | --- | --- |
++| PLT-08 | 接单未税 | `intake_untaxed` | 当期订单买家实付 ÷ 1.13（含后续取消的单） |
++| PLT-09 | 货物出货未税 | `shipment_untaxed` | **订单状态已发货**（`Sent`）的金额 ÷ 1.13 |
++| PLT-11 | 退货退款 | `return_untaxed` | -(取消单金额 + 发货后售后实退) ÷ 1.13，负数 |
++| PLT-12 | 对外出货净额 | `net_shipment_untaxed` | `PLT-09 + PLT-11` |
++| PLT-13 | 营销结算收入 | `settlement_income_untaxed` | `PLT-12 × 10%`（比例可配） |
++| PLT-37 | 退货率 | `return_rate` | `\|PLT-11\| ÷ PLT-12`，小数（0.2 = 20%） |
++
++辅助字段：`order_count`（有效订单数）、`shipped_order_count`（已发货订单数）、
++`cancelled_order_count`（取消单数）、`cancelled_untaxed`（取消未税，负数）、
++`refund_untaxed`（发货后售后未税，负数）。
++
++金额单位：元，保留 2 位小数；税率默认 13%，结算比例默认 10%，由我方配置，调用方不需要再折算。
++
++## 2. 接入准备
++
++由我方在「系统管理 → 开放接口应用」创建应用，提供：
++
++| 项 | 说明 |
++| --- | --- |
++| `app_id` | 应用标识（对外唯一 ID） |
++| `app_secret` | 应用密钥，**只在创建/重置时显示一次** |
++| 平台渠道分析开关 | 必须开启「平台渠道分析」，否则接口返回 403 / `40102` |
++| IP 白名单（可选） | 逗号分隔，支持 `10.0.0.*` 通配；留空不限制 |
++| 限流 | 默认 600 次/分钟，可在应用上调整 |
++
++## 3. 获取访问令牌
++
++```
++POST /open/v1/auth/token
++Content-Type: application/json
++```
++
++```json
++{"app_id": "your_app_id", "app_secret": "your_app_secret"}
++```
++
++响应：
++
++```json
++{
++  "code": 0,
++  "msg": "获取令牌成功",
++  "data": {"access_token": "eyJhbGciOi...", "expires_in": 7200},
++  "success": true
++}
++```
++
++- 令牌有效期默认 7200 秒，过期后重新获取即可；建议缓存并在到期前 5 分钟刷新；
++- 换令牌接口单独限流 30 次/分钟，不要每次业务请求都换；
++- 应用停用或密钥重置后，旧令牌立即失效（401）。
++
++## 4. 查询平台渠道分析指标
++
++```
++GET /open/v1/retail/platform/analysis?period_value=2026-10&shop_id=900001
++Authorization: Bearer <access_token>
++```
++
++| 参数 | 必填 | 说明 |
++| --- | --- | --- |
++| `period_value` | 否 | 期间 `YYYY-MM`；不传返回全部期间 |
++| `shop_id` | 否 | 店铺编号；不传返回全部店铺 |
++
++响应（节选）：
++
++```json
++{
++  "code": 0,
++  "msg": "查询平台渠道分析指标成功",
++  "data": {
++    "app_id": "your_app_id",
++    "tax_rate": 13.0,
++    "settlement_rate": 10.0,
++    "shipped_statuses": ["Sent"],
++    "cancelled_statuses": ["Cancelled"],
++    "generated_at": "2026-10-27T16:20:00+08:00",
++    "items": [
++      {
++        "period_value": "2026-10",
++        "shop_id": 900001,
++        "shop_name": "示例旗舰店",
++        "order_count": 52,
++        "shipped_order_count": 41,
++        "cancelled_order_count": 2,
++        "intake_untaxed": 1042.48,
++        "shipment_untaxed": 300.0,
++        "cancelled_untaxed": -442.48,
++        "refund_untaxed": -50.0,
++        "return_untaxed": -492.48,
++        "net_shipment_untaxed": -192.48,
++        "settlement_income_untaxed": -19.25,
++        "return_rate": 1.6416
++      }
++    ],
++    "total": {
++      "shop_count": 9,
++      "order_count": 52,
++      "shipped_order_count": 41,
++      "cancelled_order_count": 2,
++      "intake_untaxed": 1042.48,
++      "shipment_untaxed": 300.0,
++      "cancelled_untaxed": -442.48,
++      "refund_untaxed": -50.0,
++      "return_untaxed": -492.48,
++      "net_shipment_untaxed": -192.48,
++      "settlement_income_untaxed": -19.25,
++      "return_rate": 1.6416
++    }
++  },
++  "success": true
++}
++```
++
++说明：
++
++- `items` 按「期间 × 店铺」一行，期间倒序；只出现在售后、当期没有订单的店铺也会列出；
++- `total` 是全量汇总，可直接用于总览卡片；
++- 净额为负说明退货（含取消）大于出货，属业务事实，不是接口错误。
++
++## 5. 错误码
++
++| 业务码 | HTTP | 含义 | 处理 |
++| --- | --- | --- | --- |
++| `0` | 200 | 成功 | — |
++| `40100` | 401 | 未带令牌 / 令牌无效或过期 | 重新换令牌 |
++| `40101` | 403 | 应用停用、过期、IP 不在白名单 | 联系我方核对应用配置 |
++| `40102` | 403 | 应用未开通「平台渠道分析」 | 联系我方在开放接口应用中开启 |
++| `40103` | 429 | 超过调用频率 | 降低频率或按 `Retry-After` 重试 |
++| `40104` | 400 | 参数非法（期间格式等） | 修正参数 |
++
++判断成功请看 `code == 0`，不要只看 HTTP 200。
++
++## 6. 调用示例
++
++curl：
++
++```bash
++TOKEN=$(curl -s -X POST "http://120.237.174.243:6479/open/v1/auth/token" \
++  -H "Content-Type: application/json" \
++  -d '{"app_id":"your_app_id","app_secret":"your_app_secret"}' \
++  | python -c "import sys,json;print(json.load(sys.stdin)['data']['access_token'])")
++
++curl -s "http://120.237.174.243:6479/open/v1/retail/platform/analysis?period_value=2026-10" \
++  -H "Authorization: Bearer $TOKEN"
++```
++
++Python：
++
++```python
++import requests
++
++BASE = "http://120.237.174.243:6479"
++APP_ID, APP_SECRET = "your_app_id", "your_app_secret"
++
++token = requests.post(
++    f"{BASE}/open/v1/auth/token",
++    json={"app_id": APP_ID, "app_secret": APP_SECRET},
++    timeout=10,
++).json()["data"]["access_token"]
++
++resp = requests.get(
++    f"{BASE}/open/v1/retail/platform/analysis",
++    params={"period_value": "2026-10"},
++    headers={"Authorization": f"Bearer {token}"},
++    timeout=30,
++).json()
++if resp["code"] != 0:
++    raise RuntimeError(resp)
++rows = resp["data"]["items"]
++```
++
++## 7. 常见问题
++
++1. **403 且 code=40102**：应用没开「平台渠道分析」开关。管理端「开放接口应用 → 编辑」打开即可，令牌不用重换。
++2. **出货金额为 0**：当期没有 `Sent` 状态订单，或订单金额字段为空；先看 `shipped_order_count`。
++3. **退货率大于 100%**：退货（含取消）大于净出货，多见于取消单集中在某店铺；属正常业务口径。
++4. **期间对不上财务报表**：本接口以订单/售后归属期间（`YYYY-MM`）为准，不是平台结算周期。
++5. **调用被限流**：默认 600 次/分钟；批量拉多期间请在应用上提高限流或改为按期间分页取。
++
++## 8. 审计
++
++每次调用都会写入「开放接口调用日志」：应用、路径、参数（脱敏）、业务码、HTTP 状态、
++耗时、调用方 IP，可在管理端「开放接口 → 调用日志」按时间与应用筛选。
+diff --git "a/docs/\346\214\207\346\240\207\346\216\245\345\217\243\346\270\205\345\215\225\344\270\216\350\260\203\347\224\250\346\226\271\346\241\210.md" "b/docs/\346\214\207\346\240\207\346\216\245\345\217\243\346\270\205\345\215\225\344\270\216\350\260\203\347\224\250\346\226\271\346\241\210.md"
+index 340eddfa..ceb338ac 100644
+--- "a/docs/\346\214\207\346\240\207\346\216\245\345\217\243\346\270\205\345\215\225\344\270\216\350\260\203\347\224\250\346\226\271\346\241\210.md"
++++ "b/docs/\346\214\207\346\240\207\346\216\245\345\217\243\346\270\205\345\215\225\344\270\216\350\260\203\347\224\250\346\226\271\346\241\210.md"
+@@ -76,6 +76,7 @@ curl -X POST "https://<后台域名>/open/v1/metrics/query" \
+ | POST | `/open/v1/metrics/query` | 批量取数（主接口，支持合计/明细、长表/宽表） | 是 |
+ | GET | `/open/v1/orgs` | 查询可见组织字典（编码、名称、上级、层级） | 是 |
+ | POST | `/open/v1/metrics/{code}/run` | 触发指标重算（默认未开放，需管理员开启） | 是 |
++| GET | `/open/v1/retail/platform/analysis` | 平台渠道分析指标（PLT-08/09/11/12/13/37，需开启「平台渠道分析」开关） | 是 |
+ 
+ 所有业务接口前缀固定为 `/open/v1`，响应体统一为 `{code, msg, data, success, status_code}`。
+ 
+diff --git a/frontend/web/src/api/module_openapi/index.ts b/frontend/web/src/api/module_openapi/index.ts
+index 763c5dd8..fbbc230a 100644
+--- a/frontend/web/src/api/module_openapi/index.ts
++++ b/frontend/web/src/api/module_openapi/index.ts
+@@ -29,6 +29,7 @@ export interface OpenClientItem {
+   allow_cost_fields: boolean;
+   allow_customer_detail: boolean;
+   allow_product_line_detail: boolean;
++  allow_platform_analysis: boolean;
+   order_scope?: Record<string, unknown> | null;
+   org_scope?: string[] | null;
+   expire_time?: string | null;
+diff --git a/frontend/web/src/views/module_openapi/client/index.vue b/frontend/web/src/views/module_openapi/client/index.vue
+index 67775dd4..971f8919 100644
+--- a/frontend/web/src/views/module_openapi/client/index.vue
++++ b/frontend/web/src/views/module_openapi/client/index.vue
+@@ -79,6 +79,11 @@
+             {{ row.allow_product_line_detail ? "开放" : "未开放" }}
+           </template>
+         </ElTableColumn>
++        <ElTableColumn label="平台渠道分析" width="120" align="center">
++          <template #default="{ row }">
++            {{ row.allow_platform_analysis ? "开放" : "未开放" }}
++          </template>
++        </ElTableColumn>
+         <ElTableColumn label="限流(次/分)" width="110" align="center">
+           <template #default="{ row }">{{ row.rate_limit }}</template>
+         </ElTableColumn>
+@@ -190,6 +195,12 @@
+           <ElSwitch v-model="form.allow_product_line_detail" />
+           <span class="form-tip">关闭时 /open/v1/product-lines 会被拒绝（403）；开启后才能拉产品线分析明细</span>
+         </ElFormItem>
++        <ElFormItem label="平台渠道分析">
++          <ElSwitch v-model="form.allow_platform_analysis" />
++          <span class="form-tip">
++            关闭时 /open/v1/retail/platform/analysis 会被拒绝（403）；开启后才能读取接单/出货/退货/净额/结算收入
++          </span>
++        </ElFormItem>
+         <ElFormItem label="订单范围">
+           <ElSelect v-model="form.order_scope_trade" clearable placeholder="不限" style="width: 100%">
+             <ElOption label="不限" value="" />
+@@ -278,6 +289,7 @@ const form = reactive({
+   allow_cost_fields: false,
+   allow_customer_detail: false,
+   allow_product_line_detail: false,
++  allow_platform_analysis: false,
+   order_scope_trade: "" as string,
+   ip_whitelist: "",
+   expire_time: "" as string | null,
+@@ -355,6 +367,7 @@ function resetForm() {
+     allow_cost_fields: false,
+     allow_customer_detail: false,
+     allow_product_line_detail: false,
++    allow_platform_analysis: false,
+     order_scope_trade: "",
+     ip_whitelist: "",
+     expire_time: "",
+@@ -387,6 +400,7 @@ function openEdit(row: OpenClientItem) {
+     allow_cost_fields: row.allow_cost_fields,
+     allow_customer_detail: row.allow_customer_detail,
+     allow_product_line_detail: row.allow_product_line_detail,
++    allow_platform_analysis: row.allow_platform_analysis,
+     order_scope_trade: (row.order_scope as { trade_type?: string } | null)?.trade_type ?? "",
+     ip_whitelist: row.ip_whitelist ?? "",
+     expire_time: row.expire_time ? row.expire_time.replace(" ", "T").slice(0, 19) : "",
+@@ -410,6 +424,7 @@ function buildPayload() {
+     allow_cost_fields: form.allow_cost_fields,
+     allow_customer_detail: form.allow_customer_detail,
+     allow_product_line_detail: form.allow_product_line_detail,
++    allow_platform_analysis: form.allow_platform_analysis,
+     order_scope: form.order_scope_trade ? { trade_type: form.order_scope_trade } : null,
+     ip_whitelist: form.ip_whitelist || null,
+     expire_time: form.expire_time || null,

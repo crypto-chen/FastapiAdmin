@@ -23,7 +23,8 @@ from app.modules.metadata.model import (
     SourceObjectModel,
     SourceSystemModel,
 )
-from app.modules.openapi.model import OpenApiLogModel
+from app.modules.openapi.model import OpenApiLogModel, OpenClientModel
+from app.modules.openapi.security import hash_app_secret
 from app.modules.retail.aftersale_service import RetailAfterSaleSyncService
 from app.modules.retail.model import (
     RetailAfterSaleItemModel,
@@ -52,6 +53,7 @@ _TABLES = (
     "retail_order",
     "retail_order_item",
     "retail_shop",
+    "open_client",
     "retail_after_sale",
     "retail_after_sale_item",
     "meta_source_system",
@@ -582,3 +584,55 @@ def test_analysis_summary_counts_only_shipped_orders(retail_client: TestClient) 
             assert total["return_rate"] == 1.6416
 
     asyncio.run(_run())
+
+
+def test_platform_analysis_requires_client_flag(retail_client: TestClient) -> None:
+    """平台渠道分析接口：应用未开开关返回 403/40102，开启后可读。"""
+    app_id = "pytest_platform_analysis"
+    secret = "platform-secret-123"
+
+    async def _reset(allow: bool) -> None:
+        async with async_db_session() as db, db.begin():
+            await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == app_id))
+            db.add(
+                OpenClientModel(
+                    app_id=app_id,
+                    name="平台渠道分析测试",
+                    secret_hash=await hash_app_secret(secret),
+                    status=0,
+                    token_ttl_seconds=600,
+                    rate_limit=600,
+                    allow_platform_analysis=allow,
+                )
+            )
+
+    async def _enable() -> None:
+        async with async_db_session() as db, db.begin():
+            row = (
+                await db.execute(select(OpenClientModel).where(OpenClientModel.app_id == app_id))
+            ).scalars().first()
+            assert row is not None
+            row.allow_platform_analysis = True
+
+    asyncio.run(_reset(False))
+    token_res = retail_client.post(
+        "/open/v1/auth/token", json={"app_id": app_id, "app_secret": secret}
+    )
+    assert token_res.status_code == 200, token_res.text
+    token = token_res.json()["data"]["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    denied = retail_client.get("/open/v1/retail/platform/analysis", headers=headers)
+    assert denied.status_code == 403
+    assert denied.json()["code"] == 40102
+
+    asyncio.run(_enable())
+    allowed = retail_client.get("/open/v1/retail/platform/analysis", headers=headers)
+    assert allowed.status_code == 200, allowed.text
+    data = allowed.json()["data"]
+    assert data["app_id"] == app_id
+    assert {"tax_rate", "settlement_rate", "items", "total"} <= set(data)
+    assert {"intake_untaxed", "shipment_untaxed", "return_untaxed",
+            "net_shipment_untaxed", "settlement_income_untaxed"} <= set(data["total"])
+    # 未带令牌直接 401
+    assert retail_client.get("/open/v1/retail/platform/analysis").status_code == 401

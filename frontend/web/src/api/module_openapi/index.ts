@@ -29,6 +29,7 @@ export interface OpenClientItem {
   allow_cost_fields: boolean;
   allow_customer_detail: boolean;
   allow_product_line_detail: boolean;
+  allow_platform_analysis: boolean;
   order_scope?: Record<string, unknown> | null;
   org_scope?: string[] | null;
   expire_time?: string | null;
