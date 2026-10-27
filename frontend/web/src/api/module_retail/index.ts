@@ -236,11 +236,13 @@ export interface RetailAnalysisRow {
   refund_untaxed: number;
   return_untaxed: number;
   net_shipment_untaxed: number;
+  settlement_income_untaxed: number;
   return_rate: number;
 }
 
 export interface RetailAnalysisResult {
   tax_rate: number;
+  settlement_rate: number;
   shipped_statuses: string[];
   cancelled_statuses: string[];
   items: RetailAnalysisRow[];
@@ -255,6 +257,7 @@ export interface RetailAnalysisResult {
     refund_untaxed: number;
     return_untaxed: number;
     net_shipment_untaxed: number;
+    settlement_income_untaxed: number;
     return_rate: number;
   };
 }

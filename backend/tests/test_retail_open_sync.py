@@ -575,6 +575,9 @@ def test_analysis_summary_counts_only_shipped_orders(retail_client: TestClient) 
             assert total["refund_untaxed"] == -50.0
             assert total["return_untaxed"] == -492.48
             assert total["net_shipment_untaxed"] == -192.48
+            # 营销结算收入 PLT-13 = 对外出货净额 × 10%
+            assert data["settlement_rate"] == 10.0
+            assert total["settlement_income_untaxed"] == -19.25
             # 净额为负时以出货额作退货率分母：492.48 ÷ 300
             assert total["return_rate"] == 1.6416
 

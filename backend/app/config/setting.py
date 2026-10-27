@@ -177,6 +177,8 @@ class Settings(BaseSettings):
     RETAIL_SHIPPED_STATUSES: str = "Sent"
     # 「退货退款」中的取消单状态（逗号分隔）；取消单金额全额计入退货退款
     RETAIL_CANCELLED_STATUSES: str = "Cancelled"
+    # 营销结算收入比例（%）：PLT-13 = 对外出货净额 × 10%
+    RETAIL_SETTLEMENT_RATE: float = 10.0
 
     # ================================================= #
     # ********************* 日志配置 ******************* #

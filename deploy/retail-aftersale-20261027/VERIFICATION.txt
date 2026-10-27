@@ -314,3 +314,36 @@
 实际输出：
     > vue-tsc --noEmit   （无错误）
 退出码：0
+
+九、追加：对外出货净额 + 营销结算收入10%
+------------------------------------------------------------
+改动：
+    backend\app\config\setting.py               新增 RETAIL_SETTLEMENT_RATE: float = 10.0
+    backend\app\modules\retail\query_service.py  settlement_rate()；items/total 增加
+                                                settlement_income_untaxed
+    backend\tests\test_retail_open_sync.py       断言 settlement_rate=10、settlement=-19.25
+    frontend\web\src\api\module_retail\index.ts  类型补充
+    frontend\web\src\views\module_retail\order\index.vue  列与汇总增加「营销结算收入」
+    docs\平台店铺分析指标对接方案.md             PLT-12 / PLT-13 改 ✅
+
+1) 单元测试
+命令：
+    cd backend
+    .venv\Scripts\python.exe -m pytest tests/test_retail_open_sync.py -q -k "analysis_summary"
+实际输出（逐字）：
+    .                                                                        [100%]
+    1 passed, 14 deselected in 0.82s
+关键断言：
+    total["net_shipment_untaxed"] == -192.48          # PLT-12
+    data["settlement_rate"] == 10.0
+    total["settlement_income_untaxed"] == -19.25      # -192.48 × 10%
+退出码：0
+
+2) 全量回归（本次改动前一轮）
+    15 passed in 398.01s (0:06:38)
+
+3) 前端
+    pnpm run type-check → > vue-tsc --noEmit（无错误），退出码 0
+
+4) 回滚
+    RETAIL_SETTLEMENT_RATE=0 即把 PLT-13 归零；代码回退即移除字段。无数据库变更。

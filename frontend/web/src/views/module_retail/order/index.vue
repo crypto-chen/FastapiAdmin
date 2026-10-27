@@ -345,7 +345,13 @@
             <span>接单未税 {{ formatMoney(analysis.total.intake_untaxed) }}</span>
             <span class="summary-tax">出货未税 {{ formatMoney(analysis.total.shipment_untaxed) }}</span>
             <span>退货退款未税 {{ formatMoney(analysis.total.return_untaxed) }}</span>
-            <span class="summary-tax">净额 {{ formatMoney(analysis.total.net_shipment_untaxed) }}</span>
+            <span class="summary-tax">
+              对外出货净额 {{ formatMoney(analysis.total.net_shipment_untaxed) }}
+            </span>
+            <span class="summary-tax">
+              营销结算收入{{ analysis.settlement_rate }}%
+              {{ formatMoney(analysis.total.settlement_income_untaxed) }}
+            </span>
             <span>退货率 {{ formatRate(analysis.total.return_rate) }}</span>
           </div>
 
@@ -374,8 +380,11 @@
             <ElTableColumn label="退货退款" width="120" align="right">
               <template #default="{ row }">{{ formatMoney(row.return_untaxed) }}</template>
             </ElTableColumn>
-            <ElTableColumn label="净额" width="120" align="right">
+            <ElTableColumn label="对外出货净额" width="130" align="right">
               <template #default="{ row }">{{ formatMoney(row.net_shipment_untaxed) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="营销结算收入" width="130" align="right">
+              <template #default="{ row }">{{ formatMoney(row.settlement_income_untaxed) }}</template>
             </ElTableColumn>
             <ElTableColumn label="退货率" width="100" align="right">
               <template #default="{ row }">{{ formatRate(row.return_rate) }}</template>
@@ -624,6 +633,7 @@ const afterSaleVisible = ref(false);
 const afterSaleDetail = ref<RetailAfterSaleDetail | null>(null);
 const analysis = ref<RetailAnalysisResult>({
   tax_rate: 13,
+  settlement_rate: 10,
   shipped_statuses: ["Sent"],
   cancelled_statuses: ["Cancelled"],
   items: [],
@@ -638,6 +648,7 @@ const analysis = ref<RetailAnalysisResult>({
     refund_untaxed: 0,
     return_untaxed: 0,
     net_shipment_untaxed: 0,
+    settlement_income_untaxed: 0,
     return_rate: 0,
   },
 });
