@@ -299,6 +299,7 @@ class MetaSyncRunOutSchema(BaseSchema, UserBySchema):
     model_config = ConfigDict(from_attributes=True)
 
     job_id: int = Field(description="任务ID")
+    job_name: str | None = Field(default=None, description="任务名称")
     batch_id: str | None = Field(default=None, description="批次ID")
     status: str = Field(description="状态")
     row_count: int = Field(default=0, description="行数")

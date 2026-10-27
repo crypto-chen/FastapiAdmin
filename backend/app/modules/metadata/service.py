@@ -1,4 +1,5 @@
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.base_schema import AuthSchema, PageResultSchema
@@ -329,9 +330,19 @@ class MetadataService:
         result = await MetaSyncRunCRUD(self.auth, self.db).page(
             offset=(page_no - 1) * page_size, limit=page_size, order_by=[{"id": "desc"}], search=search
         )
+        job_names: dict[int, str] = {}
+        job_ids = {obj.job_id for obj in result.items}
+        if job_ids:
+            name_rows = await self.db.execute(
+                select(MetaSyncJobModel.id, MetaSyncJobModel.name).where(MetaSyncJobModel.id.in_(job_ids))
+            )
+            job_names = {row.id: row.name for row in name_rows}
         return PageResultSchema[MetaSyncRunOutSchema](
             page_no=result.page_no, page_size=result.page_size, total=result.total, has_next=result.has_next,
-            items=[MetaSyncRunOutSchema.model_validate(obj) for obj in result.items],
+            items=[
+                MetaSyncRunOutSchema.model_validate(obj).model_copy(update={"job_name": job_names.get(obj.job_id)})
+                for obj in result.items
+            ],
         )
 
     async def run_sync_job_now(self, id: int) -> None:
