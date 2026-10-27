@@ -122,11 +122,14 @@ def test_platform_service_aggregates(platform_client: TestClient) -> None:
             assert by_platform["京东"]["PLT-12"] == 200.0
             assert by_platform["京东"]["PLT-13"] == 20.0
             assert by_platform["京东"]["PLT-23"] == 0.8  # 20 × 4%
+            # 客单价 = 接单未税 ÷ 有效订单数（剔除取消）
+            assert by_platform["京东"]["PLT-38"] == 200.0  # 200 / 1
             assert by_platform["天猫"]["PLT-08"] == 542.48
             assert by_platform["天猫"]["PLT-09"] == 100.0
             assert by_platform["天猫"]["PLT-11"] == -442.48
             assert by_platform["天猫"]["PLT-12"] == -342.48
             assert by_platform["天猫"]["PLT-23"] == -1.37  # -34.25 × 4%
+            assert by_platform["天猫"]["PLT-38"] == 542.48  # 542.48 / (2-1)
 
             # 店铺明细
             detail = await service.page(
@@ -143,11 +146,13 @@ def test_platform_service_aggregates(platform_client: TestClient) -> None:
             assert summary["intake_untaxed_sum"] == 742.48
             assert summary["net_shipment_sum"] == -142.48
             assert summary["hq_allocation_sum"] == -0.57  # 0.8 + (-1.37)
+            assert summary["avg_order_value"] == 371.24  # 742.48 / (3-1)
             assert summary["top_platforms"][0]["platform"] == "京东"
 
             assert {item["field_code"] for item in await service.fields()} >= {
                 "PLT-08", "PLT-09", "PLT-11", "PLT-12", "PLT-13", "PLT-37",
                 "PLT-23",
+                "PLT-38",
             }
 
     asyncio.run(_check())

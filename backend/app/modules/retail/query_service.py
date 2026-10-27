@@ -671,6 +671,7 @@ class RetailQueryService:
             net = round(shipment - return_total, 2)
             settlement = round(net * rate_pct / 100, 2)
             hq_allocation = round(settlement * hq_pct / 100, 2)
+            valid_orders = max(int(row[3]) - int(row[8]), 0)
             rate_base = net if net > 0 else shipment
             items.append(
                 {
@@ -688,6 +689,7 @@ class RetailQueryService:
                     "net_shipment_untaxed": net,
                     "settlement_income_untaxed": settlement,
                     "hq_allocation_untaxed": hq_allocation,
+                    "avg_order_value": round(intake / valid_orders, 2) if valid_orders else 0.0,
                     "return_rate": round(return_total / rate_base, 4) if rate_base else 0.0,
                 }
             )
@@ -724,6 +726,7 @@ class RetailQueryService:
                     "hq_allocation_untaxed": round(
                         -refund * rate_pct / 100 * hq_pct / 100, 2
                     ),
+                    "avg_order_value": 0.0,
                     "return_rate": 0.0,
                 }
             )
@@ -733,6 +736,7 @@ class RetailQueryService:
         net_total = round(total_shipment - return_total, 2)
         settlement_total = round(net_total * rate_pct / 100, 2)
         hq_total = round(settlement_total * hq_pct / 100, 2)
+        valid_orders_total = max(total_orders - total_cancelled_orders, 0)
         rate_base = net_total if net_total > 0 else total_shipment
         return {
             "tax_rate": tax_rate,
@@ -754,6 +758,9 @@ class RetailQueryService:
                 "net_shipment_untaxed": net_total,
                 "settlement_income_untaxed": settlement_total,
                 "hq_allocation_untaxed": hq_total,
+                "avg_order_value": round(total_intake / valid_orders_total, 2)
+                if valid_orders_total
+                else 0.0,
                 "return_rate": round(return_total / rate_base, 4) if rate_base else 0.0,
             },
         }

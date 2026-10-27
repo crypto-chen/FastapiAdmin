@@ -75,6 +75,7 @@
         <span>结算收入10% {{ formatNumber(summary.settlement_income_sum) }}</span>
         <span>总部分摊4% {{ formatNumber(summary.hq_allocation_sum) }}</span>
         <span>退货率 {{ formatPercent(summary.return_rate) }}</span>
+        <span>客单价 {{ formatNumber(summary.avg_order_value) }}</span>
       </div>
 
       <ElTable

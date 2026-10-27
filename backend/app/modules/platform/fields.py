@@ -176,6 +176,18 @@ PLATFORM_FIELDS: list[dict[str, Any]] = [
         "stored_in": "计算字段",
     },
     {
+        "field_code": "PLT-38",
+        "field_name": "客单价",
+        "data_type": "number",
+        "group": "比率",
+        "sensitive": False,
+        "source": "计算",
+        "note": "PLT-08 接单未税 ÷ 有效订单数（PLT-04 - PLT-06，剔除取消单），元/单",
+        "status": "ready",
+        "status_label": "现用可出",
+        "stored_in": "计算字段",
+    },
+    {
         "field_code": "PLT-37",
         "field_name": "退货率",
         "data_type": "percent",

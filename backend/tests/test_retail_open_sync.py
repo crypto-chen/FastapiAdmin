@@ -586,6 +586,8 @@ def test_analysis_summary_counts_only_shipped_orders(retail_client: TestClient) 
             assert total["settlement_income_untaxed"] == -19.25
             # 总部分摊 PLT-23 = 结算收入 × 4%
             assert total["hq_allocation_untaxed"] == -0.77
+            # 客单价 = 接单未税 ÷ 有效订单数（4 单 - 1 取消）
+            assert total["avg_order_value"] == 347.49  # 1042.48 / 3
             # 净额为负时以出货额作退货率分母：492.48 ÷ 300
             assert total["return_rate"] == 1.6416
 

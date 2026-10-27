@@ -33,6 +33,7 @@ export interface PlatformRow {
   "PLT-13": number;
   "PLT-23": number;
   "PLT-37": number;
+  "PLT-38": number;
   [key: string]: unknown;
 }
 
@@ -49,6 +50,7 @@ export interface PlatformStats {
   net_shipment_sum?: number | null;
   settlement_income_sum?: number | null;
   hq_allocation_sum?: number | null;
+  avg_order_value?: number | null;
   return_rate?: number | null;
   top_platforms?: {
     platform: string;

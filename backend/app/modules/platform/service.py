@@ -85,6 +85,9 @@ def _row(
     settlement = round(net * settlement_rate() / 100, 2)
     # 总部分摊 PLT-23 = 营销结算收入 PLT-13 × 4%（符号与 PLT-13 一致；结算收益里按 -PLT-23 扣减）
     hq_allocation = round(settlement * hq_allocation_rate() / 100, 2)
+    # 客单价 PLT-38 = 接单未税 ÷ 有效订单数（剔除取消单）
+    valid_orders = max(order_count - cancelled_count, 0)
+    avg_order_value = round(intake / valid_orders, 2) if valid_orders else 0.0
     return {
         "id": row_id,
         "is_aggregate": {"detail": 0, "platform": 1, "total": 2}.get(level, 0),
@@ -105,6 +108,7 @@ def _row(
         "PLT-13": settlement,
         "PLT-23": hq_allocation,
         "PLT-37": _rate(return_abs, net, shipment),
+        "PLT-38": avg_order_value,
     }
 
 
@@ -264,7 +268,9 @@ class PlatformAnalysisService:
         def _sum(field: str) -> float:
             return round(sum(float(row.get(field) or 0) for row in detail_rows), 2)
 
+        intake = _sum("PLT-08")
         shipment = _sum("PLT-09")
+        valid_orders = int(_sum("PLT-04")) - int(_sum("PLT-06"))
         # PLT-11 已含取消单（PLT-10），这里只按 PLT-11 取退货合计，避免重复
         return_abs = abs(_sum("PLT-11"))
         net = round(shipment - return_abs, 2)
@@ -275,12 +281,13 @@ class PlatformAnalysisService:
             "order_count": int(_sum("PLT-04")),
             "shipped_order_count": int(_sum("PLT-05")),
             "cancelled_order_count": int(_sum("PLT-06")),
-            "intake_untaxed_sum": _sum("PLT-08"),
+            "intake_untaxed_sum": intake,
             "shipment_untaxed_sum": shipment,
             "return_untaxed_sum": round(-return_abs, 2),
             "net_shipment_sum": net,
             "settlement_income_sum": round(net * settlement_rate() / 100, 2),
             "hq_allocation_sum": _sum("PLT-23"),
+            "avg_order_value": round(intake / valid_orders, 2) if valid_orders > 0 else 0.0,
             "return_rate": _rate(return_abs, net, shipment),
             "top_platforms": sorted(
                 [
