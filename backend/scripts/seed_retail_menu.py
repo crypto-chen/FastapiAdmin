@@ -89,6 +89,7 @@ async def main() -> None:
         for name, permission, order in (
             ("零售订单查询", "module_retail:order:query", 1),
             ("推送批次查询", "module_retail:batch:query", 2),
+            ("零售店铺同步", "module_retail:shop:sync", 3),
         ):
             button = await get_or_create(
                 db,

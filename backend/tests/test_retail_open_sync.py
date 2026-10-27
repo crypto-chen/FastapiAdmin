@@ -383,3 +383,4 @@ def test_shop_sync_upserts(retail_client: TestClient) -> None:
 def test_admin_retail_routes_registered(retail_client: TestClient) -> None:
     for path in ("/retail/orders/page", "/retail/batches/page", "/retail/periods"):
         assert retail_client.get(path).status_code in (401, 403)
+    assert retail_client.post("/retail/shops/sync").status_code in (401, 403)

@@ -1,6 +1,19 @@
 <template>
   <div class="retail-sync-page">
     <ElCard shadow="never">
+      <div class="page-head">
+        <span class="page-title">零售订单同步</span>
+        <ElButton
+          v-hasPerm="'module_retail:shop:sync'"
+          size="small"
+          type="primary"
+          plain
+          :loading="shopSyncing"
+          @click="handleSyncShops"
+        >
+          同步店铺
+        </ElButton>
+      </div>
       <ElTabs v-model="activeTab" @tab-change="handleTabChange">
         <ElTabPane label="零售订单" name="orders">
           <div class="toolbar">
@@ -269,6 +282,7 @@ const activeTab = ref("orders");
 const periods = ref<string[]>([]);
 const orderLoading = ref(false);
 const batchLoading = ref(false);
+const shopSyncing = ref(false);
 const orders = ref<RetailOrderRow[]>([]);
 const batches = ref<RetailBatchRow[]>([]);
 
@@ -391,6 +405,22 @@ async function loadBatches() {
   }
 }
 
+async function handleSyncShops() {
+  shopSyncing.value = true;
+  try {
+    const res = await RetailAPI.syncShops();
+    const data = (res.data?.data ?? {}) as { received?: number; created?: number; updated?: number };
+    ElMessage.success(
+      `店铺同步完成：收到 ${data.received ?? 0}，新增 ${data.created ?? 0}，更新 ${data.updated ?? 0}`,
+    );
+  } catch (error) {
+    ElMessage.error("同步店铺失败，请查看后端日志");
+    console.error(error);
+  } finally {
+    shopSyncing.value = false;
+  }
+}
+
 function queryOrders() {
   orderPage.page_no = 1;
   loadOrders();
@@ -457,6 +487,18 @@ onMounted(async () => {
 .retail-sync-page {
   height: 100%;
   padding: 12px;
+
+  .page-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .page-title {
+    font-size: 16px;
+    font-weight: 600;
+  }
 
   .toolbar {
     display: flex;

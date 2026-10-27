@@ -53,6 +53,10 @@ Shop master sync:
   Result: received=43, created=43, updated=0, failed=0
   retail_shop rows=43; platform values include 淘宝天猫 / 小红书 / 拼多多 / 商家自有商城.
 
+Frontend manual sync:
+  POST /retail/shops/sync (permission module_retail:shop:sync)
+  Result: received=43, created=0, updated=43, failed=0
+
 Combined backend tests:
   python -m pytest tests/test_retail_open_sync.py tests/test_jushuitan.py -q
   Result: 32 passed in 329.40s

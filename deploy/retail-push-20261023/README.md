@@ -123,3 +123,5 @@ python scripts/sync_jushuitan_orders.py --name "聚水潭默认连接" \
 ```bash
 python scripts/sync_jushuitan_shops.py
 ```
+
+也可以在页面「开放接口 → 零售订单同步」点右上角「同步店铺」。

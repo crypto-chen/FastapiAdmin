@@ -24,7 +24,7 @@ from app.modules.erp.jushuitan.model import JushuitanConnectionModel
 from app.modules.erp.jushuitan.service import build_client
 
 from .service import RetailSyncService
-from .shop_service import RetailShopService
+from .shop_service import sync_jushuitan_shops
 
 RETAIL_ORDER_SYNC_JOB_ID = "retail_order_sync:jushuitan:10m"
 RETAIL_ORDER_SYNC_DAILY_JOB_ID = "retail_order_sync:jushuitan:daily"
@@ -101,21 +101,17 @@ async def execute_retail_order_sync_job(
 
 async def execute_retail_shop_sync_job() -> None:
     """同步聚水潭店铺/平台名称到 retail_shop。"""
-    connection = await _load_connection()
-    if connection is None:
-        logger.warning("聚水潭店铺同步跳过：没有启用的聚水潭连接")
-        return
-    async with build_client(connection) as client:
-        shops = [row async for row in client.iter_shops()]
-    if not shops:
-        logger.warning("聚水潭店铺同步：接口没有返回店铺")
-        return
-    async with async_db_session() as db, db.begin():
-        result = await RetailShopService(db).sync_shops(shops, source="jushuitan")
-    logger.info(
-        f"聚水潭店铺同步完成：收到 {result['received']}，新增 {result['created']}，"
-        f"更新 {result['updated']}，失败 {result['failed']}"
-    )
+    try:
+        async with async_db_session() as db, db.begin():
+            result = await sync_jushuitan_shops(
+                db, connection_id=settings.RETAIL_ORDER_SYNC_CONNECTION_ID
+            )
+        logger.info(
+            f"聚水潭店铺同步完成：收到 {result['received']}，新增 {result['created']}，"
+            f"更新 {result['updated']}，失败 {result['failed']}"
+        )
+    except ValueError as exc:
+        logger.warning(f"聚水潭店铺同步跳过：{exc}")
 
 
 def register_retail_order_sync_job() -> None:

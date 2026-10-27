@@ -8,6 +8,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.erp.jushuitan.model import JushuitanConnectionModel
+from app.modules.erp.jushuitan.service import build_client
+
 from .model import RetailShopModel
 
 
@@ -86,3 +89,37 @@ class RetailShopService:
             "failed": failed,
             "errors": errors[:100],
         }
+
+
+async def sync_jushuitan_shops(
+    db: AsyncSession,
+    connection_id: int | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """从聚水潭拉取店铺并写入 retail_shop（供定时任务/管理端按钮共用）。"""
+    if connection_id:
+        connection = await db.get(JushuitanConnectionModel, int(connection_id))
+    elif name:
+        connection = (
+            await db.execute(
+                select(JushuitanConnectionModel).where(JushuitanConnectionModel.name == name)
+            )
+        ).scalars().first()
+    else:
+        connection = (
+            await db.execute(
+                select(JushuitanConnectionModel)
+                .where(JushuitanConnectionModel.status == 0)
+                .order_by(JushuitanConnectionModel.id.asc())
+                .limit(1)
+            )
+        ).scalars().first()
+    if connection is None or connection.status == 1:
+        raise ValueError("没有启用的聚水潭连接")
+
+    async with build_client(connection) as client:
+        shops = [row async for row in client.iter_shops()]
+    result = await RetailShopService(db).sync_shops(shops, source="jushuitan")
+    result["connection_id"] = connection.id
+    result["connection_name"] = connection.name
+    return result

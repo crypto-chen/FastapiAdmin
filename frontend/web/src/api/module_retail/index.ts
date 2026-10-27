@@ -121,6 +121,13 @@ export interface RetailBatchQuery {
 }
 
 export const RetailAPI = {
+  syncShops() {
+    return request<ApiResponse<Record<string, unknown>>>({
+      url: "/retail/shops/sync",
+      method: "post",
+      timeout: 60 * 1000,
+    });
+  },
   periods() {
     return request<ApiResponse<string[]>>({ url: "/retail/periods", method: "get" });
   },
