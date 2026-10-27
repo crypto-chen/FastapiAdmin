@@ -504,6 +504,10 @@ def test_after_sale_stale_modified_skipped(retail_client: TestClient) -> None:
 
 
 def test_after_sale_query_page_and_summary(retail_client: TestClient) -> None:
+    """售后页查询与汇总；单独运行时先补一份样例数据（与推送用例解耦）。"""
+    payload = json.loads(AFTER_SALE_SAMPLE_PATH.read_text(encoding="utf-8"))
+    retail_client.post("/open/v1/retail/aftersales/sync", json=payload)
+
     async def _query() -> None:
         async with async_db_session() as db:
             service = RetailQueryService(db)

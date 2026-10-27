@@ -20,6 +20,7 @@ from app.core.ap_scheduler import scheduler
 from app.core.database import async_db_session
 from app.core.logger import logger
 from app.core.schedule_plan import SYNC_SCHEDULE_TIMES, build_daily_trigger
+from app.modules.erp.jushuitan.client import JushuitanError
 from app.modules.erp.jushuitan.model import JushuitanConnectionModel
 from app.modules.erp.jushuitan.service import build_client
 
@@ -33,6 +34,7 @@ RETAIL_SHOP_SYNC_JOB_ID = "retail_shop_sync:jushuitan:daily"
 RETAIL_AFTERSALE_SYNC_JOB_ID = "retail_aftersale_sync:jushuitan:10m"
 RETAIL_AFTERSALE_SYNC_DAILY_JOB_ID = "retail_aftersale_sync:jushuitan:daily"
 CN_TZ = ZoneInfo("Asia/Shanghai")
+_aftersale_permission_warned = False
 
 
 async def _load_connection() -> JushuitanConnectionModel | None:
@@ -71,17 +73,21 @@ async def execute_retail_order_sync_job(
         return
 
     rows: list[dict] = []
-    async with build_client(connection) as client:
-        async for row in client.iter_orders(
-            begin,
-            end,
-            page_size=100,
-            date_type=0,
-        ):
-            rows.append(row)
-            if len(rows) >= limit:
-                logger.warning(f"聚水潭订单定时同步达到上限 {limit}，本轮提前结束")
-                break
+    try:
+        async with build_client(connection) as client:
+            async for row in client.iter_orders(
+                begin,
+                end,
+                page_size=100,
+                date_type=0,
+            ):
+                rows.append(row)
+                if len(rows) >= limit:
+                    logger.warning(f"聚水潭订单定时同步达到上限 {limit}，本轮提前结束")
+                    break
+    except JushuitanError as exc:
+        logger.warning(f"聚水潭订单定时同步跳过：{exc}（检查开放平台「订单查询」接口权限与凭据）")
+        return
 
     if not rows:
         logger.debug(f"聚水潭订单定时同步：{begin:%H:%M}~{end:%H:%M} 没有订单变化")
@@ -141,6 +147,18 @@ async def execute_retail_aftersale_sync_job(
         )
     except ValueError as exc:
         logger.warning(f"聚水潭售后同步跳过：{exc}")
+    except JushuitanError as exc:
+        # 190=无 API 权限：属于「开放平台还没申请『售后单查询』」，只提示一次避免每 10 分钟刷屏
+        global _aftersale_permission_warned
+        if not _aftersale_permission_warned:
+            _aftersale_permission_warned = True
+            logger.warning(
+                f"聚水潭售后同步跳过：{exc}。"
+                "请在聚水潭开放平台给该应用申请「售后单查询 /open/refund/single/query」接口权限，"
+                "开通后自动生效，不需要改代码；其他同步任务不受影响。"
+            )
+        else:
+            logger.debug(f"聚水潭售后同步跳过（无接口权限，已提示过）：{exc}")
 
 
 def register_retail_order_sync_job() -> None:

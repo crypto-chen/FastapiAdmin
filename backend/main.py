@@ -13,6 +13,20 @@ fastapiadmin_cli: Typer = typer.Typer()
 alembic_cfg: Config = Config(file_="alembic.ini")
 
 
+def _print_banner() -> None:
+    """打印启动横幅。
+
+    Windows 默认 GBK 控制台无法编码 banner 里的制表符方块（▗▄▄▄▖ 等），
+    直接 ``typer.secho`` 会抛 UnicodeEncodeError 导致服务起不来，这里降级为纯 ASCII。
+    """
+    from app.utils.banner import worship
+
+    try:
+        typer.secho(message=f"{worship()}", fg=typer.colors.GREEN)
+    except UnicodeEncodeError:
+        typer.secho(message="FastapiAdmin", fg=typer.colors.GREEN)
+
+
 @fastapiadmin_cli.command(
     name="run",
     help="启动 FastapiAdmin 服务, 运行 python(或uv run) main.py run --env=dev 不加参数默认 dev 环境",
@@ -30,8 +44,7 @@ def run(
     """
     os.environ["ENVIRONMENT"] = env.value
 
-    from app.utils.banner import worship
-    typer.secho(message=f"{worship()}", fg=typer.colors.GREEN)
+    _print_banner()
     from app.config.setting import settings
 
     uvicorn.run(
