@@ -1,7 +1,7 @@
 """每日调度时间表与 Cron 组合工具。
 
 同步任务和指标批次需要在同一天执行多个时点。APScheduler 的单个
-``CronTrigger`` 无法表达“02:00、12:20、18:20”这种分钟不同的组合，因此这里统一
+``CronTrigger`` 无法表达多个时点的组合，因此这里统一
 用分号分隔的多个 Cron 表达式，再组合成 ``OrTrigger``。
 """
 
@@ -18,11 +18,9 @@ from apscheduler.triggers.cron import CronTrigger
 SCHEDULE_TIMEZONE = "Asia/Shanghai"
 SCHEDULE_TZ = ZoneInfo(SCHEDULE_TIMEZONE)
 
-# 同步任务保留各任务原有的凌晨时点，再追加中午/傍晚两个时点。
-SYNC_DAYTIME_TIMES: tuple[tuple[int, int], ...] = ((12, 20), (18, 20))
-
-# 指标批次：保留凌晨 02:30，新增 12:20、18:20。
-METRIC_CALC_TIMES: tuple[tuple[int, int], ...] = ((2, 30), (12, 20), (18, 20))
+# 同步任务与指标批次统一使用四个每日时点。
+SYNC_SCHEDULE_TIMES: tuple[tuple[int, int], ...] = ((0, 0), (7, 0), (12, 0), (18, 0))
+METRIC_CALC_TIMES: tuple[tuple[int, int], ...] = SYNC_SCHEDULE_TIMES
 
 MULTI_CRON_SEPARATOR = ";"
 
@@ -101,18 +99,14 @@ def build_cron_trigger(cron_expr: str) -> BaseTrigger:
     return triggers[0] if len(triggers) == 1 else OrTrigger(triggers)
 
 
-def build_sync_cron(early_hour: int = 2, early_minute: int = 0, year: str = "*") -> str:
-    """生成“凌晨 + 12:20 + 18:20”的同步 Cron 字符串。"""
+def build_sync_cron(year: str = "*") -> str:
+    """生成“00:00 + 07:00 + 12:00 + 18:00”的同步 Cron 字符串。"""
     return MULTI_CRON_SEPARATOR.join(
-        [
-            _format_cron("0", str(early_minute), str(early_hour), year=year),
-            _format_cron("0", "20", "12", year=year),
-            _format_cron("0", "20", "18", year=year),
-        ]
+        _format_cron("0", str(minute), str(hour), year=year) for hour, minute in SYNC_SCHEDULE_TIMES
     )
 
 
-DEFAULT_SYNC_CRON = build_sync_cron(2, 0)
+DEFAULT_SYNC_CRON = build_sync_cron()
 
 
 def _as_int(value: str) -> int | None:
@@ -131,51 +125,26 @@ def _has_time(expr: str, hour: int, minute: int) -> bool:
 
 
 def normalize_sync_cron(cron_expr: str) -> str:
-    """把既有的单次/每周同步 Cron 规范为每日 3 次。
+    """把既有的单次/每周同步 Cron 规范为每日 4 次。
 
-    保留任务原有的凌晨时点（例如 02:00 或 05:00），追加 12:20 和 18:20；原有
-    星期/日期限制会被移除，以满足“每日三次”的要求。
+    统一为 00:00、07:00、12:00、18:00；原有星期/日期限制会被移除。带固定年份
+    的任务（例如零售推送的 2000 年永不触发任务）保持原样。
     """
     raw = (cron_expr or "").strip()
     if not raw:
         return raw
     expressions = _split_expressions(raw)
-    if any(_has_time(expr, 12, 20) for expr in expressions) and any(
-        _has_time(expr, 18, 20) for expr in expressions
-    ):
-        return raw
 
     try:
-        first = expressions[0]
-        second, minute, hour, _day, _month, _dow, year = _normalize_fields(first)
+        _second, _minute, _hour, _day, _month, _dow, year = _normalize_fields(expressions[0])
     except (IndexError, ValueError):
         return raw
+    if year != "*":
+        return raw
 
-    early_hour = _as_int(hour)
-    early_minute = _as_int(minute)
-    if early_hour is None or early_minute is None or (early_hour, early_minute) in SYNC_DAYTIME_TIMES:
-        early_hour, early_minute = 2, 0
-
-    year_field = year if year != "*" else "*"
-    candidates = [
-        _format_cron(second, str(early_minute), str(early_hour), year=year_field),
-        *expressions[1:],
-        _format_cron("0", "20", "12", year=year_field),
-        _format_cron("0", "20", "18", year=year_field),
-    ]
-
-    seen: set[tuple[str, ...]] = set()
-    result: list[str] = []
-    for expr in candidates:
-        try:
-            key = _normalize_fields(expr)
-        except ValueError:
-            key = (expr,)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(expr)
-    return MULTI_CRON_SEPARATOR.join(result)
+    if all(any(_has_time(expr, hour, minute) for expr in expressions) for hour, minute in SYNC_SCHEDULE_TIMES):
+        return raw
+    return build_sync_cron()
 
 
 def cron_has_fire_at(cron_expr: str, when: datetime, tolerance_seconds: int = 90) -> bool:
@@ -190,21 +159,20 @@ def cron_has_fire_at(cron_expr: str, when: datetime, tolerance_seconds: int = 90
     return abs((fire_time - when).total_seconds()) <= tolerance_seconds
 
 
-def is_daytime_run(now: datetime | None = None) -> bool:
-    """当前是否属于中午/傍晚轮次（凌晨轮次返回 False）。"""
+def latest_schedule_slot(now: datetime | None = None) -> datetime:
+    """返回当前应归属的最近一个每日批次时点。"""
     current = now or datetime.now(SCHEDULE_TZ)
     if current.tzinfo is None:
         current = current.replace(tzinfo=SCHEDULE_TZ)
-    return current.hour >= 12
+    candidates = [
+        current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        for hour, minute in SYNC_SCHEDULE_TIMES
+    ]
+    past = [candidate for candidate in candidates if candidate <= current]
+    return max(past) if past else candidates[-1] - timedelta(days=1)
 
 
-def latest_daytime_slot(now: datetime | None = None) -> datetime | None:
-    """返回当前应归属的日间批次时点（12:20 或 18:20）。"""
-    current = now or datetime.now(SCHEDULE_TZ)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=SCHEDULE_TZ)
-    if current.hour < 12 or (current.hour == 12 and current.minute < 20):
-        return None
-    if current.hour < 18 or (current.hour == 18 and current.minute < 20):
-        return current.replace(hour=12, minute=20, second=0, microsecond=0)
-    return current.replace(hour=18, minute=20, second=0, microsecond=0)
+def is_month_settlement_run(now: datetime | None = None) -> bool:
+    """当前是否归属 00:00 轮次（每月 1 日只在该轮次做上月结转）。"""
+    slot = latest_schedule_slot(now)
+    return slot.hour == 0 and slot.minute == 0

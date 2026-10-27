@@ -1,14 +1,14 @@
 """指标计算调度。
 
-**一个批次任务** + 每日三次刷新：凌晨 02:30、中午 12:20、晚上 18:20 按依赖分层
-重算一次**当月**数值，每次计算保留一个 ``calc_version``，可按日期回溯当天的口径。
+**一个批次任务** + 每日四次刷新：00:00、07:00、12:00、18:00 按依赖分层重算一次
+**当月**数值，每次计算保留一个 ``calc_version``，可按日期回溯当天的口径。
 
 分层调度（见 ``batch.py``）保证组成指标先于派生指标完成；派生指标计算前还有一层
 「组成指标当天算过」的新鲜度校验（见 ``engine._ensure_component_values``）兜底
 单指标重算与开放接口触发。
 
-另外在每月 1 日的凌晨轮次补一次**上月结转**：先把上月同步批次强制重拉（上月最后
-一天的批次是当天 02:00 拉的，不含当天白天产生的单据），再重算上月指标。缺少这一步
+另外在每月 1 日的 00:00 轮次补一次**上月结转**：先把上月同步批次强制重拉（上月最后
+一天的批次是当天 00:00 拉的，不含当天白天产生的单据），再重算上月指标。缺少这一步
 时，月指标的月末最后一天数据会永久缺失。
 """
 
@@ -24,8 +24,8 @@ from app.core.schedule_plan import (
     METRIC_CALC_TIMES,
     SCHEDULE_TZ,
     build_daily_trigger,
-    is_daytime_run,
-    latest_daytime_slot,
+    is_month_settlement_run,
+    latest_schedule_slot,
 )
 
 from .batch import load_enabled_metrics, run_metric_batch
@@ -34,7 +34,7 @@ from .engine import previous_period_value
 METRIC_CALC_JOB_PREFIX = "metric_calc:"
 # 批次任务 job id：固定一个，覆盖全部启用指标（旧版为一指标一任务 ``metric_calc:{id}``）
 METRIC_CALC_BATCH_JOB_ID = f"{METRIC_CALC_JOB_PREFIX}batch"
-# 每天 02:30、12:20、18:20 重算（凌晨轮次晚于科目余额表同步的 02:00）
+# 每天 00:00、07:00、12:00、18:00 重算
 METRIC_CALC_SCHEDULE = ", ".join(f"{hour:02d}:{minute:02d}" for hour, minute in METRIC_CALC_TIMES)
 
 
@@ -45,14 +45,13 @@ def _build_trigger() -> BaseTrigger:
 async def execute_metric_calc_job() -> None:
     """调度入口：按依赖分层重算全部启用指标的当前期间；每月 1 日先补算上月。"""
     try:
-        daytime = is_daytime_run()
-        if daytime:
-            await _refresh_daytime_upstream()
+        slot = latest_schedule_slot()
+        await _refresh_round_upstream(slot)
         metrics = await load_enabled_metrics()
         if not metrics:
             logger.warning("没有启用中的指标，跳过定时计算")
             return
-        if datetime.now(SCHEDULE_TZ).day == 1 and not daytime:
+        if datetime.now(SCHEDULE_TZ).day == 1 and is_month_settlement_run():
             await _settle_previous_period(metrics)
         summary = await run_metric_batch(label="当期")
         logger.info(f"指标批次计算完成: {summary}")
@@ -61,16 +60,10 @@ async def execute_metric_calc_job() -> None:
         raise
 
 
-async def _refresh_daytime_upstream() -> None:
-    """日间轮次：先等同步完成，再重建订单/客户宽表，最后计算指标。
-
-    凌晨轮次由各自的 02:00/02:10/02:20 任务完成，这里不重复执行。
-    """
+async def _refresh_round_upstream(slot: datetime) -> None:
+    """每一轮：先等同步完成，再重建订单/客户宽表，最后计算指标。"""
     from app.modules.metadata.sync import wait_for_sync_jobs
 
-    slot = latest_daytime_slot()
-    if slot is None:
-        return
     await wait_for_sync_jobs(slot)
 
     from app.modules.order.schedule import execute_order_build_job
@@ -78,14 +71,14 @@ async def _refresh_daytime_upstream() -> None:
     try:
         await execute_order_build_job()
     except Exception as exc:  # noqa: BLE001 - 上游宽表失败时仍用现有版本算指标
-        logger.exception(f"日间订单全链路构建失败，指标将使用现有宽表：{exc}")
+        logger.exception(f"本轮订单全链路构建失败，指标将使用现有宽表：{exc}")
 
     from app.modules.customer.schedule import execute_customer_build_job
 
     try:
         await execute_customer_build_job()
     except Exception as exc:  # noqa: BLE001 - 上游宽表失败时仍用现有版本算指标
-        logger.exception(f"日间客户分析构建失败，指标将使用现有宽表：{exc}")
+        logger.exception(f"本轮客户分析构建失败，指标将使用现有宽表：{exc}")
 
 
 async def _settle_previous_period(metrics: list[dict]) -> None:
@@ -112,7 +105,7 @@ async def _settle_previous_period(metrics: list[dict]) -> None:
 
 
 def register_metric_calc_job() -> None:
-    """注册/刷新批次计算任务（每天 02:30、12:20、18:20）。"""
+    """注册/刷新批次计算任务（每天 00:00、07:00、12:00、18:00）。"""
     try:
         scheduler.remove_job(METRIC_CALC_BATCH_JOB_ID)
     except Exception:
@@ -125,7 +118,7 @@ def register_metric_calc_job() -> None:
         replace_existing=True,
         coalesce=True,
         max_instances=1,
-        # 服务在 02:30 前未启动或当天重启时，APScheduler 默认 1 秒的 misfire
+        # 服务在计划时点前未启动或当天重启时，APScheduler 默认 1 秒的 misfire
         # 容忍度会把当天的批次直接跳过，指标就会一直停在前一天。这里不设容忍
         # 上限：启动后补跑一次（coalesce 保证只跑一次，max_instances 防叠加）。
         misfire_grace_time=None,

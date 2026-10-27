@@ -71,7 +71,7 @@ METRIC_NAME = "营销中心当期备货生产入库指标"
 # 旧指标（口径已迁出，改由 seed_marketing_stockup_inventory_metric.py 维护）：本脚本不再改写
 LEGACY_METRIC_CODES = ["marketing_stockup_order_instock"]
 SYNC_JOB_NAME = "生产入库单-营销中心当期备货生产入库"
-SYNC_CRON = "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"  # 每天 02:00/12:20/18:20
+SYNC_CRON = "0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?"  # 每天 00:00/07:00/12:00/18:00
 
 # 生产入库单分录字段（FieldKeys 的顺序即接口返回值的顺序）
 SOURCE_FIELDS = [

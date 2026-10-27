@@ -102,8 +102,8 @@ async def main() -> None:
     parser.add_argument("--by-shop", action="store_true", help="是否按店铺拆分结果")
     parser.add_argument(
         "--cron",
-        default="0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?",
-        help="同步 Cron（分号分隔多段，默认每天 02:00/12:20/18:20）",
+        default="0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?",
+        help="同步 Cron（分号分隔多段，默认每天 00:00/07:00/12:00/18:00）",
     )
     args = parser.parse_args()
 

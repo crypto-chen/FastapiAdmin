@@ -233,7 +233,7 @@ def _safe_eval(expression: str, context: dict) -> object:
 
 
 async def reconcile_meta_sync_jobs() -> None:
-    """启动时把启用的同步任务恢复到 APScheduler，并统一为每日三次。"""
+    """启动时把启用的同步任务恢复到 APScheduler，并统一为每日四次。"""
     from sqlalchemy import false, select
 
     changed: list[int] = []
@@ -252,7 +252,7 @@ async def reconcile_meta_sync_jobs() -> None:
                 job.cron_expr = normalized
                 changed.append(int(job.id))
     if changed:
-        logger.info(f"同步任务 Cron 已统一为每日三次（凌晨/12:20/18:20）：{changed}")
+        logger.info(f"同步任务 Cron 已统一为每日四次（00:00/07:00/12:00/18:00）：{changed}")
     for job in jobs:
         try:
             register_meta_sync_job(job)
@@ -263,7 +263,7 @@ async def reconcile_meta_sync_jobs() -> None:
 async def wait_for_sync_jobs(scheduled_at: datetime, timeout_seconds: int = 1800) -> None:
     """等待 ``scheduled_at`` 这一轮应触发的同步任务结束。
 
-    指标批次在 12:20/18:20 与同步任务同时启动。先按各任务 Cron 筛出本轮应执行
+    指标批次在 00:00/07:00/12:00/18:00 与同步任务同时启动。先按各任务 Cron 筛出本轮应执行
     的任务，再轮询 ``meta_sync_run``，避免指标读到当天上午的旧批次。
     """
     from sqlalchemy import false, select

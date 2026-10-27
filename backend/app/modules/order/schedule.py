@@ -1,21 +1,19 @@
 """订单全链路构建调度。
 
-凌晨 **02:10** 构建当期（晚于源同步 02:00，早于指标计算 02:30）；中午 12:20、
-晚上 18:20 由指标轮次在同步完成后调用。**每月 1 日的凌晨轮次**先强制重拉上月
-各来源批次再构建上月，避免上月最后一天的变动丢失。
+每轮指标任务在同步完成后调用本模块，不再单独注册 02:10 任务。**每月 1 日的
+00:00 轮次**先强制重拉上月各来源批次再构建上月，避免上月最后一天的变动丢失。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from app.core.ap_scheduler import scheduler
 from app.core.database import async_db_session
 from app.core.logger import logger
-from app.core.schedule_plan import SCHEDULE_TZ, is_daytime_run
+from app.core.schedule_plan import SCHEDULE_TZ, is_month_settlement_run
 from app.modules.metadata.model import MetaSyncJobModel, SourceObjectModel
 from app.modules.metadata.sync import execute_meta_sync_job
 
@@ -31,8 +29,6 @@ from .build import (
 )
 
 ORDER_BUILD_JOB_ID = "order_build:daily"
-ORDER_BUILD_HOUR = 2
-ORDER_BUILD_MINUTE = 10
 
 # 构建一单全链路要用的来源对象（回补/结转时按这些对象重拉）
 SOURCE_OBJECT_CODES = [
@@ -125,7 +121,7 @@ async def execute_order_build_job() -> None:
     必须把 9 月的订单批次也重拉一次再重建。
     """
     try:
-        if datetime.now(SCHEDULE_TZ).day == 1 and not is_daytime_run():
+        if datetime.now(SCHEDULE_TZ).day == 1 and is_month_settlement_run():
             period = previous_period()
             await refresh_period_sources(period)
             result = await build_one_period(period)
@@ -143,33 +139,17 @@ async def execute_order_build_job() -> None:
 
 
 def register_order_build_job() -> None:
+    """移除旧的独立 02:10 任务；构建由每轮指标任务串行调用。"""
     try:
         scheduler.remove_job(ORDER_BUILD_JOB_ID)
     except Exception:
         pass
-    scheduler.add_job(
-        func=execute_order_build_job,
-        trigger=CronTrigger(
-            second="0",
-            minute=str(ORDER_BUILD_MINUTE),
-            hour=str(ORDER_BUILD_HOUR),
-            timezone="Asia/Shanghai",
-        ),
-        id=ORDER_BUILD_JOB_ID,
-        name="订单全链路构建",
-        replace_existing=True,
-        coalesce=True,
-        max_instances=1,
-    )
 
 
 async def reconcile_order_build_jobs() -> None:
-    """启动时注册订单全链路构建任务。"""
+    """启动时移除独立的订单构建任务（已并入指标轮次）。"""
     try:
         register_order_build_job()
-        logger.info(
-            f"订单全链路构建任务已注册: {ORDER_BUILD_JOB_ID}"
-            f"（每天 {ORDER_BUILD_HOUR:02d}:{ORDER_BUILD_MINUTE:02d}）"
-        )
+        logger.info(f"订单全链路独立任务已移除: {ORDER_BUILD_JOB_ID}（改由指标轮次调用）")
     except Exception as exc:  # noqa: BLE001
-        logger.error(f"注册订单全链路构建任务失败: {exc}")
+        logger.error(f"移除订单全链路独立任务失败: {exc}")

@@ -50,11 +50,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[Any, Any]:
     from app.modules.order.schedule import reconcile_order_build_jobs
 
     await reconcile_order_build_jobs()
-    logger.info("✅ 订单全链路构建任务 初始化完成")
+    logger.info("✅ 订单全链路构建已并入指标轮次")
     from app.modules.customer.schedule import reconcile_customer_build_jobs
 
     await reconcile_customer_build_jobs()
-    logger.info("✅ 客户分析构建任务 初始化完成")
+    logger.info("✅ 客户分析构建已并入指标轮次")
 
     from app.modules.retail.schedule import reconcile_retail_order_sync_jobs
 

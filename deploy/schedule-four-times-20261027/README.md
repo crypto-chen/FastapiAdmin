@@ -1,11 +1,13 @@
-# 同步任务 / 指标批次每日三次排期
+# 同步任务 / 指标批次每日四次排期
 
 ## 变更
 
-- 同步任务：保留各任务原有凌晨时点，追加 `12:20`、`18:20`。
-- 指标批次：`02:30`、`12:20`、`18:20`。
-- 日间指标轮次：先等待同步完成，再重建订单全链路 / 客户分析，最后计算指标。
-- 月结：只在凌晨轮次执行，中午/晚上不重复结转。
+- 同步任务：统一为 `00:00`、`07:00`、`12:00`、`18:00`。
+- 指标批次：`00:00`、`07:00`、`12:00`、`18:00`。
+- 每轮指标：先等待同步完成，再重建订单全链路 / 客户分析，最后计算指标。
+- 独立的订单/客户构建任务已移除，避免与指标轮次重复执行。
+- 月结：只在 `00:00` 轮次执行，其余轮次不重复结转。
+- 聚水潭零售订单的 10 分钟实时同步保持不变；7 天补偿和店铺同步改为四个时点。
 
 ## 服务器执行
 
@@ -14,19 +16,19 @@
 先预演：
 
 ```bash
-python scripts/apply_three_times_schedule.py
+python scripts/apply_schedule_times.py
 ```
 
 确认后写入数据库：
 
 ```bash
-python scripts/apply_three_times_schedule.py --apply
+python scripts/apply_schedule_times.py --apply
 ```
 
 如果后端以 Windows 服务运行，可同时重启：
 
 ```bash
-python scripts/apply_three_times_schedule.py --apply --restart-service fastapiadmin
+python scripts/apply_schedule_times.py --apply --restart-service fastapiadmin
 ```
 
 Linux systemd 同样使用 `--restart-service`，脚本会自动调用 `systemctl restart`。
@@ -34,14 +36,14 @@ Linux systemd 同样使用 `--restart-service`，脚本会自动调用 `systemct
 ## 校验
 
 ```bash
-python scripts/apply_three_times_schedule.py --apply
+python scripts/apply_schedule_times.py --apply
 ```
 
 正常输出应包含：
 
 ```text
-指标批次时间: 02:30, 12:20, 18:20
-数据库校验通过：所有启用且已配置 Cron 的同步任务均为每日三次
+指标批次时间: 00:00, 07:00, 12:00, 18:00
+数据库校验通过：所有启用且已配置 Cron 的同步任务均为每日四次
 ```
 
 ## 回滚

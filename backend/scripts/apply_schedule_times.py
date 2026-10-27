@@ -1,11 +1,11 @@
-"""把同步任务排期统一为每日三次，并校验指标批次时间。
+"""把同步任务排期统一为每日四次，并校验指标批次时间。
 
 默认只预演，不写数据库；服务器上确认后加 ``--apply``。
 
 用法（在 backend/ 目录、已激活的 conda 环境内）:
-    python scripts/apply_three_times_schedule.py
-    python scripts/apply_three_times_schedule.py --apply
-    python scripts/apply_three_times_schedule.py --apply --restart-service fastapiadmin
+    python scripts/apply_schedule_times.py
+    python scripts/apply_schedule_times.py --apply
+    python scripts/apply_schedule_times.py --apply --restart-service fastapiadmin
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from app.utils.import_util import ImportUtil  # noqa: E402
 
 ImportUtil.find_models(MappedBase)
 
-SYNC_JOB_IDS = ("metric_calc:batch", "order_build:daily", "customer_build:daily")
+SYNC_JOB_IDS = ("metric_calc:batch",)
 
 
 def _format_metric_times() -> str:
@@ -47,10 +47,10 @@ def _format_metric_times() -> str:
 
 
 def _assert_metric_schedule() -> None:
-    expected = ((2, 30), (12, 20), (18, 20))
+    expected = ((0, 0), (7, 0), (12, 0), (18, 0))
     if tuple(METRIC_CALC_TIMES) != expected:
         raise RuntimeError(
-            f"指标批次时间不是预期的 02:30/12:20/18:20，当前为 {_format_metric_times()}"
+            f"指标批次时间不是预期的 00:00/07:00/12:00/18:00，当前为 {_format_metric_times()}"
         )
 
 
@@ -104,11 +104,11 @@ async def _verify_db_schedule() -> bool:
         if normalized != job.cron_expr:
             bad.append((int(job.id), job.cron_expr))
     if bad:
-        print(f"数据库校验失败：{len(bad)} 个任务仍未统一为每日三次")
+        print(f"数据库校验失败：{len(bad)} 个任务仍未统一为每日四次")
         for job_id, cron_expr in bad:
             print(f"  job {job_id}: {cron_expr}")
         return False
-    print("数据库校验通过：所有启用且已配置 Cron 的同步任务均为每日三次")
+    print("数据库校验通过：所有启用且已配置 Cron 的同步任务均为每日四次")
     return True
 
 
@@ -167,7 +167,7 @@ def _restart_service(service: str) -> None:
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="统一同步任务为每日三次，并校验指标批次时间")
+    parser = argparse.ArgumentParser(description="统一同步任务为每日四次，并校验指标批次时间")
     parser.add_argument("--apply", action="store_true", help="写入数据库；缺省只预演")
     parser.add_argument("--restart-service", default="", help="写入后重启的服务名（Windows 服务/systemd）")
     args = parser.parse_args()

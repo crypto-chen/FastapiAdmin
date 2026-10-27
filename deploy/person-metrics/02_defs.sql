@@ -84,69 +84,69 @@ VALUES ('5dacfe87-476e-452a-b087-8719815a9ae0', (SELECT id FROM meta_source_syst
 ON DUPLICATE KEY UPDATE name = VALUES(name), query_type = VALUES(query_type),
   request_template = VALUES(request_template), status = VALUES(status);
 
--- 4) 同步任务（cron 与 seed 脚本一致：每天 02:00、12:20、18:20）
+-- 4) 同步任务（cron 与 seed 脚本一致：每天 00:00、07:00、12:00、18:00）
 
--- 同步任务 CRM业务员指标-CRM 订单明细（内贸）（cron 0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?）
+-- 同步任务 CRM业务员指标-CRM 订单明细（内贸）（cron 0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?）
 INSERT INTO meta_sync_job
   (uuid, name, source_system_id, source_object_id, standard_entity_id, org_code, cron_expr,
    request_params, variables, sync_mode, watermark_field, status, description, is_deleted, created_time, updated_time)
-SELECT '0b242e65-199d-48ef-9e30-49c5a72b60fa', 'CRM业务员指标-CRM 订单明细（内贸）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/order/orderAnalyze?type=1' LIMIT 1), NULL, NULL, '0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/order/orderAnalyze?type=1，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
+SELECT '0b242e65-199d-48ef-9e30-49c5a72b60fa', 'CRM业务员指标-CRM 订单明细（内贸）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/order/orderAnalyze?type=1' LIMIT 1), NULL, NULL, '0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/order/orderAnalyze?type=1，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 订单明细（内贸）');
 
--- 同步任务 CRM业务员指标-CRM 订单明细（外贸）（cron 0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?）
+-- 同步任务 CRM业务员指标-CRM 订单明细（外贸）（cron 0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?）
 INSERT INTO meta_sync_job
   (uuid, name, source_system_id, source_object_id, standard_entity_id, org_code, cron_expr,
    request_params, variables, sync_mode, watermark_field, status, description, is_deleted, created_time, updated_time)
-SELECT 'b7a52302-915b-402e-90ef-539504d4fbd3', 'CRM业务员指标-CRM 订单明细（外贸）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/order/orderAnalyze?type=2' LIMIT 1), NULL, NULL, '0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/order/orderAnalyze?type=2，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
+SELECT 'b7a52302-915b-402e-90ef-539504d4fbd3', 'CRM业务员指标-CRM 订单明细（外贸）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/order/orderAnalyze?type=2' LIMIT 1), NULL, NULL, '0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/order/orderAnalyze?type=2，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 订单明细（外贸）');
 
--- 同步任务 CRM业务员指标-CRM 发货明细（内贸）（cron 0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?）
+-- 同步任务 CRM业务员指标-CRM 发货明细（内贸）（cron 0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?）
 INSERT INTO meta_sync_job
   (uuid, name, source_system_id, source_object_id, standard_entity_id, org_code, cron_expr,
    request_params, variables, sync_mode, watermark_field, status, description, is_deleted, created_time, updated_time)
-SELECT '354a850c-4247-4fb0-8606-d77ba56c32e7', 'CRM业务员指标-CRM 发货明细（内贸）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/order/orderShipments?type=1' LIMIT 1), NULL, NULL, '0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/order/orderShipments?type=1，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
+SELECT '354a850c-4247-4fb0-8606-d77ba56c32e7', 'CRM业务员指标-CRM 发货明细（内贸）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/order/orderShipments?type=1' LIMIT 1), NULL, NULL, '0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/order/orderShipments?type=1，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 发货明细（内贸）');
 
--- 同步任务 CRM业务员指标-CRM 发货明细（外贸）（cron 0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?）
+-- 同步任务 CRM业务员指标-CRM 发货明细（外贸）（cron 0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?）
 INSERT INTO meta_sync_job
   (uuid, name, source_system_id, source_object_id, standard_entity_id, org_code, cron_expr,
    request_params, variables, sync_mode, watermark_field, status, description, is_deleted, created_time, updated_time)
-SELECT 'e53f9812-207d-4c6e-a3ef-042d7acc0a34', 'CRM业务员指标-CRM 发货明细（外贸）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/order/orderShipments?type=2' LIMIT 1), NULL, NULL, '0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/order/orderShipments?type=2，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
+SELECT 'e53f9812-207d-4c6e-a3ef-042d7acc0a34', 'CRM业务员指标-CRM 发货明细（外贸）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/order/orderShipments?type=2' LIMIT 1), NULL, NULL, '0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/order/orderShipments?type=2，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 发货明细（外贸）');
 
--- 同步任务 CRM业务员指标-CRM 客户列表（业务员客户数）（cron 0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?）
+-- 同步任务 CRM业务员指标-CRM 客户列表（业务员客户数）（cron 0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?）
 INSERT INTO meta_sync_job
   (uuid, name, source_system_id, source_object_id, standard_entity_id, org_code, cron_expr,
    request_params, variables, sync_mode, watermark_field, status, description, is_deleted, created_time, updated_time)
-SELECT '1832017a-fb48-47bd-9fab-a16bd6d5af04', 'CRM业务员指标-CRM 客户列表（业务员客户数）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/customer/getCusotmerList' LIMIT 1), NULL, NULL, '0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?', '{}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/customer/getCusotmerList，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
+SELECT '1832017a-fb48-47bd-9fab-a16bd6d5af04', 'CRM业务员指标-CRM 客户列表（业务员客户数）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/customer/getCusotmerList' LIMIT 1), NULL, NULL, '0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?', '{}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/customer/getCusotmerList，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 客户列表（业务员客户数）');
 
--- 同步任务 CRM业务员指标-CRM 报价单明细（业务员报价）（cron 0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?）
+-- 同步任务 CRM业务员指标-CRM 报价单明细（业务员报价）（cron 0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?）
 INSERT INTO meta_sync_job
   (uuid, name, source_system_id, source_object_id, standard_entity_id, org_code, cron_expr,
    request_params, variables, sync_mode, watermark_field, status, description, is_deleted, created_time, updated_time)
-SELECT '682fb51e-107d-46cf-8b6d-c3a098ab3f5e', 'CRM业务员指标-CRM 报价单明细（业务员报价）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/quote/getQuoteList' LIMIT 1), NULL, NULL, '0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/quote/getQuoteList，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
+SELECT '682fb51e-107d-46cf-8b6d-c3a098ab3f5e', 'CRM业务员指标-CRM 报价单明细（业务员报价）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/quote/getQuoteList' LIMIT 1), NULL, NULL, '0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?', '{"month":"{{ now.strftime(''%Y-%m'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/quote/getQuoteList，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 报价单明细（业务员报价）');
 
--- 同步任务 CRM业务员指标-CRM 退款订单明细（业务员退货退款）（cron 0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?）
+-- 同步任务 CRM业务员指标-CRM 退款订单明细（业务员退货退款）（cron 0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?）
 INSERT INTO meta_sync_job
   (uuid, name, source_system_id, source_object_id, standard_entity_id, org_code, cron_expr,
    request_params, variables, sync_mode, watermark_field, status, description, is_deleted, created_time, updated_time)
-SELECT '7f2e14e1-d17b-4ab6-bc7d-67f419441710', 'CRM业务员指标-CRM 退款订单明细（业务员退货退款）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/getReturnOrderDetail' LIMIT 1), NULL, NULL, '0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?', '{"dateRange":["{{ now.replace(day=1).strftime(''%Y-%m-%d'') }}","{{ ((now.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).strftime(''%Y-%m-%d'') }}"]}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/getReturnOrderDetail，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
+SELECT '7f2e14e1-d17b-4ab6-bc7d-67f419441710', 'CRM业务员指标-CRM 退款订单明细（业务员退货退款）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/getReturnOrderDetail' LIMIT 1), NULL, NULL, '0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?', '{"dateRange":["{{ now.replace(day=1).strftime(''%Y-%m-%d'') }}","{{ ((now.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).strftime(''%Y-%m-%d'') }}"]}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/getReturnOrderDetail，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 退款订单明细（业务员退货退款）');
 
--- 同步任务 CRM业务员指标-CRM 线索列表（业务员线索）（cron 0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?）
+-- 同步任务 CRM业务员指标-CRM 线索列表（业务员线索）（cron 0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?）
 INSERT INTO meta_sync_job
   (uuid, name, source_system_id, source_object_id, standard_entity_id, org_code, cron_expr,
    request_params, variables, sync_mode, watermark_field, status, description, is_deleted, created_time, updated_time)
-SELECT '37532feb-9930-460d-b415-edc1e99b756e', 'CRM业务员指标-CRM 线索列表（业务员线索）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/clue/getClueList' LIMIT 1), NULL, NULL, '0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?', '{"endTime":"{{ now.strftime(''%Y-%m-%d %H:%M:%S'') }}","startTime":"{{ (now - timedelta(days=30)).strftime(''%Y-%m-%d %H:%M:%S'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/clue/getClueList，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
+SELECT '37532feb-9930-460d-b415-edc1e99b756e', 'CRM业务员指标-CRM 线索列表（业务员线索）', (SELECT id FROM meta_source_system WHERE code = 'crm' LIMIT 1), (SELECT o.id FROM meta_source_object o WHERE o.code = '/hs/clue/getClueList' LIMIT 1), NULL, NULL, '0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?', '{"endTime":"{{ now.strftime(''%Y-%m-%d %H:%M:%S'') }}","startTime":"{{ (now - timedelta(days=30)).strftime(''%Y-%m-%d %H:%M:%S'') }}"}', NULL, 'full', NULL, 0, 'CRM 接口 /hs/clue/getClueList，按 month 取整月明细（未分页，单月约 1.3k 行）', 0, NOW(), NOW()
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM meta_sync_job WHERE name = 'CRM业务员指标-CRM 线索列表（业务员线索）');
 

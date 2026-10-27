@@ -32,9 +32,9 @@ ImportUtil.find_models(MappedBase)
 SYSTEM_CODE = "retail_push"
 OBJECT_CODE = "/retail/orders/sync"
 JOB_NAME = "零售数据-外部推送"
-# 带 12:20/18:20 是为了绕过 normalize_sync_cron 的“每日三次”改写；
-# 年份固定 2000，确保触发器永远不会再次执行（任务只承接推送回放）。
-NEVER_CRON = "0 0 2 * * ? 2000;0 20 12 * * ? 2000;0 20 18 * * ? 2000"
+# 年份固定 2000：normalize_sync_cron 会跳过带年份的任务，且触发器永远不会执行
+# （该任务只承接推送回放，不主动取数）。
+NEVER_CRON = "0 0 0 * * ? 2000"
 
 
 async def main() -> None:

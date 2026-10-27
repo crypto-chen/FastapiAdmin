@@ -77,7 +77,7 @@ ImportUtil.find_models(MappedBase)
 # 与 seed_crm_marketing_metrics.py 共用同一个 CRM 连接与来源系统
 CONNECTION_NAME = "CRM 默认连接"
 SOURCE_SYSTEM_CODE = "crm"
-SYNC_CRON = "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"  # 每天 02:00/12:20/18:20
+SYNC_CRON = "0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?"  # 每天 00:00/07:00/12:00/18:00
 
 # 整月日期范围模板：{{ }} 由元数据同步任务渲染，now = 取数时点（回补时为该期间 1 日）
 MONTH_DATE_RANGE: dict = {
@@ -268,7 +268,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="初始化营销中心 CRM 出货/设计服务/退款指标")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="CRM 接口域名")
     parser.add_argument("--connection-name", default=CONNECTION_NAME, help="连接名称")
-    parser.add_argument("--cron", default=SYNC_CRON, help="同步 Cron（分号分隔多段，默认每天 02:00/12:20/18:20）")
+    parser.add_argument("--cron", default=SYNC_CRON, help="同步 Cron（分号分隔多段，默认每天 00:00/07:00/12:00/18:00）")
     args = parser.parse_args()
 
     job_ids: list[int] = []

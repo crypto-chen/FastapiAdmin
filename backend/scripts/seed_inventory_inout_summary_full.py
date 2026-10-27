@@ -80,7 +80,7 @@ STANDARD_ENTITY_CODE = "inventory_inout_summary_full"
 STANDARD_ENTITY_NAME = "存货收发存汇总表（全仓·全物料）"
 STANDARD_TABLE_NAME = "dwd_inventory_inout_summary_full"
 SYNC_JOB_NAME = "存货收发存汇总表-组织100（全仓全物料）"
-SYNC_CRON = "0 0 5 * * ?;0 20 12 * * ?;0 20 18 * * ?"  # 每天 05:00/12:20/18:20
+SYNC_CRON = "0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?"  # 每天 00:00/07:00/12:00/18:00
 
 ORG_CODE = "100"
 ACCT_SYSTEM_CODE = "KJHSTX01_SYS"

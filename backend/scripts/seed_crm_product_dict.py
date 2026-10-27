@@ -41,7 +41,7 @@ from app.utils.import_util import ImportUtil  # noqa: E402
 ImportUtil.find_models(MappedBase)
 
 SOURCE_SYSTEM_CODE = "crm"
-DICT_CRON = "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"
+DICT_CRON = "0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?"
 
 OBJECTS = [
     {"code": "/hs/product/getProductCategory", "name": "CRM 产品系列字典"},

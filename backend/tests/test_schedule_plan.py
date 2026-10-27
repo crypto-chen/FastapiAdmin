@@ -7,7 +7,8 @@ from app.core.schedule_plan import (
     build_cron_trigger,
     build_daily_trigger,
     cron_has_fire_at,
-    latest_daytime_slot,
+    is_month_settlement_run,
+    latest_schedule_slot,
     normalize_sync_cron,
 )
 
@@ -25,39 +26,50 @@ def _next_times(trigger, start: datetime, count: int) -> list[str]:
     return times
 
 
-def test_sync_cron_keeps_early_run_and_adds_daytime() -> None:
+def test_sync_cron_is_four_times_daily() -> None:
+    assert DEFAULT_SYNC_CRON == "0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?"
     assert normalize_sync_cron("0 0 2 * * ?") == DEFAULT_SYNC_CRON
-    assert normalize_sync_cron("0 0 5 * * ?") == "0 0 5 * * ?;0 20 12 * * ?;0 20 18 * * ?"
+    assert normalize_sync_cron("0 0 5 * * ?") == DEFAULT_SYNC_CRON
     assert normalize_sync_cron(DEFAULT_SYNC_CRON) == DEFAULT_SYNC_CRON
 
 
-def test_weekly_cron_becomes_daily_three_times() -> None:
-    normalized = normalize_sync_cron("0 0 2 ? * MON")
-    assert normalized == "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"
+def test_weekly_cron_becomes_daily_four_times() -> None:
+    assert normalize_sync_cron("0 0 2 ? * MON") == DEFAULT_SYNC_CRON
 
 
-def test_multi_cron_fires_three_times_per_day() -> None:
+def test_year_specific_never_cron_is_preserved() -> None:
+    never = "0 0 0 * * ? 2000"
+    assert normalize_sync_cron(never) == never
+
+
+def test_multi_cron_fires_four_times_per_day() -> None:
     trigger = build_cron_trigger(DEFAULT_SYNC_CRON)
     start = datetime(2026, 10, 23, 0, 0, tzinfo=SCHEDULE_TZ)
-    assert _next_times(trigger, start, 3) == ["02:00", "12:20", "18:20"]
+    assert _next_times(trigger, start, 4) == ["00:00", "07:00", "12:00", "18:00"]
 
 
-def test_metric_trigger_fires_three_times_per_day() -> None:
+def test_metric_trigger_fires_four_times_per_day() -> None:
     trigger = build_daily_trigger(METRIC_CALC_TIMES)
     start = datetime(2026, 10, 23, 0, 0, tzinfo=SCHEDULE_TZ)
-    assert _next_times(trigger, start, 3) == ["02:30", "12:20", "18:20"]
+    assert _next_times(trigger, start, 4) == ["00:00", "07:00", "12:00", "18:00"]
 
 
-def test_cron_has_fire_at_matches_daytime_slot() -> None:
-    noon = datetime(2026, 10, 23, 12, 20, tzinfo=SCHEDULE_TZ)
-    evening = datetime(2026, 10, 23, 18, 20, tzinfo=SCHEDULE_TZ)
-    assert cron_has_fire_at(DEFAULT_SYNC_CRON, noon)
-    assert cron_has_fire_at(DEFAULT_SYNC_CRON, evening)
+def test_cron_has_fire_at_matches_each_slot() -> None:
+    for hour, minute in METRIC_CALC_TIMES:
+        when = datetime(2026, 10, 23, hour, minute, tzinfo=SCHEDULE_TZ)
+        assert cron_has_fire_at(DEFAULT_SYNC_CRON, when)
 
 
-def test_latest_daytime_slot() -> None:
-    assert latest_daytime_slot(datetime(2026, 10, 23, 11, 0, tzinfo=SCHEDULE_TZ)) is None
-    noon = latest_daytime_slot(datetime(2026, 10, 23, 15, 0, tzinfo=SCHEDULE_TZ))
-    assert noon is not None and noon.strftime("%H:%M") == "12:20"
-    evening = latest_daytime_slot(datetime(2026, 10, 23, 19, 0, tzinfo=SCHEDULE_TZ))
-    assert evening is not None and evening.strftime("%H:%M") == "18:20"
+def test_latest_schedule_slot() -> None:
+    assert latest_schedule_slot(datetime(2026, 10, 23, 0, 10, tzinfo=SCHEDULE_TZ)).strftime("%H:%M") == "00:00"
+    assert latest_schedule_slot(datetime(2026, 10, 23, 6, 59, tzinfo=SCHEDULE_TZ)).strftime("%H:%M") == "00:00"
+    assert latest_schedule_slot(datetime(2026, 10, 23, 9, 0, tzinfo=SCHEDULE_TZ)).strftime("%H:%M") == "07:00"
+    assert latest_schedule_slot(datetime(2026, 10, 23, 12, 30, tzinfo=SCHEDULE_TZ)).strftime("%H:%M") == "12:00"
+    assert latest_schedule_slot(datetime(2026, 10, 23, 19, 0, tzinfo=SCHEDULE_TZ)).strftime("%H:%M") == "18:00"
+
+
+def test_month_settlement_only_in_midnight_slot() -> None:
+    assert is_month_settlement_run(datetime(2026, 11, 1, 0, 10, tzinfo=SCHEDULE_TZ))
+    assert not is_month_settlement_run(datetime(2026, 11, 1, 7, 0, tzinfo=SCHEDULE_TZ))
+    assert not is_month_settlement_run(datetime(2026, 11, 1, 12, 0, tzinfo=SCHEDULE_TZ))
+    assert not is_month_settlement_run(datetime(2026, 11, 1, 18, 0, tzinfo=SCHEDULE_TZ))

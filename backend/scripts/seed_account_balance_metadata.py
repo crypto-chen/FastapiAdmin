@@ -253,7 +253,7 @@ async def main() -> None:
             job.source_system_id = system.id
             job.source_object_id = source_object.id
             job.standard_entity_id = standard_entity.id
-            job.cron_expr = "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"
+            job.cron_expr = "0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?"
             job.request_params = REQUEST_PARAMS
             job.sync_mode = "full"
             job.status = 0

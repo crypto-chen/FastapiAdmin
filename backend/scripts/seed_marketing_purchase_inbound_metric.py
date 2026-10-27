@@ -58,7 +58,7 @@ ImportUtil.find_models(MappedBase)
 
 CONNECTION_NAME = "金蝶默认连接"
 SOURCE_SYSTEM_CODE = "kingdee"
-SYNC_CRON = "0 0 2 * * ?;0 20 12 * * ?;0 20 18 * * ?"  # 每天 02:00/12:20/18:20
+SYNC_CRON = "0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?"  # 每天 00:00/07:00/12:00/18:00
 
 METRIC_CODE = "marketing_purchase_inbound_incl_tax"
 METRIC_NAME = "当期营销中心采购入库金额（含税）"
