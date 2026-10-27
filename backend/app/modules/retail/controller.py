@@ -91,6 +91,18 @@ async def detail_retail_batch(
     return SuccessResponse(data=result, msg="查询零售推送批次详情成功")
 
 
+@RetailRouter.get("/analysis/summary", response_model=ResponseSchema[dict])
+async def retail_analysis_summary(
+    auth: Annotated[AuthSchema, Security(AuthPermission(["module_retail:order:query"]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    period_value: Annotated[str | None, Query(max_length=16, description="期间 YYYY-MM")] = None,
+    shop_id: Annotated[int | None, Query(ge=0, description="店铺编号")] = None,
+) -> JSONResponse:
+    """平台店铺分析口径：接单未税、货物出货未税（按已发货订单）、退货退款、净额、退货率。"""
+    result = await RetailQueryService(db).analysis_summary(period_value, shop_id)
+    return SuccessResponse(data=result, msg="查询零售分析汇总成功")
+
+
 @RetailRouter.get("/aftersales/page", response_model=ResponseSchema[dict])
 async def page_retail_aftersales(
     auth: Annotated[AuthSchema, Security(AuthPermission(["module_retail:order:query"]))],

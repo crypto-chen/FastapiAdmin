@@ -223,6 +223,35 @@ export interface RetailAfterSaleQuery {
   page_size?: number;
 }
 
+export interface RetailAnalysisRow {
+  period_value: string;
+  shop_id: number;
+  shop_name?: string | null;
+  order_count: number;
+  shipped_order_count: number;
+  intake_untaxed: number;
+  shipment_untaxed: number;
+  refund_untaxed: number;
+  net_shipment_untaxed: number;
+  return_rate: number;
+}
+
+export interface RetailAnalysisResult {
+  tax_rate: number;
+  shipped_statuses: string[];
+  items: RetailAnalysisRow[];
+  total: {
+    shop_count: number;
+    order_count: number;
+    shipped_order_count: number;
+    intake_untaxed: number;
+    shipment_untaxed: number;
+    refund_untaxed: number;
+    net_shipment_untaxed: number;
+    return_rate: number;
+  };
+}
+
 export const RetailAPI = {
   syncShops() {
     return request<ApiResponse<Record<string, unknown>>>({
@@ -279,6 +308,13 @@ export const RetailAPI = {
       method: "post",
       params,
       timeout: 120 * 1000,
+    });
+  },
+  analysisSummary(params: { period_value?: string; shop_id?: number }) {
+    return request<ApiResponse<RetailAnalysisResult>>({
+      url: "/retail/analysis/summary",
+      method: "get",
+      params,
     });
   },
 };

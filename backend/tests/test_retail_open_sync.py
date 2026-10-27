@@ -517,3 +517,58 @@ def test_after_sale_query_page_and_summary(retail_client: TestClient) -> None:
             assert len(detail["items"]) == 1
 
     asyncio.run(_query())
+
+
+def test_analysis_summary_counts_only_shipped_orders(retail_client: TestClient) -> None:
+    """货物出货 = 已发货订单（默认 status=Sent）；取消单不计，售后退款冲减净额。"""
+
+    async def _clean() -> None:
+        async with async_db_session() as db, db.begin():
+            await db.execute(delete(RetailOrderItemModel))
+            await db.execute(delete(RetailOrderModel))
+            await db.execute(delete(RetailAfterSaleItemModel))
+            await db.execute(delete(RetailAfterSaleModel))
+
+    asyncio.run(_clean())
+
+    rows = [
+        {"so_id": "AS-S1", "shop_id": 1, "status": "Sent", "order_date": "2026-10-02 10:00:00",
+         "buyer_paid_amount": 113.0},
+        {"so_id": "AS-S2", "shop_id": 1, "status": "Sent", "order_date": "2026-10-03 10:00:00",
+         "buyer_paid_amount": 226.0},
+        {"so_id": "AS-S3", "shop_id": 1, "status": "WaitConfirm", "order_date": "2026-10-04 10:00:00",
+         "buyer_paid_amount": 339.0},
+        {"so_id": "AS-S4", "shop_id": 2, "status": "Cancelled", "order_date": "2026-10-05 10:00:00",
+         "buyer_paid_amount": 500.0},
+    ]
+    refunds = [
+        {"as_id": "AS-A1", "so_id": "AS-S1", "shop_id": 1, "as_date": "2026-10-10 00:00:00",
+         "refund": 56.5, "freight": 0, "payment": 0, "free_amount": 0, "status": "Confirmed"},
+    ]
+
+    async def _run() -> None:
+        async with async_db_session() as db, db.begin():
+            await RetailSyncService(db, app_id="analysis_test").pull_orders(
+                rows, source="qimen", request_id="analysis-orders-1"
+            )
+        async with async_db_session() as db, db.begin():
+            await RetailAfterSaleSyncService(db, app_id="analysis_test").pull_refunds(
+                refunds, source="qimen", request_id="analysis-refund-1"
+            )
+        async with async_db_session() as db:
+            data = await RetailQueryService(db).analysis_summary("2026-10")
+            total = data["total"]
+            assert data["shipped_statuses"] == ["Sent"]
+            assert data["tax_rate"] == 13.0
+            # 取消单不入接单/出货
+            assert total["order_count"] == 3
+            assert total["shipped_order_count"] == 2
+            # 接单未税 = 678 ÷ 1.13；出货未税 = 339 ÷ 1.13（只算已发货）
+            assert total["intake_untaxed"] == 600.0
+            assert total["shipment_untaxed"] == 300.0
+            # 退货未税 = 56.5 ÷ 1.13 = 50，负数冲减
+            assert total["refund_untaxed"] == -50.0
+            assert total["net_shipment_untaxed"] == 250.0
+            assert total["return_rate"] == 0.2
+
+    asyncio.run(_run())

@@ -207,3 +207,71 @@
 4) 回滚
     删除/注释 RETAIL_TAX_RATE 并重启即恢复 13 默认；需要完全回到含税口径时设 RETAIL_TAX_RATE=0。
     本次无数据库变更，ROLLBACK.sh 无需执行降级。
+
+七、追加：货物出货 = 已发货订单（同日确认）
+------------------------------------------------------------
+改动：
+    backend\app\config\setting.py               新增 RETAIL_SHIPPED_STATUSES: str = "Sent"
+    backend\app\modules\retail\query_service.py  shipped_statuses()；订单行 is_shipped /
+                                                shipped_untaxed_amount；page_orders summary 增加
+                                                shipped_order_count / shipped_amount_sum /
+                                                shipped_untaxed_amount_sum；新增 analysis_summary()
+    backend\app\modules\retail\controller.py     新增 GET /retail/analysis/summary
+    backend\tests\test_retail_open_sync.py       新增 test_analysis_summary_counts_only_shipped_orders
+    frontend\web\src\api\module_retail\index.ts  RetailAnalysisRow / analysisSummary()
+    frontend\web\src\views\module_retail\order\index.vue  新增「平台店铺分析」页签
+    docs\平台店铺分析指标对接方案.md             PLT-09 改 ✅（已发货订单 ÷1.13）
+    docs\聚水潭对接说明.md                       RETAIL_SHIPPED_STATUSES
+
+1) 仓库现有订单状态分布（本地 dev MySQL 全表）
+实际输出（逐字）：
+    'Sent' 1149
+    'Delivering' 121
+    'Cancelled' 20
+    'Question' 3
+    None 2
+    'WaitConfirm' 1
+结论：默认口径只取 Sent，符合“已经发货就算出货”。
+
+2) 单元测试（4 张合成订单 + 1 张售后，期间 2026-10）
+命令：
+    cd backend
+    .venv\Scripts\python.exe -m pytest tests/test_retail_open_sync.py -q
+实际输出（逐字）：
+    ...............                                                          [100%]
+    15 passed in 396.94s (0:06:36)
+用例断言（逐字）：
+    total["order_count"] == 3            # Cancelled 单被排除
+    total["shipped_order_count"] == 2    # 只有 Sent 计入
+    total["intake_untaxed"] == 600.0     # 678 ÷ 1.13
+    total["shipment_untaxed"] == 300.0   # 339 ÷ 1.13（只算已发货）
+    total["refund_untaxed"] == -50.0     # 56.5 ÷ 1.13，负数
+    total["net_shipment_untaxed"] == 250.0
+    total["return_rate"] == 0.2
+退出码：0
+
+3) 真实库汇总（本地 dev MySQL，期间 2026-10）
+实际输出（逐字）：
+    {"shop_count": 9, "order_count": 52, "shipped_order_count": 41, "intake_untaxed": 172.12,
+     "shipment_untaxed": 0.0, "refund_untaxed": -0.0, "net_shipment_untaxed": 0.0, "return_rate": 0.0}
+    SHIPPED_STATUSES ['Sent'] TAX 13.0
+说明：dev 库大部分测试订单没有 buyer_paid_amount（金额为空），所以出货未税为 0；
+      接单未税 172.12 与「194.50 ÷ 1.13」一致，口径与计算链正确。
+退出码：0
+
+4) 前端
+命令：
+    cd frontend/web
+    pnpm run type-check
+    pnpm run build:prod
+实际输出：
+    > vue-tsc --noEmit        （无错误）
+    ✓ built in 1m 11s
+产物校验：
+    Select-String -Path dist/js/*.js -Pattern "retail/analysis/summary" -List
+    → dist\js\route-loader.Chi9bQY-.js
+退出码：0
+
+5) 回滚
+    RETAIL_SHIPPED_STATUSES 改回 Sent 即恢复默认口径；不需要迁移。
+    「平台店铺分析」页签与 /retail/analysis/summary 随代码提交回退即可移除。

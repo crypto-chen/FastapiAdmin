@@ -166,16 +166,19 @@ index 00000000..b05a2c3c
 +    op.drop_table('retail_after_sale')
 +    # ### end Alembic commands ###
 diff --git a/backend/app/config/setting.py b/backend/app/config/setting.py
-index 1176030f..55c8e6c8 100755
+index 1176030f..a330429a 100755
 --- a/backend/app/config/setting.py
 +++ b/backend/app/config/setting.py
-@@ -169,6 +169,9 @@ class Settings(BaseSettings):
+@@ -169,6 +169,12 @@ class Settings(BaseSettings):
      RETAIL_ORDER_SYNC_LOOKBACK_MINUTES: int = 30  # 每次同步回看分钟数
      RETAIL_ORDER_SYNC_MAX_ROWS: int = 20000  # 单次最多拉取订单数
      RETAIL_ORDER_SYNC_CONNECTION_ID: int | None = None  # 指定聚水潭连接；空=第一个启用连接
 +    # 零售订单/退货金额税率（百分比）：未税金额 = 含税金额 / (1 + RETAIL_TAX_RATE / 100)
 +    # 零售（电商）默认 13%；设 0 表示上游金额已是未税、不再折算
 +    RETAIL_TAX_RATE: float = 13.0
++    # 「货物出货」口径：订单状态命中即视为已发货（逗号分隔）；默认 Sent（已发货）
++    # 需要把「发货中」也算进来时改成 Sent,Delivering
++    RETAIL_SHIPPED_STATUSES: str = "Sent"
  
      # ================================================= #
      # ********************* 日志配置 ******************* #
@@ -752,7 +755,7 @@ index 00000000..13b72eab
 +    )
 +    return result
 diff --git a/backend/app/modules/retail/controller.py b/backend/app/modules/retail/controller.py
-index 2e3f59e7..ee055082 100644
+index 2e3f59e7..7207a66e 100644
 --- a/backend/app/modules/retail/controller.py
 +++ b/backend/app/modules/retail/controller.py
 @@ -1,5 +1,6 @@
@@ -777,10 +780,22 @@ index 2e3f59e7..ee055082 100644
  from .shop_service import sync_jushuitan_shops
  
  RetailRouter = APIRouter(route_class=OperationLogRoute, tags=["零售数据"])
-@@ -87,3 +89,54 @@ async def detail_retail_batch(
+@@ -87,3 +89,66 @@ async def detail_retail_batch(
  ) -> JSONResponse:
      result = await RetailQueryService(db).batch_detail(batch_id)
      return SuccessResponse(data=result, msg="查询零售推送批次详情成功")
++
++
++@RetailRouter.get("/analysis/summary", response_model=ResponseSchema[dict])
++async def retail_analysis_summary(
++    auth: Annotated[AuthSchema, Security(AuthPermission(["module_retail:order:query"]))],
++    db: Annotated[AsyncSession, Depends(db_getter)],
++    period_value: Annotated[str | None, Query(max_length=16, description="期间 YYYY-MM")] = None,
++    shop_id: Annotated[int | None, Query(ge=0, description="店铺编号")] = None,
++) -> JSONResponse:
++    """平台店铺分析口径：接单未税、货物出货未税（按已发货订单）、退货退款、净额、退货率。"""
++    result = await RetailQueryService(db).analysis_summary(period_value, shop_id)
++    return SuccessResponse(data=result, msg="查询零售分析汇总成功")
 +
 +
 +@RetailRouter.get("/aftersales/page", response_model=ResponseSchema[dict])
@@ -1037,7 +1052,7 @@ index 50129173..eb29b3a6 100644
 +        msg = "零售售后单同步完成"
 +    return SuccessResponse(data=result.model_dump(), msg=msg)
 diff --git a/backend/app/modules/retail/query_service.py b/backend/app/modules/retail/query_service.py
-index 794261e5..ce9c1baf 100644
+index 794261e5..02c0b923 100644
 --- a/backend/app/modules/retail/query_service.py
 +++ b/backend/app/modules/retail/query_service.py
 @@ -3,13 +3,22 @@
@@ -1047,7 +1062,8 @@ index 794261e5..ce9c1baf 100644
 +from decimal import ROUND_HALF_UP, Decimal
  from typing import Any
  
- from sqlalchemy import func, or_, select
+-from sqlalchemy import func, or_, select
++from sqlalchemy import case, func, or_, select
  from sqlalchemy.ext.asyncio import AsyncSession
  
 -from .model import RetailOrderItemModel, RetailOrderModel, RetailSyncBatchModel
@@ -1065,7 +1081,7 @@ index 794261e5..ce9c1baf 100644
  
  
  def _dt(value: datetime | None) -> str | None:
-@@ -20,6 +29,27 @@ def _num(value: Any) -> float | None:
+@@ -20,7 +29,36 @@ def _num(value: Any) -> float | None:
      return round(float(value), 4) if value is not None else None
  
  
@@ -1090,18 +1106,30 @@ index 794261e5..ce9c1baf 100644
 +    return float((amount / divisor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 +
 +
++def shipped_statuses() -> list[str]:
++    """「货物出货」判定用的订单状态；默认 Sent（已发货）。"""
++    raw = getattr(settings, "RETAIL_SHIPPED_STATUSES", "Sent") or "Sent"
++    items = [part.strip() for part in str(raw).split(",") if part.strip()]
++    return items or ["Sent"]
++
++
  def _order_row(row: RetailOrderModel) -> dict[str, Any]:
++    is_shipped = (row.status or "") in shipped_statuses()
      return {
          "id": row.id,
-@@ -40,6 +70,7 @@ def _order_row(row: RetailOrderModel) -> dict[str, Any]:
+         "source": row.source,
+@@ -40,6 +78,10 @@ def _order_row(row: RetailOrderModel) -> dict[str, Any]:
          "pay_amount": _num(row.pay_amount),
          "buyer_paid_amount": _num(row.buyer_paid_amount),
          "seller_income_amount": _num(row.seller_income_amount),
 +        "untaxed_amount": untaxed(row.buyer_paid_amount),
++        "is_shipped": is_shipped,
++        # 货物出货（PLT-09）：只统计已发货订单，未发货记 0
++        "shipped_untaxed_amount": (untaxed(row.buyer_paid_amount) or 0.0) if is_shipped else 0.0,
          "freight": _num(row.freight),
          "free_amount": _num(row.free_amount),
          "receiver_state": row.receiver_state,
-@@ -80,6 +111,7 @@ def _batch_row(row: RetailSyncBatchModel) -> dict[str, Any]:
+@@ -80,6 +122,7 @@ def _batch_row(row: RetailSyncBatchModel) -> dict[str, Any]:
      return {
          "id": row.id,
          "app_id": row.app_id,
@@ -1109,7 +1137,7 @@ index 794261e5..ce9c1baf 100644
          "request_id": row.request_id,
          "source": row.source,
          "status": row.status,
-@@ -98,6 +130,71 @@ def _batch_row(row: RetailSyncBatchModel) -> dict[str, Any]:
+@@ -98,6 +141,71 @@ def _batch_row(row: RetailSyncBatchModel) -> dict[str, Any]:
      }
  
  
@@ -1181,27 +1209,59 @@ index 794261e5..ce9c1baf 100644
  class RetailQueryService:
      def __init__(self, db: AsyncSession) -> None:
          self.db = db
-@@ -167,6 +264,8 @@ class RetailQueryService:
+@@ -155,6 +263,27 @@ class RetailQueryService:
+                 select(
+                     func.coalesce(func.sum(RetailOrderModel.buyer_paid_amount), 0),
+                     func.coalesce(func.sum(RetailOrderModel.item_count), 0),
++                    func.coalesce(
++                        func.sum(
++                            case(
++                                (
++                                    RetailOrderModel.status.in_(shipped_statuses()),
++                                    RetailOrderModel.buyer_paid_amount,
++                                ),
++                                else_=0,
++                            )
++                        ),
++                        0,
++                    ),
++                    func.coalesce(
++                        func.sum(
++                            case(
++                                (RetailOrderModel.status.in_(shipped_statuses()), 1),
++                                else_=0,
++                            )
++                        ),
++                        0,
++                    ),
+                 ).where(*conditions)
+             )
+         ).first()
+@@ -167,6 +296,9 @@ class RetailQueryService:
                  .limit(page_size)
              )
          ).scalars().all()
 +        tax_rate = retail_tax_rate()
 +        paid_sum = _num(amounts[0]) if amounts else 0
++        shipped_sum = _num(amounts[2]) if amounts else 0
          return {
              "items": [_order_row(row) for row in rows],
              "total": int(total),
-@@ -175,7 +274,9 @@ class RetailQueryService:
+@@ -175,7 +307,12 @@ class RetailQueryService:
              "has_next": page_no * page_size < int(total),
              "summary": {
                  "order_count": int(total),
 -                "buyer_paid_amount_sum": _num(amounts[0]) if amounts else 0,
 +                "buyer_paid_amount_sum": paid_sum,
 +                "untaxed_amount_sum": untaxed(paid_sum, tax_rate),
++                "shipped_order_count": int(amounts[3]) if amounts else 0,
++                "shipped_amount_sum": shipped_sum,
++                "shipped_untaxed_amount_sum": untaxed(shipped_sum, tax_rate),
 +                "tax_rate": tax_rate,
                  "item_count_sum": int(amounts[1]) if amounts else 0,
              },
          }
-@@ -197,6 +298,19 @@ class RetailQueryService:
+@@ -197,6 +334,19 @@ class RetailQueryService:
          self, search: RetailBatchQueryParam, page_no: int, page_size: int
      ) -> dict[str, Any]:
          conditions = [RetailSyncBatchModel.is_deleted == False]  # noqa: E712
@@ -1221,7 +1281,7 @@ index 794261e5..ce9c1baf 100644
          if search.request_id and search.request_id.strip():
              conditions.append(RetailSyncBatchModel.request_id.like(f"%{search.request_id.strip()}%"))
          if search.app_id and search.app_id.strip():
-@@ -238,3 +352,108 @@ class RetailQueryService:
+@@ -238,3 +388,250 @@ class RetailQueryService:
              }
          )
          return data
@@ -1330,6 +1390,148 @@ index 794261e5..ce9c1baf 100644
 +            }
 +        )
 +        return {"after_sale": data, "items": [_aftersale_item_row(item) for item in items]}
++
++    async def analysis_summary(
++        self,
++        period_value: str | None = None,
++        shop_id: int | None = None,
++    ) -> dict[str, Any]:
++        """按「期间 × 店铺」输出平台店铺分析口径（PLT-08/09/11/12/37）。
++
++        - 接单未税 PLT-08：该期间全部有效订单买家实付 ÷ 1.13；
++        - 货物出货未税 PLT-09：**订单状态已发货**（默认 ``Sent``）的订单金额 ÷ 1.13；
++        - 退货退款 PLT-11：售后实退 ÷ 1.13（负数）；
++        - 对外出货净额 PLT-12 = PLT-09 + PLT-11；
++        - 退货率 PLT-37 = |PLT-11| ÷ PLT-12。
++        """
++        statuses = shipped_statuses()
++        tax_rate = retail_tax_rate()
++        order_conditions = [
++            RetailOrderModel.is_deleted == False,  # noqa: E712
++            RetailOrderModel.status.notin_(["Cancelled", "Delete"]),
++        ]
++        refund_conditions = [RetailAfterSaleModel.is_deleted == False]  # noqa: E712
++        if period_value and period_value.strip():
++            period = period_value.strip()
++            order_conditions.append(RetailOrderModel.period_value == period)
++            refund_conditions.append(RetailAfterSaleModel.period_value == period)
++        if shop_id is not None:
++            order_conditions.append(RetailOrderModel.shop_id == shop_id)
++            refund_conditions.append(RetailAfterSaleModel.shop_id == shop_id)
++
++        order_rows = (
++            await self.db.execute(
++                select(
++                    RetailOrderModel.period_value,
++                    RetailOrderModel.shop_id,
++                    func.max(RetailOrderModel.shop_name),
++                    func.count(RetailOrderModel.id),
++                    func.coalesce(func.sum(RetailOrderModel.buyer_paid_amount), 0),
++                    func.coalesce(
++                        func.sum(
++                            case(
++                                (
++                                    RetailOrderModel.status.in_(statuses),
++                                    RetailOrderModel.buyer_paid_amount,
++                                ),
++                                else_=0,
++                            )
++                        ),
++                        0,
++                    ),
++                    func.coalesce(
++                        func.sum(case((RetailOrderModel.status.in_(statuses), 1), else_=0)), 0
++                    ),
++                )
++                .where(*order_conditions)
++                .group_by(RetailOrderModel.period_value, RetailOrderModel.shop_id)
++                .order_by(RetailOrderModel.period_value.desc(), RetailOrderModel.shop_id.asc())
++            )
++        ).all()
++
++        refund_rows = (
++            await self.db.execute(
++                select(
++                    RetailAfterSaleModel.period_value,
++                    RetailAfterSaleModel.shop_id,
++                    func.coalesce(func.sum(RetailAfterSaleModel.actual_refund), 0),
++                )
++                .where(*refund_conditions)
++                .group_by(RetailAfterSaleModel.period_value, RetailAfterSaleModel.shop_id)
++            )
++        ).all()
++        refund_index = {
++            (str(row[0]), int(row[1])): float(row[2] or 0) for row in refund_rows
++        }
++
++        items: list[dict[str, Any]] = []
++        total_intake = total_shipment = total_refund = 0.0
++        total_orders = total_shipped = 0
++        seen_refund_keys: set[tuple[str, int]] = set()
++        for row in order_rows:
++            period, shop = str(row[0]), int(row[1])
++            intake = untaxed(row[4], tax_rate) or 0.0
++            shipment = untaxed(row[5], tax_rate) or 0.0
++            refund = untaxed(refund_index.get((period, shop), 0.0), tax_rate) or 0.0
++            seen_refund_keys.add((period, shop))
++            net = round(shipment - refund, 2)
++            items.append(
++                {
++                    "period_value": period,
++                    "shop_id": shop,
++                    "shop_name": row[2],
++                    "order_count": int(row[3]),
++                    "shipped_order_count": int(row[6]),
++                    "intake_untaxed": intake,
++                    "shipment_untaxed": shipment,
++                    "refund_untaxed": round(-refund, 2),
++                    "net_shipment_untaxed": net,
++                    "return_rate": round(refund / net, 4) if net else 0.0,
++                }
++            )
++            total_orders += int(row[3])
++            total_shipped += int(row[6])
++            total_intake += intake
++            total_shipment += shipment
++            total_refund += refund
++
++        # 只有售后、没有当期订单的店铺也要露出来（否则退货被吞掉）
++        for (period, shop), amount in refund_index.items():
++            if (period, shop) in seen_refund_keys:
++                continue
++            refund = untaxed(amount, tax_rate) or 0.0
++            items.append(
++                {
++                    "period_value": period,
++                    "shop_id": shop,
++                    "shop_name": None,
++                    "order_count": 0,
++                    "shipped_order_count": 0,
++                    "intake_untaxed": 0.0,
++                    "shipment_untaxed": 0.0,
++                    "refund_untaxed": round(-refund, 2),
++                    "net_shipment_untaxed": round(-refund, 2),
++                    "return_rate": 0.0,
++                }
++            )
++            total_refund += refund
++
++        net_total = round(total_shipment - total_refund, 2)
++        return {
++            "tax_rate": tax_rate,
++            "shipped_statuses": statuses,
++            "items": items,
++            "total": {
++                "shop_count": len({(item["period_value"], item["shop_id"]) for item in items}),
++                "order_count": total_orders,
++                "shipped_order_count": total_shipped,
++                "intake_untaxed": round(total_intake, 2),
++                "shipment_untaxed": round(total_shipment, 2),
++                "refund_untaxed": round(-total_refund, 2),
++                "net_shipment_untaxed": net_total,
++                "return_rate": round(total_refund / net_total, 4) if net_total else 0.0,
++            },
++        }
 diff --git a/backend/app/modules/retail/schedule.py b/backend/app/modules/retail/schedule.py
 index cf12e50b..1852c5d0 100644
 --- a/backend/app/modules/retail/schedule.py
@@ -1815,7 +2017,7 @@ index 00000000..2cd495a9
 +  }
 +}
 diff --git a/backend/tests/test_retail_open_sync.py b/backend/tests/test_retail_open_sync.py
-index e59ccbad..88ba4219 100644
+index e59ccbad..e08845fe 100644
 --- a/backend/tests/test_retail_open_sync.py
 +++ b/backend/tests/test_retail_open_sync.py
 @@ -24,18 +24,26 @@ from app.modules.metadata.model import (
@@ -1870,7 +2072,7 @@ index e59ccbad..88ba4219 100644
              detail = await service.order_detail(int(page["items"][0]["id"]))
              assert detail["order"]["period_value"] == "2026-10"
              assert detail["items"]
-@@ -381,6 +399,121 @@ def test_shop_sync_upserts(retail_client: TestClient) -> None:
+@@ -381,6 +399,176 @@ def test_shop_sync_upserts(retail_client: TestClient) -> None:
  
  
  def test_admin_retail_routes_registered(retail_client: TestClient) -> None:
@@ -1993,8 +2195,63 @@ index e59ccbad..88ba4219 100644
 +            assert len(detail["items"]) == 1
 +
 +    asyncio.run(_query())
++
++
++def test_analysis_summary_counts_only_shipped_orders(retail_client: TestClient) -> None:
++    """货物出货 = 已发货订单（默认 status=Sent）；取消单不计，售后退款冲减净额。"""
++
++    async def _clean() -> None:
++        async with async_db_session() as db, db.begin():
++            await db.execute(delete(RetailOrderItemModel))
++            await db.execute(delete(RetailOrderModel))
++            await db.execute(delete(RetailAfterSaleItemModel))
++            await db.execute(delete(RetailAfterSaleModel))
++
++    asyncio.run(_clean())
++
++    rows = [
++        {"so_id": "AS-S1", "shop_id": 1, "status": "Sent", "order_date": "2026-10-02 10:00:00",
++         "buyer_paid_amount": 113.0},
++        {"so_id": "AS-S2", "shop_id": 1, "status": "Sent", "order_date": "2026-10-03 10:00:00",
++         "buyer_paid_amount": 226.0},
++        {"so_id": "AS-S3", "shop_id": 1, "status": "WaitConfirm", "order_date": "2026-10-04 10:00:00",
++         "buyer_paid_amount": 339.0},
++        {"so_id": "AS-S4", "shop_id": 2, "status": "Cancelled", "order_date": "2026-10-05 10:00:00",
++         "buyer_paid_amount": 500.0},
++    ]
++    refunds = [
++        {"as_id": "AS-A1", "so_id": "AS-S1", "shop_id": 1, "as_date": "2026-10-10 00:00:00",
++         "refund": 56.5, "freight": 0, "payment": 0, "free_amount": 0, "status": "Confirmed"},
++    ]
++
++    async def _run() -> None:
++        async with async_db_session() as db, db.begin():
++            await RetailSyncService(db, app_id="analysis_test").pull_orders(
++                rows, source="qimen", request_id="analysis-orders-1"
++            )
++        async with async_db_session() as db, db.begin():
++            await RetailAfterSaleSyncService(db, app_id="analysis_test").pull_refunds(
++                refunds, source="qimen", request_id="analysis-refund-1"
++            )
++        async with async_db_session() as db:
++            data = await RetailQueryService(db).analysis_summary("2026-10")
++            total = data["total"]
++            assert data["shipped_statuses"] == ["Sent"]
++            assert data["tax_rate"] == 13.0
++            # 取消单不入接单/出货
++            assert total["order_count"] == 3
++            assert total["shipped_order_count"] == 2
++            # 接单未税 = 678 ÷ 1.13；出货未税 = 339 ÷ 1.13（只算已发货）
++            assert total["intake_untaxed"] == 600.0
++            assert total["shipment_untaxed"] == 300.0
++            # 退货未税 = 56.5 ÷ 1.13 = 50，负数冲减
++            assert total["refund_untaxed"] == -50.0
++            assert total["net_shipment_untaxed"] == 250.0
++            assert total["return_rate"] == 0.2
++
++    asyncio.run(_run())
 diff --git "a/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md" "b/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md"
-index a42eb69a..a73e5963 100644
+index a42eb69a..0facb42e 100644
 --- "a/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md"
 +++ "b/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md"
 @@ -21,7 +21,7 @@
@@ -2011,9 +2268,10 @@ index a42eb69a..a73e5963 100644
  | PLT-04 | 产品线大类 | 🟡 | ERP 商品字典 | 需 `sku_id/i_id → 产品线` |
  | PLT-05 | SKU | ✅ | `retail_order_item.sku_id/i_id` | 组合装与拆分件需选一个口径 |
 -| PLT-08 | 接单未税 | 🟡 | `retail_order` 订单金额 | 含税转未税，需平台/店铺税率 |
-+| PLT-08 | 接单未税 | ✅ | `retail_order.buyer_paid_amount` | 含税 ÷ 1.13（默认 13%，可配 `RETAIL_TAX_RATE`） |
- | PLT-09 | 货物出货未税 | 🟡 | 聚水潭销售出库 | 按 `shop_id` 汇总，含税转未税 |
+-| PLT-09 | 货物出货未税 | 🟡 | 聚水潭销售出库 | 按 `shop_id` 汇总，含税转未税 |
 -| PLT-11 | 退货退款 | 🟡 | 聚水潭售后/平台账单 | 当前只有退款状态/数量，缺金额 |
++| PLT-08 | 接单未税 | ✅ | `retail_order.buyer_paid_amount` | 含税 ÷ 1.13（默认 13%，可配 `RETAIL_TAX_RATE`） |
++| PLT-09 | 货物出货未税 | ✅ | `retail_order`（status=Sent） | 已发货订单金额 ÷ 1.13，按订单期间 |
 +| PLT-11 | 退货退款 | ✅ | `retail_after_sale.actual_refund` | 实退含税 ÷ 1.13 后取负号 |
  | PLT-12 | 对外出货净额 | 🟡 | 计算 | `PLT-09 + PLT-11`（PLT-11 为负数） |
  | PLT-13 | 营销结算收入10% | 🟡 | 计算 | `PLT-12 × 10%` |
@@ -2041,7 +2299,51 @@ index a42eb69a..a73e5963 100644
  口径：
  - 期间：`retail_order.period_value`；
  - 排除 `Cancelled`、`Delete`；`Question` 保留但单独标记；
-@@ -151,7 +154,20 @@ PLT-13 = PLT-12 × 10%
+@@ -120,27 +123,30 @@ SUM(retail_order_item.buyer_paid_amount / seller_income_amount / amount)
+ 
+ ### 4.3 PLT-09 货物出货未税
+ 
+-来源用聚水潭销售出库查询，不用订单查询：
++口径（2026-10-27 确认）：**订单状态已发货即算货物出货**，直接用零售订单表，不再单独取出库单。
+ 
+ ```text
+-status = Confirmed
+-date_type = 2（按出库时间）
++PLT-09 = SUM(retail_order.buyer_paid_amount WHERE status IN ('Sent')) ÷ 1.13
+ ```
+ 
+-从 `meta_sync_run.rows_json.datas` 拆出 `dwd_retail_outbound`：
++- 已发货：订单状态 `Sent`（`RETAIL_SHIPPED_STATUSES` 可配，例如加上 `Delivering` 把「发货中」也算进来）；
++- 未发货（`WaitConfirm`/`Delivering` 未纳入时）不计；
++- `Cancelled`/`Delete` 既不接入接单也不入出货；
++- 期间与接单一致，用 `retail_order.period_value`（保证 PLT-08、PLT-09、PLT-11 同期同店可比）。
+ 
+-```text
+-io_id, shop_id, io_date, status,
+-amount = items.auto（sale_amount → buyer_paid_amount → seller_income_amount）
+-```
++已实现接口：`GET /api/v1/retail/analysis/summary?period_value=2026-10`，返回
++`items[]`（期间 × 店铺）与 `total`：
+ 
+-然后：
+-
+-```text
+-PLT-09 = SUM(amount) ÷ (1 + 税率 / 100)
++```json
++{"period_value":"2026-10","shop_id":900001,"order_count":52,"shipped_order_count":41,
++ "intake_untaxed":600.0,"shipment_untaxed":300.0,"refund_untaxed":-50.0,
++ "net_shipment_untaxed":250.0,"return_rate":0.2}
+ ```
+ 
+-按 `shop_id` 汇总；同一 `io_id` 只计一次。淘系出库若不在聚水潭，需要补奇门出库数据。
++页面对应：**零售订单同步 → 平台店铺分析**（列：接单未税 / 出货未税 / 退货未税 / 净额 / 退货率）。
++
++> 旧指标 `retail_outbound_untaxed_amount`（聚水潭销售出库查询）保留不变，口径是「按出库时间」；
++> 平台店铺分析统一走上面的「按订单期间 + 已发货」口径，两者不要混用。
+ 
+ ### 4.4 PLT-12 / PLT-13 / PLT-23
+ 
+@@ -151,7 +157,20 @@ PLT-13 = PLT-12 × 10%
  PLT-23 = PLT-13 × 4%
  ```
  
@@ -2063,7 +2365,7 @@ index a42eb69a..a73e5963 100644
  
  ### 4.5 PLT-38 客单价
  
-@@ -248,7 +264,7 @@ CRM 产品分类（52 个） → 铝壳/机箱/功放/铝型材外壳/防水外
+@@ -248,7 +267,7 @@ CRM 产品分类（52 个） → 铝壳/机箱/功放/铝型材外壳/防水外
  
  | 指标 | 缺什么 | 建议来源 |
  | --- | --- | --- |
@@ -2073,7 +2375,7 @@ index a42eb69a..a73e5963 100644
  | PLT-15/36/42/43 | 推广费 | 平台后台/广告后台 |
  | PLT-16/17 | 快递成本 | 快递对账表 |
 diff --git "a/docs/\350\201\232\346\260\264\346\275\255\345\257\271\346\216\245\350\257\264\346\230\216.md" "b/docs/\350\201\232\346\260\264\346\275\255\345\257\271\346\216\245\350\257\264\346\230\216.md"
-index 8c8e3dfb..da15b33a 100644
+index 8c8e3dfb..2d1da603 100644
 --- "a/docs/\350\201\232\346\260\264\346\275\255\345\257\271\346\216\245\350\257\264\346\230\216.md"
 +++ "b/docs/\350\201\232\346\260\264\346\275\255\345\257\271\346\216\245\350\257\264\346\230\216.md"
 @@ -171,7 +171,9 @@ python scripts/sync_jushuitan_orders.py --name "聚水潭默认连接" --recent-
@@ -2087,16 +2389,18 @@ index 8c8e3dfb..da15b33a 100644
  
  任务写入 `retail_order`，页面「开放接口 → 零售订单同步」查看；不会自动回放指标。
  
-@@ -182,6 +184,8 @@ RETAIL_ORDER_SYNC_INTERVAL_MINUTES=10
+@@ -182,6 +184,10 @@ RETAIL_ORDER_SYNC_INTERVAL_MINUTES=10
  RETAIL_ORDER_SYNC_LOOKBACK_MINUTES=30
  RETAIL_ORDER_SYNC_MAX_ROWS=20000
  # RETAIL_ORDER_SYNC_CONNECTION_ID=1
 +# 零售金额税率（%）：接单未税/实退未税 = 含税 ÷ (1 + 13/100)
 +RETAIL_TAX_RATE=13
++# 「货物出货」判定状态（逗号分隔），默认只算 Sent（已发货）
++RETAIL_SHIPPED_STATUSES=Sent
  ```
  
  修改后重启后端生效。
-@@ -241,6 +245,59 @@ GROUP BY o.period_value, s.shop_site, s.shop_name;
+@@ -241,6 +247,59 @@ GROUP BY o.period_value, s.shop_site, s.shop_name;
  管理端页面也可手动同步：**开放接口 → 零售订单同步 → 右上角「同步店铺」**（权限
  `module_retail:shop:sync`）。同步后可直接用于平台/店铺分析。
  
@@ -2298,7 +2602,7 @@ index 3dc1fb8e..6d19f89f 100644
 +点「明细」看 SKU 与金额；右上「同步聚水潭售后」可手动拉取非淘系售后（权限
 +`module_retail:shop:sync`，查询权限 `module_retail:order:query`）。
 diff --git a/frontend/web/src/api/module_retail/index.ts b/frontend/web/src/api/module_retail/index.ts
-index a8871028..ccf8d557 100644
+index a8871028..86c2a3d9 100644
 --- a/frontend/web/src/api/module_retail/index.ts
 +++ b/frontend/web/src/api/module_retail/index.ts
 @@ -47,6 +47,7 @@ export interface RetailOrderRow {
@@ -2334,7 +2638,7 @@ index a8871028..ccf8d557 100644
    request_id?: string;
    app_id?: string;
    source?: string;
-@@ -120,6 +125,104 @@ export interface RetailBatchQuery {
+@@ -120,6 +125,133 @@ export interface RetailBatchQuery {
    page_size?: number;
  }
  
@@ -2436,10 +2740,39 @@ index a8871028..ccf8d557 100644
 +  page_size?: number;
 +}
 +
++export interface RetailAnalysisRow {
++  period_value: string;
++  shop_id: number;
++  shop_name?: string | null;
++  order_count: number;
++  shipped_order_count: number;
++  intake_untaxed: number;
++  shipment_untaxed: number;
++  refund_untaxed: number;
++  net_shipment_untaxed: number;
++  return_rate: number;
++}
++
++export interface RetailAnalysisResult {
++  tax_rate: number;
++  shipped_statuses: string[];
++  items: RetailAnalysisRow[];
++  total: {
++    shop_count: number;
++    order_count: number;
++    shipped_order_count: number;
++    intake_untaxed: number;
++    shipment_untaxed: number;
++    refund_untaxed: number;
++    net_shipment_untaxed: number;
++    return_rate: number;
++  };
++}
++
  export const RetailAPI = {
    syncShops() {
      return request<ApiResponse<Record<string, unknown>>>({
-@@ -157,4 +260,25 @@ export const RetailAPI = {
+@@ -157,4 +289,32 @@ export const RetailAPI = {
        method: "get",
      });
    },
@@ -2464,9 +2797,16 @@ index a8871028..ccf8d557 100644
 +      timeout: 120 * 1000,
 +    });
 +  },
++  analysisSummary(params: { period_value?: string; shop_id?: number }) {
++    return request<ApiResponse<RetailAnalysisResult>>({
++      url: "/retail/analysis/summary",
++      method: "get",
++      params,
++    });
++  },
  };
 diff --git a/frontend/web/src/views/module_retail/order/index.vue b/frontend/web/src/views/module_retail/order/index.vue
-index 0297fcb6..84a004a7 100644
+index 0297fcb6..6c2f5737 100644
 --- a/frontend/web/src/views/module_retail/order/index.vue
 +++ b/frontend/web/src/views/module_retail/order/index.vue
 @@ -68,7 +68,10 @@
@@ -2501,7 +2841,7 @@ index 0297fcb6..84a004a7 100644
              <ElTableColumn label="状态" width="100" align="center">
                <template #default="{ row }">
                  <ElTag :type="batchStatusType(row.status)" size="small">{{ batchStatusText(row.status) }}</ElTag>
-@@ -187,6 +196,126 @@
+@@ -187,6 +196,182 @@
              />
            </div>
          </ElTabPane>
@@ -2625,10 +2965,66 @@ index 0297fcb6..84a004a7 100644
 +            />
 +          </div>
 +        </ElTabPane>
++        <ElTabPane label="平台店铺分析" name="analysis">
++          <div class="toolbar">
++            <ElSelect v-model="analysisSearch.period_value" placeholder="期间" clearable style="width: 130px">
++              <ElOption v-for="item in periods" :key="item" :label="item" :value="item" />
++            </ElSelect>
++            <ElInputNumber
++              v-model="analysisSearch.shop_id"
++              :min="0"
++              :controls="false"
++              placeholder="店铺ID"
++              style="width: 120px"
++            />
++            <ElButton type="primary" :loading="analysisLoading" @click="loadAnalysis">查询</ElButton>
++            <ElButton @click="resetAnalysisSearch">重置</ElButton>
++            <span class="muted">
++              货物出货 = 订单状态 {{ analysis.shipped_statuses.join("/") || "Sent" }}（已发货）；
++              金额均已 ÷{{ analysis.tax_rate }}% 去税
++            </span>
++          </div>
++
++          <div class="summary">
++            <span>店铺 {{ analysis.total.shop_count }} 个</span>
++            <span>订单 {{ analysis.total.order_count }} 张 / 已发货 {{ analysis.total.shipped_order_count }} 张</span>
++            <span>接单未税 {{ formatMoney(analysis.total.intake_untaxed) }}</span>
++            <span class="summary-tax">出货未税 {{ formatMoney(analysis.total.shipment_untaxed) }}</span>
++            <span>退货未税 {{ formatMoney(analysis.total.refund_untaxed) }}</span>
++            <span class="summary-tax">净额 {{ formatMoney(analysis.total.net_shipment_untaxed) }}</span>
++            <span>退货率 {{ formatRate(analysis.total.return_rate) }}</span>
++          </div>
++
++          <ElTable v-loading="analysisLoading" :data="analysis.items" border stripe max-height="calc(100vh - 360px)">
++            <ElTableColumn prop="period_value" label="期间" width="90" fixed />
++            <ElTableColumn label="店铺" min-width="200" show-overflow-tooltip>
++              <template #default="{ row }">
++                {{ row.shop_name || "-" }}<span class="muted"> / {{ row.shop_id }}</span>
++              </template>
++            </ElTableColumn>
++            <ElTableColumn prop="order_count" label="订单数" width="90" align="right" />
++            <ElTableColumn prop="shipped_order_count" label="已发货" width="90" align="right" />
++            <ElTableColumn label="接单未税" width="120" align="right">
++              <template #default="{ row }">{{ formatMoney(row.intake_untaxed) }}</template>
++            </ElTableColumn>
++            <ElTableColumn label="出货未税" width="120" align="right">
++              <template #default="{ row }">{{ formatMoney(row.shipment_untaxed) }}</template>
++            </ElTableColumn>
++            <ElTableColumn label="退货未税" width="120" align="right">
++              <template #default="{ row }">{{ formatMoney(row.refund_untaxed) }}</template>
++            </ElTableColumn>
++            <ElTableColumn label="净额" width="120" align="right">
++              <template #default="{ row }">{{ formatMoney(row.net_shipment_untaxed) }}</template>
++            </ElTableColumn>
++            <ElTableColumn label="退货率" width="100" align="right">
++              <template #default="{ row }">{{ formatRate(row.return_rate) }}</template>
++            </ElTableColumn>
++          </ElTable>
++        </ElTabPane>
        </ElTabs>
      </ElCard>
  
-@@ -202,6 +331,7 @@
+@@ -202,6 +387,7 @@
            <ElDescriptionsItem label="内部单号">{{ orderDetail.order.o_id || "-" }}</ElDescriptionsItem>
            <ElDescriptionsItem label="买家">{{ orderDetail.order.buyer_nick || "-" }}</ElDescriptionsItem>
            <ElDescriptionsItem label="买家实付">{{ formatMoney(orderDetail.order.buyer_paid_amount) }}</ElDescriptionsItem>
@@ -2636,7 +3032,7 @@ index 0297fcb6..84a004a7 100644
            <ElDescriptionsItem label="应付金额">{{ formatMoney(orderDetail.order.pay_amount) }}</ElDescriptionsItem>
            <ElDescriptionsItem label="支付时间">{{ formatTime(orderDetail.order.pay_date) }}</ElDescriptionsItem>
            <ElDescriptionsItem label="上游修改">{{ formatTime(orderDetail.order.modified_time) }}</ElDescriptionsItem>
-@@ -262,6 +392,85 @@
+@@ -262,6 +448,85 @@
          </div>
        </template>
      </ElDrawer>
@@ -2722,28 +3118,30 @@ index 0297fcb6..84a004a7 100644
    </div>
  </template>
  
-@@ -270,6 +479,8 @@ import { onMounted, reactive, ref } from "vue";
+@@ -270,6 +535,9 @@ import { onMounted, reactive, ref } from "vue";
  import { ElMessage } from "element-plus";
  import {
    RetailAPI,
++  type RetailAnalysisResult,
 +  type RetailAfterSaleDetail,
 +  type RetailAfterSaleRow,
    type RetailBatchDetail,
    type RetailBatchRow,
    type RetailOrderDetail,
-@@ -283,8 +494,11 @@ const periods = ref<string[]>([]);
+@@ -283,8 +551,12 @@ const periods = ref<string[]>([]);
  const orderLoading = ref(false);
  const batchLoading = ref(false);
  const shopSyncing = ref(false);
 +const afterSaleLoading = ref(false);
 +const afterSaleSyncing = ref(false);
++const analysisLoading = ref(false);
  const orders = ref<RetailOrderRow[]>([]);
  const batches = ref<RetailBatchRow[]>([]);
 +const afterSales = ref<RetailAfterSaleRow[]>([]);
  
  const orderSearch = reactive<{
    period_value?: string;
-@@ -296,19 +510,49 @@ const orderSearch = reactive<{
+@@ -296,19 +568,65 @@ const orderSearch = reactive<{
    keyword?: string;
  }>({});
  const batchSearch = reactive<{ request_id?: string; source?: string; status?: string }>({});
@@ -2756,6 +3154,7 @@ index 0297fcb6..84a004a7 100644
 +  type?: string;
 +  keyword?: string;
 +}>({});
++const analysisSearch = reactive<{ period_value?: string; shop_id?: number }>({});
  
  const orderPage = reactive({
    page_no: 1,
@@ -2791,10 +3190,37 @@ index 0297fcb6..84a004a7 100644
  const batchDetail = ref<RetailBatchDetail | null>(null);
 +const afterSaleVisible = ref(false);
 +const afterSaleDetail = ref<RetailAfterSaleDetail | null>(null);
++const analysis = ref<RetailAnalysisResult>({
++  tax_rate: 13,
++  shipped_statuses: ["Sent"],
++  items: [],
++  total: {
++    shop_count: 0,
++    order_count: 0,
++    shipped_order_count: 0,
++    intake_untaxed: 0,
++    shipment_untaxed: 0,
++    refund_untaxed: 0,
++    net_shipment_untaxed: 0,
++    return_rate: 0,
++  },
++});
  
  function formatTime(value?: string | null) {
    if (!value) return "-";
-@@ -333,6 +577,13 @@ function batchStatusType(status: string) {
+@@ -320,6 +638,11 @@ function formatMoney(value?: number | null) {
+   return Number(value).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+ }
+ 
++function formatRate(value?: number | null) {
++  if (value === undefined || value === null || Number.isNaN(Number(value))) return "-";
++  return `${(Number(value) * 100).toFixed(2)}%`;
++}
++
+ function orderStatusType(status?: string | null) {
+   if (!status) return "info";
+   if (["Cancelled", "Delete", "Refunded"].includes(status)) return "danger";
+@@ -333,6 +656,13 @@ function batchStatusType(status: string) {
    return "success";
  }
  
@@ -2808,7 +3234,7 @@ index 0297fcb6..84a004a7 100644
  function batchStatusText(status: string) {
    const labels: Record<string, string> = {
      success: "成功",
-@@ -373,7 +624,14 @@ async function loadOrders() {
+@@ -373,7 +703,14 @@ async function loadOrders() {
      const data = res.data?.data;
      orders.value = data?.items ?? [];
      orderPage.total = data?.total ?? 0;
@@ -2824,7 +3250,7 @@ index 0297fcb6..84a004a7 100644
    } catch (error) {
      orders.value = [];
      ElMessage.error("查询零售订单失败");
-@@ -421,6 +679,97 @@ async function handleSyncShops() {
+@@ -421,6 +758,122 @@ async function handleSyncShops() {
    }
  }
  
@@ -2895,6 +3321,31 @@ index 0297fcb6..84a004a7 100644
 +  loadAfterSales();
 +}
 +
++async function loadAnalysis() {
++  analysisLoading.value = true;
++  try {
++    const res = await RetailAPI.analysisSummary({
++      period_value: analysisSearch.period_value || undefined,
++      shop_id: analysisSearch.shop_id ?? undefined,
++    });
++    const data = res.data?.data;
++    if (data) {
++      analysis.value = data;
++    }
++  } catch (error) {
++    analysis.value.items = [];
++    ElMessage.error("查询平台店铺分析失败");
++    console.error(error);
++  } finally {
++    analysisLoading.value = false;
++  }
++}
++
++function resetAnalysisSearch() {
++  Object.assign(analysisSearch, { period_value: undefined, shop_id: undefined });
++  loadAnalysis();
++}
++
 +function resetAfterSaleSearch() {
 +  Object.assign(afterSaleSearch, {
 +    period_value: undefined,
@@ -2922,17 +3373,20 @@ index 0297fcb6..84a004a7 100644
  function queryOrders() {
    orderPage.page_no = 1;
    loadOrders();
-@@ -475,6 +824,9 @@ function handleTabChange(name: string | number) {
+@@ -475,6 +928,12 @@ function handleTabChange(name: string | number) {
    if (name === "batches" && !batches.value.length) {
      loadBatches();
    }
 +  if (name === "aftersales" && !afterSales.value.length) {
 +    loadAfterSales();
 +  }
++  if (name === "analysis" && !analysis.value.items.length) {
++    loadAnalysis();
++  }
  }
  
  onMounted(async () => {
-@@ -522,6 +874,11 @@ onMounted(async () => {
+@@ -522,6 +981,11 @@ onMounted(async () => {
      color: var(--el-text-color-secondary);
    }
  

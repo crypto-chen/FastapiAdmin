@@ -126,3 +126,19 @@ git revert --no-edit <本次提交>
 
 **不需要迁移**，`update.py` 会自动跳过已应用的迁移，只做代码更新 + 重启 + 前端构建。
 页面「零售订单同步」汇总栏会同时显示「买家实付合计（含税）」与「接单未税（÷13%）」。
+
+## 8. 追加：货物出货 = 已发货订单（同日确认）
+
+PLT-09 不再取销售出库单，直接用零售订单表：**订单状态已发货即算货物出货**。
+
+```text
+PLT-09 = SUM(buyer_paid_amount WHERE status IN ('Sent')) ÷ 1.13
+```
+
+- 默认只算 `Sent`（已发货）；`RETAIL_SHIPPED_STATUSES=Sent,Delivering` 可把「发货中」也算进来；
+- `Cancelled` / `Delete` 不接入接单、也不入出货；期间用订单的 `period_value`；
+- 新增接口 `GET /retail/analysis/summary?period_value=2026-10&shop_id=`，
+  按「期间 × 店铺」返回：接单未税、出货未税、退货未税、净额、退货率；
+- 新增页签：**零售订单同步 → 平台店铺分析**。
+
+无需迁移，更新脚本同第 1 节。
