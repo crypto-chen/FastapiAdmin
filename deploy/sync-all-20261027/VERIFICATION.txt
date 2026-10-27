@@ -1,0 +1,71 @@
+2026-10-27 全部改动一次性上线脚本 —— 预演与本地实测
+=====================================================
+日期：2026-10-27    执行目录：D:\永锢\06.核算指标系统\FastapiAdmin
+本地验证库：MySQL localhost:3306 / fastapiadmin（ENVIRONMENT=dev）
+上线目标：http://120.237.174.243:6479（conda Python，非 Docker）
+
+一、产物
+------------------------------------------------------------
+    deploy\sync-all-20261027\update.py        一键上线脚本（幂等）
+    deploy\sync-all-20261027\README.md        步骤、验收、人工开关说明
+    deploy\sync-all-20261027\VERIFICATION.txt 本文件
+
+二、预演（不执行任何命令）
+------------------------------------------------------------
+命令：
+    python deploy/sync-all-20261027/update.py
+实际输出（逐字，GBK 控制台中文显示为乱码）：
+    == 拉取代码 ==      $ git pull --ff-only origin master
+    == 本次提交 ==      $ git log --oneline -9
+    == 数据库迁移 ==    $ python main.py upgrade --env prod
+    == 迁移离线校验（可升可降） == $ python scripts/check_retail_migration.py
+    == 零售推送回放任务 == $ python scripts/seed_retail_push_job.py
+    == 菜单：零售订单同步 == $ python scripts/seed_retail_menu.py
+    == 菜单：指标中心-平台分析 == $ python scripts/seed_platform_menu.py
+    == 零售数据自检 ==  $ python scripts/check_retail_data.py
+    == 开放应用-平台渠道分析开关 == $ python scripts/check_platform_analysis_access.py
+    未指定 --service：请按现有方式重启后端（systemd/screen/nohup）
+    预演完成，确认后加 --apply
+退出码：0
+
+三、本地实跑（--apply --skip-pull --env dev，14 秒）
+------------------------------------------------------------
+实际输出（逐字，节选）：
+    [16:15:49] == 数据库迁移 ==
+    [16:15:51] 所有迁移已应用。
+    == 迁移离线校验（可升可降） ==
+    [16:15:52] UPGRADE OK: 6 tables + 2 open_client columns + indexes
+               DOWNGRADE OK: retail tables and open_client columns removed
+    == 零售推送回放任务 ==
+    [16:15:54] 来源系统 id=5，来源对象 id=67，同步任务 id=86
+    == 菜单：零售订单同步 ==
+    [16:15:56] 零售订单菜单 id=221，权限 module_retail:order:query / module_retail:batch:query
+    == 菜单：指标中心-平台分析 ==
+    [16:15:59] 平台分析菜单 id=226，权限 module_metric:platform:query（已绑定 SUPER_ADMIN/ADMIN）
+    == 零售数据自检 ==
+    [16:16:01] ENVIRONMENT=EnvironmentEnum.DEV DATABASE=mysql/fastapiadmin
+               ORDERS=1302 ITEMS=7442 BATCHES=51 SHOPS=43 PERIODS=[...]
+               AFTER_SALES=0 AFTER_SALE_ITEMS=0 AFTER_SALE_PERIODS=[]
+               MENU=id:221 status:0 permission:module_retail:order:query roles:['SUPER_ADMIN', 'ADMIN']
+               PUSH_JOB=id:86 status:0
+    == 开放应用-平台渠道分析开关 ==
+    [16:16:03] 合计 3 个应用，其中已开通平台渠道分析 0 个
+    更新完成
+    重启后定时任务自动注册：订单/售后 每10分钟增量，店铺与7天补偿 每日 00/07/12/18 点
+退出码：0
+
+说明：
+- 重复执行结果一致（菜单/任务按名称幂等，id 不变）；本地已连续执行 2 次验证。
+- `AFTER_SALES=0` 是因为当前聚水潭应用没有「售后单查询」接口权限（code=190），
+  不是脚本问题；申请权限后自动开始同步。
+- 脚本日志本身兼容 Windows GBK 控制台（首次实跑遇到一个 UnicodeEncodeError 已修复，
+  见 update.py 中 log() 的兜底）。
+
+四、与其他部署包的关系
+------------------------------------------------------------
+本脚本覆盖当天全部改动，等价于按顺序执行：
+    deploy/retail-aftersale-20261027/update.py
+    deploy/retail-aftersale-20261027/update.py（13% 去税、出货/退货口径，无迁移）
+    deploy/platform-analysis-api-20261027/update.py
+    deploy/platform-metric-page-20261027/update.py
+单独回滚仍用各自目录下的 ROLLBACK.sh。
