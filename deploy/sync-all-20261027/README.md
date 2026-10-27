@@ -4,10 +4,23 @@
 
 ## 1. 一条命令
 
+**服务器（Linux bash，`\` 可换行）：**
+
 ```bash
 python deploy/sync-all-20261027/update.py --apply --service fastapiadmin \
   --build-frontend --frontend-target /usr/share/nginx/html
 ```
+
+**Windows 本机（PowerShell，不要用 `\` 换行，也不要加 `--service`）：**
+
+```powershell
+cd D:\永锢\06.核算指标系统\FastapiAdmin
+python deploy\sync-all-20261027\update.py --apply --env dev
+```
+
+PowerShell 的续行符是反引号 `` ` ``，`\` 会被当成普通参数；`systemctl` 只有服务器才有，
+本机加 `--service` 会自动跳过并提示用 `python main.py run --env=dev` 启动。
+脚本自动优先使用 `backend\.venv` 的 Python，避免误用系统 Python 缺依赖。
 
 服务器没有 Node 时，去掉 `--build-frontend`，在本机构建后上传 `frontend/web/dist/*`。
 

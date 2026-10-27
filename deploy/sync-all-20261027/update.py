@@ -35,6 +35,17 @@ FRONTEND = ROOT / "frontend" / "web"
 LOG_PATH = Path(__file__).resolve().parent / "update_run.log"
 
 
+def python_bin() -> str:
+    """优先用项目自带 venv（本机），否则用当前解释器（服务器 conda）。"""
+    for candidate in (
+        BACKEND / ".venv" / "Scripts" / "python.exe",
+        BACKEND / ".venv" / "bin" / "python",
+    ):
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
+
+
 def log(message: str) -> None:
     line = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}"
     # Windows GBK 控制台：子进程输出里的替换字符/emoji 直接 print 会抛 UnicodeEncodeError
@@ -140,14 +151,14 @@ def main() -> None:
 
     # 2) 应用迁移：b0f396df56ac（售后两表）+ retailplatform01（开放应用开关）
     run(
-        [sys.executable, "main.py", "upgrade", "--env", args.env],
+        [python_bin(), "main.py", "upgrade", "--env", args.env],
         BACKEND,
         args.apply,
         backend_env,
         title="数据库迁移",
     )
     run(
-        [sys.executable, "scripts/check_retail_migration.py"],
+        [python_bin(), "scripts/check_retail_migration.py"],
         BACKEND,
         args.apply,
         backend_env,
@@ -157,7 +168,7 @@ def main() -> None:
     if not args.skip_seeds:
         # 3) 零售推送回放任务（指标联动用，幂等）
         run(
-            [sys.executable, "scripts/seed_retail_push_job.py"],
+            [python_bin(), "scripts/seed_retail_push_job.py"],
             BACKEND,
             args.apply,
             backend_env,
@@ -166,14 +177,14 @@ def main() -> None:
         )
         # 4) 菜单：零售订单同步 / 指标中心-平台分析
         run(
-            [sys.executable, "scripts/seed_retail_menu.py"],
+            [python_bin(), "scripts/seed_retail_menu.py"],
             BACKEND,
             args.apply,
             backend_env,
             title="菜单：零售订单同步",
         )
         run(
-            [sys.executable, "scripts/seed_platform_menu.py"],
+            [python_bin(), "scripts/seed_platform_menu.py"],
             BACKEND,
             args.apply,
             backend_env,
@@ -182,7 +193,7 @@ def main() -> None:
 
     # 5) 自检：数据量 / 开放应用开关
     run(
-        [sys.executable, "scripts/check_retail_data.py"],
+        [python_bin(), "scripts/check_retail_data.py"],
         BACKEND,
         args.apply,
         backend_env,
@@ -190,7 +201,7 @@ def main() -> None:
         title="零售数据自检",
     )
     run(
-        [sys.executable, "scripts/check_platform_analysis_access.py"],
+        [python_bin(), "scripts/check_platform_analysis_access.py"],
         BACKEND,
         args.apply,
         backend_env,
@@ -201,7 +212,12 @@ def main() -> None:
     if args.build_frontend:
         build_frontend(args.apply, args.frontend_target)
 
-    if args.service:
+    if args.service and os.name == "nt":
+        log(
+            f"Windows 本机不支持 systemctl，已跳过重启（--service {args.service}）。"
+            "本机请用 python main.py run --env=dev 启动后端。"
+        )
+    elif args.service:
         run(["systemctl", "restart", args.service], ROOT, args.apply, title="重启后端")
         run(
             ["systemctl", "status", args.service, "--no-pager"],
