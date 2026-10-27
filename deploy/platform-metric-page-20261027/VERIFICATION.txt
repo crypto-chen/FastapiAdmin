@@ -1,0 +1,102 @@
+指标中心 → 平台分析 页面 —— 验证记录
+====================================
+日期：2026-10-27    执行目录：D:\永锢\06.核算指标系统\FastapiAdmin\backend
+目标库（本地验证）：MySQL localhost:3306 / fastapiadmin（ENVIRONMENT=dev）
+上线目标：http://120.237.174.243:6479 （conda Python，非 Docker）
+
+一、改动与产物
+------------------------------------------------------------
+MODIFIED_FILE（页面后端服务）
+    backend\app\modules\platform\service.py
+    实时汇总 retail_order / retail_after_sale / retail_shop，输出 PLT-xx 字段
+DIFF_FILE
+    deploy\platform-metric-page-20261027\CHANGES.diff
+VERIFICATION
+    deploy\platform-metric-page-20261027\VERIFICATION.txt（本文件）
+ROLLBACK
+    deploy\platform-metric-page-20261027\ROLLBACK.sh（+ rollback_menu.py）
+
+其他改动
+    backend\app\modules\platform\fields.py      PLT-xx 字段字典（14 个字段）
+    backend\app\modules\platform\schema.py      查询参数
+    backend\app\modules\platform\controller.py  /platform/{fields,periods,platforms,page,stats}
+    backend\app\api\v1\routers.py               注册 /platform 域
+    backend\scripts\seed_platform_menu.py       菜单 + 权限（module_metric:platform:query）
+    backend\tests\test_platform_analysis.py     3 个用例
+    frontend\web\src\api\module_platform\index.ts
+    frontend\web\src\views\module_metric\platform\index.vue
+    docs\平台店铺分析指标对接方案.md              补充指标中心页面说明
+
+二、验证
+------------------------------------------------------------
+1) 路由注册
+命令：
+    cd backend
+    .venv\Scripts\python.exe -c "from app import create_app; print(sorted(create_app().openapi()['paths']))"
+实际输出（节选逐字）：
+    '/platform/fields', '/platform/page', '/platform/periods', '/platform/platforms', '/platform/stats'
+    '/open/v1/retail/platform/analysis'
+退出码：0
+
+2) 单元测试（平台归一 + 鉴权 + 取数）
+命令：
+    .venv\Scripts\python.exe -m pytest tests/test_platform_analysis.py -q
+实际输出（逐字）：
+    ...                                                                      [100%]
+    3 passed in 1.89s
+用例覆盖：
+    normalize_platform('淘宝天猫') == '天猫'、'京东POP' == '京东'、'商家自有商城' == '其他'
+    /platform/page|fields|periods 未登录 → 401/403
+    3 张订单（天猫 113 Sent + 500 Cancelled、京东 226 Sent）：
+        京东  PLT-08=200.00 PLT-09=200.00 PLT-12=200.00
+        天猫  PLT-08=542.48 PLT-09=100.00 PLT-11=-442.48 PLT-12=-342.48
+        summary intake=742.48 net=-142.48 top_platforms[0]=京东
+退出码：0
+
+3) 真实库取数（本地 dev，全部期间）
+命令：
+    .venv\Scripts\python.exe ..\artifacts\plat_check.py
+实际输出（逐字，控制台 GBK 中文显示为乱码）：
+    PERIODS ['2026-10', '2026-08', ... '2025-10']
+    PLATFORMS ['1688', '<天猫>', '<小红书>', '<拼多多>', '<抖音>']
+    TOTAL 11 SUMMARY {"shop_count": 62, "platform_count": 11, "order_count": 1300,
+     "shipped_order_count": 1149, "cancelled_order_count": 20, ...}
+退出码：0
+说明：dev 库大部分订单没金额字段，所以金额为 0；结构与聚合链路正确。
+
+4) 菜单注册（可重复执行）
+命令：
+    .venv\Scripts\python.exe scripts/seed_platform_menu.py
+实际输出（逐字）：
+    平台分析菜单 id=226，权限 module_metric:platform:query（已绑定 SUPER_ADMIN/ADMIN）
+重复执行不会产生重复菜单（按「名称 + 上级」幂等）。
+退出码：0
+
+5) 前端
+命令：
+    cd frontend/web
+    pnpm run type-check
+    pnpm run build:prod
+实际输出：
+    > vue-tsc --noEmit        （无错误）
+    ✓ built in 1m 7s
+产物校验：
+    Select-String -Path dist/js/*.js -Pattern "platform/fields" -List
+    → dist\js\route-loader.C7zR9LYy.js
+退出码：0
+
+三、ROLLBACK（本地实测）
+------------------------------------------------------------
+命令：
+    backend\.venv\Scripts\python.exe deploy/platform-metric-page-20261027/rollback_menu.py
+    cd backend; .venv\Scripts\python.exe scripts/seed_platform_menu.py
+实际输出（逐字）：
+    已删除菜单 [224, 225]（含子按钮）及角色绑定
+    平台分析菜单 id=226，权限 module_metric:platform:query（已绑定 SUPER_ADMIN/ADMIN）
+结论：菜单可删可重建，无残留；无数据库结构变更。
+
+四、服务器上线（用户执行）
+------------------------------------------------------------
+    python deploy/platform-metric-page-20261027/update.py --apply --service fastapiadmin
+    python deploy/platform-metric-page-20261027/update.py --apply --service fastapiadmin \
+      --build-frontend --frontend-target /usr/share/nginx/html

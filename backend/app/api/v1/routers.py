@@ -26,6 +26,7 @@ from app.modules.monitor.online.controller import OnlineRouter
 from app.modules.monitor.server.controller import ServerRouter
 from app.modules.openapi.controller import OpenApiLogRouter, OpenClientRouter
 from app.modules.order.controller import OrderRouter
+from app.modules.platform.controller import PlatformAnalysisRouter
 from app.modules.product.controller import ProductLineRouter
 from app.modules.retail.controller import RetailRouter
 from app.modules.system.auth.controller import AuthRouter
@@ -99,6 +100,7 @@ DOMAIN_CONTROLLERS: dict[str, list[APIRouter]] = {
     "/order": [OrderRouter],
     "/customer": [CustomerRouter],
     "/product": [ProductLineRouter],
+    "/platform": [PlatformAnalysisRouter],
     "/retail": [RetailRouter],
     "/openapi": [OpenClientRouter, OpenApiLogRouter],
     "/system-mapping": [SystemMappingRouter],

@@ -1,0 +1,1475 @@
+diff --git a/backend/app/api/v1/routers.py b/backend/app/api/v1/routers.py
+index 171aff73..e6d05f5d 100644
+--- a/backend/app/api/v1/routers.py
++++ b/backend/app/api/v1/routers.py
+@@ -26,6 +26,7 @@ from app.modules.monitor.online.controller import OnlineRouter
+ from app.modules.monitor.server.controller import ServerRouter
+ from app.modules.openapi.controller import OpenApiLogRouter, OpenClientRouter
+ from app.modules.order.controller import OrderRouter
++from app.modules.platform.controller import PlatformAnalysisRouter
+ from app.modules.product.controller import ProductLineRouter
+ from app.modules.retail.controller import RetailRouter
+ from app.modules.system.auth.controller import AuthRouter
+@@ -99,6 +100,7 @@ DOMAIN_CONTROLLERS: dict[str, list[APIRouter]] = {
+     "/order": [OrderRouter],
+     "/customer": [CustomerRouter],
+     "/product": [ProductLineRouter],
++    "/platform": [PlatformAnalysisRouter],
+     "/retail": [RetailRouter],
+     "/openapi": [OpenClientRouter, OpenApiLogRouter],
+     "/system-mapping": [SystemMappingRouter],
+diff --git a/backend/app/modules/platform/__init__.py b/backend/app/modules/platform/__init__.py
+new file mode 100644
+index 00000000..53b37146
+--- /dev/null
++++ b/backend/app/modules/platform/__init__.py
+@@ -0,0 +1 @@
++"""平台渠道分析（指标中心 → 平台分析）。"""
+diff --git a/backend/app/modules/platform/controller.py b/backend/app/modules/platform/controller.py
+new file mode 100644
+index 00000000..e0c9723f
+--- /dev/null
++++ b/backend/app/modules/platform/controller.py
+@@ -0,0 +1,68 @@
++"""平台分析（指标中心 → 平台分析）。"""
++
++from typing import Annotated
++
++from fastapi import APIRouter, Depends, Query, Security
++from fastapi.responses import JSONResponse
++from sqlalchemy.ext.asyncio import AsyncSession
++
++from app.common.response import ResponseSchema, SuccessResponse
++from app.core.base_schema import AuthSchema
++from app.core.dependencies import AuthPermission, db_getter
++from app.core.router_class import OperationLogRoute
++
++from .schema import PlatformAnalysisQueryParam
++from .service import PlatformAnalysisService
++
++PlatformAnalysisRouter = APIRouter(route_class=OperationLogRoute, tags=["平台分析"])
++
++PERM_QUERY = "module_metric:platform:query"
++
++
++@PlatformAnalysisRouter.get("/fields", response_model=ResponseSchema[list[dict]])
++async def list_platform_fields(
++    auth: Annotated[AuthSchema, Security(AuthPermission([PERM_QUERY]))],
++    db: Annotated[AsyncSession, Depends(db_getter)],
++) -> JSONResponse:
++    result = await PlatformAnalysisService(db).fields()
++    return SuccessResponse(data=result, msg="查询平台分析字段成功")
++
++
++@PlatformAnalysisRouter.get("/periods", response_model=ResponseSchema[list[str]])
++async def list_platform_periods(
++    auth: Annotated[AuthSchema, Security(AuthPermission([PERM_QUERY]))],
++    db: Annotated[AsyncSession, Depends(db_getter)],
++) -> JSONResponse:
++    result = await PlatformAnalysisService(db).periods()
++    return SuccessResponse(data=result, msg="查询平台分析期间成功")
++
++
++@PlatformAnalysisRouter.get("/platforms", response_model=ResponseSchema[list[str]])
++async def list_platform_options(
++    auth: Annotated[AuthSchema, Security(AuthPermission([PERM_QUERY]))],
++    db: Annotated[AsyncSession, Depends(db_getter)],
++) -> JSONResponse:
++    result = await PlatformAnalysisService(db).platform_options()
++    return SuccessResponse(data=result, msg="查询平台字典成功")
++
++
++@PlatformAnalysisRouter.get("/page", response_model=ResponseSchema[dict])
++async def page_platform_analysis(
++    auth: Annotated[AuthSchema, Security(AuthPermission([PERM_QUERY]))],
++    db: Annotated[AsyncSession, Depends(db_getter)],
++    search: Annotated[PlatformAnalysisQueryParam, Query()],
++) -> JSONResponse:
++    result = await PlatformAnalysisService(db).page(
++        search, search.page_no, search.page_size
++    )
++    return SuccessResponse(data=result, msg="查询平台分析成功")
++
++
++@PlatformAnalysisRouter.get("/stats", response_model=ResponseSchema[dict])
++async def platform_analysis_stats(
++    auth: Annotated[AuthSchema, Security(AuthPermission([PERM_QUERY]))],
++    db: Annotated[AsyncSession, Depends(db_getter)],
++    period_value: Annotated[str | None, Query(max_length=16, description="期间 YYYY-MM")] = None,
++) -> JSONResponse:
++    result = await PlatformAnalysisService(db).stats(period_value)
++    return SuccessResponse(data=result, msg="查询平台分析汇总成功")
+diff --git a/backend/app/modules/platform/fields.py b/backend/app/modules/platform/fields.py
+new file mode 100644
+index 00000000..cfb52972
+--- /dev/null
++++ b/backend/app/modules/platform/fields.py
+@@ -0,0 +1,182 @@
++"""平台分析字段字典（PLT-xx）。
++
++与产品线分析的 PRD-xx 一样，字段说明由后端下发，前端按 ``field_code`` 渲染列。
++数据不落宽表，实时从 ``retail_order`` / ``retail_after_sale`` / ``retail_shop`` 汇总。
++"""
++
++from typing import Any
++
++PLATFORM_FIELDS: list[dict[str, Any]] = [
++    {
++        "field_code": "PLT-00",
++        "field_name": "期间",
++        "data_type": "string",
++        "group": "维度",
++        "sensitive": False,
++        "source": "retail_order",
++        "note": "订单归属期间 YYYY-MM（as_date→created→modified→confirm_date 的第一个可用时间）",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_order.period_value",
++    },
++    {
++        "field_code": "PLT-01",
++        "field_name": "平台",
++        "data_type": "string",
++        "group": "维度",
++        "sensitive": False,
++        "source": "retail_shop",
++        "note": "由 retail_shop.shop_site 归一：京东/天猫/拼多多/抖音/其他",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_shop.shop_site",
++    },
++    {
++        "field_code": "PLT-02",
++        "field_name": "店铺",
++        "data_type": "string",
++        "group": "维度",
++        "sensitive": False,
++        "source": "retail_shop",
++        "note": "店铺名称，缺店铺主数据时回退订单上的 shop_name",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_shop.shop_name",
++    },
++    {
++        "field_code": "PLT-03",
++        "field_name": "店铺编号",
++        "data_type": "number",
++        "group": "维度",
++        "sensitive": False,
++        "source": "retail_order",
++        "note": "聚水潭 shop_id",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_order.shop_id",
++    },
++    {
++        "field_code": "PLT-04",
++        "field_name": "订单数",
++        "data_type": "number",
++        "group": "数量",
++        "sensitive": False,
++        "source": "retail_order",
++        "note": "期间内有效订单数（排除 Delete，含取消单）",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_order",
++    },
++    {
++        "field_code": "PLT-05",
++        "field_name": "已发货单数",
++        "data_type": "number",
++        "group": "数量",
++        "sensitive": False,
++        "source": "retail_order",
++        "note": "订单状态命中 RETAIL_SHIPPED_STATUSES（默认 Sent）",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_order.status",
++    },
++    {
++        "field_code": "PLT-06",
++        "field_name": "取消单数",
++        "data_type": "number",
++        "group": "数量",
++        "sensitive": False,
++        "source": "retail_order",
++        "note": "订单状态命中 RETAIL_CANCELLED_STATUSES（默认 Cancelled）",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_order.status",
++    },
++    {
++        "field_code": "PLT-08",
++        "field_name": "接单未税",
++        "data_type": "number",
++        "group": "金额",
++        "sensitive": True,
++        "source": "retail_order",
++        "note": "Σ 买家实付 ÷ (1 + RETAIL_TAX_RATE/100)，默认 13%，含后续取消的单",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_order.buyer_paid_amount",
++    },
++    {
++        "field_code": "PLT-09",
++        "field_name": "货物出货未税",
++        "data_type": "number",
++        "group": "金额",
++        "sensitive": True,
++        "source": "retail_order",
++        "note": "已发货订单金额 ÷ 1.13（订单已发货即算货物出货）",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_order.buyer_paid_amount",
++    },
++    {
++        "field_code": "PLT-10",
++        "field_name": "取消未税",
++        "data_type": "number",
++        "group": "金额",
++        "sensitive": True,
++        "source": "retail_order",
++        "note": "取消单金额 ÷ 1.13，负数（已并入 PLT-11）",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_order.buyer_paid_amount",
++    },
++    {
++        "field_code": "PLT-11",
++        "field_name": "退货退款",
++        "data_type": "number",
++        "group": "金额",
++        "sensitive": True,
++        "source": "retail_after_sale + retail_order",
++        "note": "-(取消单金额 + 发货后售后实退) ÷ 1.13，负数",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "retail_after_sale.actual_refund",
++    },
++    {
++        "field_code": "PLT-12",
++        "field_name": "对外出货净额",
++        "data_type": "number",
++        "group": "金额",
++        "sensitive": True,
++        "source": "计算",
++        "note": "PLT-09 + PLT-11（PLT-11 为负数）",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "计算字段",
++    },
++    {
++        "field_code": "PLT-13",
++        "field_name": "营销结算收入10%",
++        "data_type": "number",
++        "group": "金额",
++        "sensitive": True,
++        "source": "计算",
++        "note": "PLT-12 × 10%（RETAIL_SETTLEMENT_RATE 可配）",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "计算字段",
++    },
++    {
++        "field_code": "PLT-37",
++        "field_name": "退货率",
++        "data_type": "percent",
++        "group": "比率",
++        "sensitive": False,
++        "source": "计算",
++        "note": "|PLT-11| ÷ PLT-12，PLT-12 ≤ 0 时改用 PLT-09 作分母",
++        "status": "ready",
++        "status_label": "现用可出",
++        "stored_in": "计算字段",
++    },
++]
++
++
++def field_codes() -> list[str]:
++    return [item["field_code"] for item in PLATFORM_FIELDS]
+diff --git a/backend/app/modules/platform/schema.py b/backend/app/modules/platform/schema.py
+new file mode 100644
+index 00000000..97af6fde
+--- /dev/null
++++ b/backend/app/modules/platform/schema.py
+@@ -0,0 +1,17 @@
++"""平台分析查询参数。"""
++
++from pydantic import BaseModel, Field
++
++
++class PlatformAnalysisQueryParam(BaseModel):
++    """平台分析列表查询参数。"""
++
++    period_value: str | None = Field(default=None, max_length=16, description="期间 YYYY-MM")
++    platform: str | None = Field(default=None, max_length=32, description="平台（归一后）")
++    shop_id: int | None = Field(default=None, ge=0, description="店铺编号")
++    keyword: str | None = Field(default=None, max_length=128, description="平台/店铺（模糊）")
++    aggregate_level: str = Field(
++        default="detail", pattern="^(detail|platform|all)$", description="detail=店铺明细 / platform=平台小计 / all=全部"
++    )
++    page_no: int = Field(default=1, ge=1, description="页码")
++    page_size: int = Field(default=50, ge=1, le=500, description="每页数量")
+diff --git a/backend/app/modules/platform/service.py b/backend/app/modules/platform/service.py
+new file mode 100644
+index 00000000..75ea1e1f
+--- /dev/null
++++ b/backend/app/modules/platform/service.py
+@@ -0,0 +1,288 @@
++"""平台分析取数：从零售订单/售后/店铺主数据实时汇总，不落宽表。
++
++输出按 ``PLT-xx`` 字段编码组织，前端与产品线分析一样按字段编码渲染列。
++"""
++
++from __future__ import annotations
++
++from typing import Any
++
++from sqlalchemy import select
++from sqlalchemy.ext.asyncio import AsyncSession
++
++from app.modules.retail.model import RetailOrderModel, RetailShopModel
++from app.modules.retail.query_service import (
++    RetailQueryService,
++    retail_tax_rate,
++    settlement_rate,
++)
++
++from .fields import PLATFORM_FIELDS
++from .schema import PlatformAnalysisQueryParam
++
++# 需要求和的金额/数量字段（比率字段由分子分母重算）
++SUM_FIELDS = ("PLT-04", "PLT-05", "PLT-06", "PLT-08", "PLT-09", "PLT-10", "PLT-11", "PLT-12", "PLT-13")
++NUMERIC_FIELDS = {item["field_code"] for item in PLATFORM_FIELDS if item["data_type"] in {"number", "percent"}}
++
++PLATFORM_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
++    ("天猫", ("天猫", "淘宝")),
++    ("京东", ("京东",)),
++    ("拼多多", ("拼多多", "多多")),
++    ("抖音", ("抖音", "抖店")),
++    ("小红书", ("小红书",)),
++    ("1688", ("1688", "阿里巴巴")),
++)
++
++
++def normalize_platform(raw: str | None) -> str:
++    """把 ``retail_shop.shop_site`` 归一成平台大类。"""
++    text = (raw or "").strip()
++    if not text:
++        return "其他"
++    for name, keywords in PLATFORM_KEYWORDS:
++        if any(keyword in text for keyword in keywords):
++            return name
++    return "其他"
++
++
++def _rate(return_abs: float, net: float, shipment: float) -> float:
++    base = net if net > 0 else shipment
++    return round(return_abs / base, 4) if base else 0.0
++
++
++def _row(
++    *,
++    period: str,
++    platform: str,
++    shop_name: str,
++    shop_id: int | str,
++    order_count: int,
++    shipped_count: int,
++    cancelled_count: int,
++    intake: float,
++    shipment: float,
++    cancelled: float,
++    refund: float,
++    level: str,
++    row_id: str,
++) -> dict[str, Any]:
++    # PLT-11 退货退款 = 取消单 + 发货后售后（两者都为负数）
++    return_total = round(cancelled + refund, 2)
++    return_abs = abs(return_total)
++    net = round(shipment + return_total, 2)
++    return {
++        "id": row_id,
++        "is_aggregate": {"detail": 0, "platform": 1, "total": 2}.get(level, 0),
++        "aggregate_level": level,
++        "period_value": period,
++        "PLT-00": period,
++        "PLT-01": platform,
++        "PLT-02": shop_name,
++        "PLT-03": shop_id,
++        "PLT-04": order_count,
++        "PLT-05": shipped_count,
++        "PLT-06": cancelled_count,
++        "PLT-08": round(intake, 2),
++        "PLT-09": round(shipment, 2),
++        "PLT-10": round(cancelled, 2),
++        "PLT-11": return_total,
++        "PLT-12": net,
++        "PLT-13": round(net * settlement_rate() / 100, 2),
++        "PLT-37": _rate(return_abs, net, shipment),
++    }
++
++
++class PlatformAnalysisService:
++    """平台分析（指标中心 → 平台分析）。"""
++
++    def __init__(self, db: AsyncSession) -> None:
++        self.db = db
++
++    async def fields(self) -> list[dict[str, Any]]:
++        return PLATFORM_FIELDS
++
++    async def periods(self) -> list[str]:
++        rows = (
++            await self.db.execute(
++                select(RetailOrderModel.period_value)
++                .where(RetailOrderModel.is_deleted == False)  # noqa: E712
++                .distinct()
++                .order_by(RetailOrderModel.period_value.desc())
++                .limit(36)
++            )
++        ).scalars().all()
++        return [str(item) for item in rows if item]
++
++    async def platform_options(self) -> list[str]:
++        rows = (
++            await self.db.execute(
++                select(RetailShopModel.shop_site)
++                .where(RetailShopModel.is_deleted == False)  # noqa: E712
++                .distinct()
++            )
++        ).scalars().all()
++        return sorted({normalize_platform(item) for item in rows})
++
++    async def _shop_map(self) -> dict[int, dict[str, Any]]:
++        rows = (
++            await self.db.execute(
++                select(
++                    RetailShopModel.shop_id,
++                    RetailShopModel.shop_name,
++                    RetailShopModel.shop_site,
++                ).where(RetailShopModel.is_deleted == False)  # noqa: E712
++            )
++        ).all()
++        return {
++            int(row[0]): {"shop_name": row[1], "shop_site": row[2]}
++            for row in rows
++        }
++
++    async def _detail_rows(self, period_value: str | None) -> list[dict[str, Any]]:
++        data = await RetailQueryService(self.db).analysis_summary(period_value)
++        shop_map = await self._shop_map()
++        rows: list[dict[str, Any]] = []
++        for item in data.get("items") or []:
++            shop_id = int(item["shop_id"])
++            shop = shop_map.get(shop_id, {})
++            platform = normalize_platform(shop.get("shop_site"))
++            shop_name = item.get("shop_name") or shop.get("shop_name") or f"店铺{shop_id}"
++            rows.append(
++                _row(
++                    period=item["period_value"],
++                    platform=platform,
++                    shop_name=shop_name,
++                    shop_id=shop_id,
++                    order_count=int(item["order_count"]),
++                    shipped_count=int(item["shipped_order_count"]),
++                    cancelled_count=int(item["cancelled_order_count"]),
++                    intake=float(item["intake_untaxed"]),
++                    shipment=float(item["shipment_untaxed"]),
++                    cancelled=float(item["cancelled_untaxed"]),
++                    refund=float(item["refund_untaxed"]),
++                    level="detail",
++                    row_id=f"detail-{item['period_value']}-{shop_id}",
++                )
++            )
++        return rows
++
++    @staticmethod
++    def _aggregate(rows: list[dict[str, Any]], level: str) -> list[dict[str, Any]]:
++        buckets: dict[tuple[str, str], dict[str, Any]] = {}
++        for row in rows:
++            key = (row["PLT-00"], row["PLT-01"] if level == "platform" else "全部")
++            bucket = buckets.get(key)
++            if bucket is None:
++                bucket = dict.fromkeys(SUM_FIELDS, 0)
++                bucket["PLT-00"] = row["PLT-00"]
++                bucket["PLT-01"] = "全部" if level == "total" else row["PLT-01"]
++                buckets[key] = bucket
++            for field in SUM_FIELDS:
++                bucket[field] = round(float(bucket[field]) + float(row.get(field) or 0), 2)
++
++        result: list[dict[str, Any]] = []
++        for (period, name), bucket in buckets.items():
++            result.append(
++                _row(
++                    period=period,
++                    platform=bucket["PLT-01"],
++                    shop_name="合计" if level == "total" else f"{name} 小计",
++                    shop_id="",
++                    order_count=int(bucket["PLT-04"]),
++                    shipped_count=int(bucket["PLT-05"]),
++                    cancelled_count=int(bucket["PLT-06"]),
++                    intake=float(bucket["PLT-08"]),
++                    shipment=float(bucket["PLT-09"]),
++                    cancelled=float(bucket["PLT-10"]),
++                    # bucket 的 PLT-11 已含取消，这里只取「发货后售后」部分再交给 _row 组装
++                    refund=round(float(bucket["PLT-11"]) - float(bucket["PLT-10"]), 2),
++                    level=level,
++                    row_id=f"{level}-{period}-{name}",
++                )
++            )
++        result.sort(key=lambda item: (item["PLT-00"], item["PLT-12"]), reverse=True)
++        return result
++
++    async def page(
++        self, search: PlatformAnalysisQueryParam, page_no: int, page_size: int
++    ) -> dict[str, Any]:
++        rows = await self._detail_rows(search.period_value)
++        if search.platform:
++            target = search.platform.strip()
++            rows = [row for row in rows if row["PLT-01"] == target]
++        if search.shop_id is not None:
++            rows = [row for row in rows if row["PLT-03"] == search.shop_id]
++        if search.keyword and search.keyword.strip():
++            token = search.keyword.strip()
++            rows = [
++                row
++                for row in rows
++                if token in str(row["PLT-01"]) or token in str(row["PLT-02"]) or token == str(row["PLT-03"])
++            ]
++
++        platform_rows = self._aggregate(rows, "platform") if rows else []
++        total_rows = self._aggregate(rows, "total") if rows else []
++        if search.aggregate_level == "detail":
++            combined = list(rows)
++        elif search.aggregate_level == "platform":
++            combined = platform_rows
++        else:
++            combined = total_rows + platform_rows + rows
++
++        summary = self._summary(rows, platform_rows)
++        total = len(combined)
++        start = (page_no - 1) * page_size
++        return {
++            "items": combined[start : start + page_size],
++            "columns": PLATFORM_FIELDS,
++            "total": total,
++            "page_no": page_no,
++            "page_size": page_size,
++            "has_next": start + page_size < total,
++            "period_value": search.period_value,
++            "tax_rate": retail_tax_rate(),
++            "summary": summary,
++        }
++
++    def _summary(self, detail_rows: list[dict[str, Any]], platform_rows: list[dict[str, Any]]) -> dict[str, Any]:
++        def _sum(field: str) -> float:
++            return round(sum(float(row.get(field) or 0) for row in detail_rows), 2)
++
++        shipment = _sum("PLT-09")
++        # PLT-11 已含取消单（PLT-10），这里只按 PLT-11 取退货合计，避免重复
++        return_abs = abs(_sum("PLT-11"))
++        net = round(shipment - return_abs, 2)
++        return {
++            "period_value": detail_rows[0]["PLT-00"] if detail_rows else None,
++            "shop_count": len(detail_rows),
++            "platform_count": len(platform_rows),
++            "order_count": int(_sum("PLT-04")),
++            "shipped_order_count": int(_sum("PLT-05")),
++            "cancelled_order_count": int(_sum("PLT-06")),
++            "intake_untaxed_sum": _sum("PLT-08"),
++            "shipment_untaxed_sum": shipment,
++            "return_untaxed_sum": round(-return_abs, 2),
++            "net_shipment_sum": net,
++            "settlement_income_sum": round(net * settlement_rate() / 100, 2),
++            "return_rate": _rate(return_abs, net, shipment),
++            "top_platforms": sorted(
++                [
++                    {
++                        "platform": row["PLT-01"],
++                        "order_count": row["PLT-04"],
++                        "intake_untaxed": row["PLT-08"],
++                        "shipment_untaxed": row["PLT-09"],
++                        "net_shipment": row["PLT-12"],
++                        "settlement_income": row["PLT-13"],
++                        "return_rate": row["PLT-37"],
++                    }
++                    for row in platform_rows
++                ],
++                key=lambda item: item["net_shipment"],
++                reverse=True,
++            )[:10],
++        }
++
++    async def stats(self, period_value: str | None) -> dict[str, Any]:
++        rows = await self._detail_rows(period_value)
++        return self._summary(rows, self._aggregate(rows, "platform") if rows else [])
+diff --git a/backend/scripts/seed_platform_menu.py b/backend/scripts/seed_platform_menu.py
+new file mode 100644
+index 00000000..44eef6c3
+--- /dev/null
++++ b/backend/scripts/seed_platform_menu.py
+@@ -0,0 +1,117 @@
++"""初始化「指标中心 → 平台分析」菜单与权限。
++
++页面：``frontend/web/src/views/module_metric/platform/index.vue``
++权限：``module_metric:platform:query``
++
++用法::
++
++    cd backend
++    python scripts/seed_platform_menu.py
++"""
++
++import asyncio
++import sys
++from pathlib import Path
++
++from sqlalchemy import select
++
++PROJECT_ROOT = Path(__file__).resolve().parents[1]
++if str(PROJECT_ROOT) not in sys.path:
++    sys.path.insert(0, str(PROJECT_ROOT))
++
++from app.core.base_model import MappedBase  # noqa: E402
++from app.core.database import async_db_session, async_engine  # noqa: E402
++from app.modules.system.menu.model import MenuModel  # noqa: E402
++from app.modules.system.role.model import RoleMenusModel, RoleModel  # noqa: E402
++from app.utils.import_util import ImportUtil  # noqa: E402
++
++ImportUtil.find_models(MappedBase)
++
++PARENT_NAME = "指标中心"
++MENU_NAME = "平台分析"
++MENU_PERMISSION = "module_metric:platform:query"
++
++
++async def get_or_create(db, name: str, parent_id: int | None, **kwargs) -> MenuModel:
++    """按「名称 + 上级」幂等创建菜单。"""
++    parent_condition = MenuModel.parent_id == parent_id if parent_id else MenuModel.parent_id.is_(None)
++    obj = (
++        await db.execute(select(MenuModel).where(MenuModel.name == name, parent_condition))
++    ).scalars().first()
++    if obj is None:
++        obj = MenuModel(name=name, parent_id=parent_id, **kwargs)
++        db.add(obj)
++        await db.flush()
++    else:
++        for key, value in kwargs.items():
++            setattr(obj, key, value)
++    return obj
++
++
++async def main() -> None:
++    async with async_db_session() as db, db.begin():
++        parent = await get_or_create(
++            db,
++            PARENT_NAME,
++            None,
++            type=1,
++            order=9,
++            icon="ri:bar-chart-box-line",
++            route_name="Metric",
++            route_path="/metric",
++            redirect="/metric/value",
++            status=0,
++            title=PARENT_NAME,
++            scope="web",
++        )
++
++        menu = await get_or_create(
++            db,
++            MENU_NAME,
++            parent.id,
++            type=2,
++            order=5,
++            permission=MENU_PERMISSION,
++            route_name="MetricPlatformAnalysis",
++            route_path="platform",
++            component_path="module_metric/platform/index",
++            status=0,
++            title=MENU_NAME,
++            scope="web",
++        )
++
++        menu_ids = [parent.id, menu.id]
++        button = await get_or_create(
++            db,
++            "平台分析查询",
++            menu.id,
++            type=3,
++            order=1,
++            permission=MENU_PERMISSION,
++            status=0,
++            scope="web",
++        )
++        menu_ids.append(button.id)
++
++        roles = (
++            await db.execute(select(RoleModel).where(RoleModel.code.in_(["SUPER_ADMIN", "ADMIN"])))
++        ).scalars().all()
++        for role in roles:
++            for menu_id in sorted(set(menu_ids)):
++                exists = (
++                    await db.execute(
++                        select(RoleMenusModel).where(
++                            RoleMenusModel.role_id == role.id,
++                            RoleMenusModel.menu_id == menu_id,
++                        )
++                    )
++                ).scalars().first()
++                if exists is None:
++                    db.add(RoleMenusModel(role_id=role.id, menu_id=menu_id))
++
++        print(f"平台分析菜单 id={menu.id}，权限 {MENU_PERMISSION}（已绑定 SUPER_ADMIN/ADMIN）")
++    await async_engine.dispose()
++
++
++if __name__ == "__main__":
++    asyncio.run(main())
+diff --git a/backend/tests/test_platform_analysis.py b/backend/tests/test_platform_analysis.py
+new file mode 100644
+index 00000000..ab1a5e2b
+--- /dev/null
++++ b/backend/tests/test_platform_analysis.py
+@@ -0,0 +1,148 @@
++"""平台分析（指标中心 → 平台分析）：接口鉴权 + 取数与平台归一。"""
++
++import asyncio
++from collections.abc import AsyncGenerator, Generator
++from contextlib import asynccontextmanager
++from typing import Any
++
++import pytest
++import redis.asyncio
++from fastapi import FastAPI
++from fastapi.testclient import TestClient
++from sqlalchemy import delete
++
++from app import create_app
++from app.core.base_model import MappedBase
++from app.core.database import async_db_session, async_engine
++from app.modules.platform.schema import PlatformAnalysisQueryParam
++from app.modules.platform.service import PlatformAnalysisService, normalize_platform
++from app.modules.retail.model import (
++    RetailAfterSaleItemModel,
++    RetailAfterSaleModel,
++    RetailOrderItemModel,
++    RetailOrderModel,
++    RetailShopModel,
++)
++
++_TABLES = (
++    "sys_user",
++    "open_api_log",
++    "retail_order",
++    "retail_order_item",
++    "retail_after_sale",
++    "retail_after_sale_item",
++    "retail_shop",
++)
++
++
++@asynccontextmanager
++async def _lifespan(app: FastAPI) -> AsyncGenerator[Any, None]:
++    tables = [MappedBase.metadata.tables[name] for name in _TABLES]
++    async with async_engine.begin() as conn:
++        await conn.run_sync(MappedBase.metadata.create_all, tables=tables)
++    app.state.redis = redis.asyncio.Redis.from_url("redis://localhost:6379/0")
++    yield
++
++
++@pytest.fixture(scope="module")
++def platform_client() -> Generator[TestClient, Any, None]:
++    app = create_app()
++    app.router.lifespan_context = _lifespan
++    with TestClient(app) as client:
++        yield client
++
++
++def test_normalize_platform() -> None:
++    assert normalize_platform("淘宝天猫") == "天猫"
++    assert normalize_platform("京东POP") == "京东"
++    assert normalize_platform("拼多多") == "拼多多"
++    assert normalize_platform("抖音小店") == "抖音"
++    assert normalize_platform("商家自有商城") == "其他"
++    assert normalize_platform(None) == "其他"
++
++
++def test_platform_page_requires_auth(platform_client: TestClient) -> None:
++    for path in ("/platform/page", "/platform/fields", "/platform/periods"):
++        assert platform_client.get(path).status_code in (401, 403)
++
++
++def test_platform_service_aggregates(platform_client: TestClient) -> None:
++    async def _seed() -> None:
++        async with async_db_session() as db, db.begin():
++            await db.execute(delete(RetailOrderItemModel))
++            await db.execute(delete(RetailOrderModel))
++            await db.execute(delete(RetailAfterSaleItemModel))
++            await db.execute(delete(RetailAfterSaleModel))
++            await db.execute(delete(RetailShopModel))
++            db.add_all(
++                [
++                    RetailShopModel(source="jushuitan", shop_id=1, shop_name="天猫店", shop_site="淘宝天猫"),
++                    RetailShopModel(source="jushuitan", shop_id=2, shop_name="京东店", shop_site="京东"),
++                ]
++            )
++            rows = [
++                {"so_id": "P-1", "shop_id": 1, "status": "Sent", "order_date": "2026-10-02 10:00:00",
++                 "buyer_paid_amount": 113.0},
++                {"so_id": "P-2", "shop_id": 1, "status": "Cancelled", "order_date": "2026-10-03 10:00:00",
++                 "buyer_paid_amount": 500.0},
++                {"so_id": "P-3", "shop_id": 2, "status": "Sent", "order_date": "2026-10-04 10:00:00",
++                 "buyer_paid_amount": 226.0},
++            ]
++            for row in rows:
++                db.add(
++                    RetailOrderModel(
++                        order_key=f"qimen:{row['shop_id']}:{row['so_id']}",
++                        source="qimen",
++                        shop_id=row["shop_id"],
++                        so_id=row["so_id"],
++                        status=row["status"],
++                        order_date=__import__("datetime").datetime.fromisoformat(row["order_date"]),
++                        period_value="2026-10",
++                        buyer_paid_amount=row["buyer_paid_amount"],
++                        content_hash=f"h-{row['so_id']}",
++                        first_batch_id="test",
++                        last_batch_id="test",
++                    )
++                )
++
++    asyncio.run(_seed())
++
++    async def _check() -> None:
++        async with async_db_session() as db:
++            service = PlatformAnalysisService(db)
++            # 平台小计
++            page = await service.page(
++                PlatformAnalysisQueryParam(period_value="2026-10", aggregate_level="platform"), 1, 20
++            )
++            assert page["total"] == 2
++            by_platform = {row["PLT-01"]: row for row in page["items"]}
++            assert set(by_platform) == {"天猫", "京东"}
++            assert by_platform["京东"]["PLT-08"] == 200.0
++            assert by_platform["京东"]["PLT-09"] == 200.0
++            assert by_platform["京东"]["PLT-12"] == 200.0
++            assert by_platform["天猫"]["PLT-08"] == 542.48
++            assert by_platform["天猫"]["PLT-09"] == 100.0
++            assert by_platform["天猫"]["PLT-11"] == -442.48
++            assert by_platform["天猫"]["PLT-12"] == -342.48
++
++            # 店铺明细
++            detail = await service.page(
++                PlatformAnalysisQueryParam(period_value="2026-10", aggregate_level="detail"), 1, 20
++            )
++            assert detail["total"] == 2
++            assert {row["PLT-02"] for row in detail["items"]} == {"天猫店", "京东店"}
++
++            # 汇总
++            summary = page["summary"]
++            assert summary["platform_count"] == 2
++            assert summary["shop_count"] == 2
++            assert summary["order_count"] == 3
++            assert summary["intake_untaxed_sum"] == 742.48
++            assert summary["net_shipment_sum"] == -142.48
++            assert summary["top_platforms"][0]["platform"] == "京东"
++
++            assert {item["field_code"] for item in await service.fields()} >= {
++                "PLT-08", "PLT-09", "PLT-11", "PLT-12", "PLT-13", "PLT-37",
++            }
++
++    asyncio.run(_check())
+diff --git "a/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md" "b/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md"
+index 12e8b604..3f2c41b9 100644
+--- "a/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md"
++++ "b/docs/\345\271\263\345\217\260\345\272\227\351\223\272\345\210\206\346\236\220\346\214\207\346\240\207\345\257\271\346\216\245\346\226\271\346\241\210.md"
+@@ -145,6 +145,11 @@ PLT-09 = SUM(retail_order.buyer_paid_amount WHERE status IN ('Sent')) ÷ 1.13
+ 
+ 页面对应：**零售订单同步 → 平台店铺分析**（列：接单未税 / 出货未税 / 退货未税 / 净额 / 退货率）。
+ 
++指标中心也有独立页面：**指标中心 → 平台分析**（`/metric/platform`），
++按「期间 × 平台 × 店铺」展示 PLT-xx 全字段，版式与「产品线分析」一致，
++支持店铺明细 / 平台小计 / 全部三种聚合层级、字段多选、平台排行与字段说明。
++接口：`GET /api/v1/platform/{fields,periods,platforms,page,stats}`。
++
+ > 旧指标 `retail_outbound_untaxed_amount`（聚水潭销售出库查询）保留不变，口径是「按出库时间」；
+ > 平台店铺分析统一走上面的「按订单期间 + 已发货」口径，两者不要混用。
+ 
+diff --git a/frontend/web/src/api/module_platform/index.ts b/frontend/web/src/api/module_platform/index.ts
+new file mode 100644
+index 00000000..da6075a4
+--- /dev/null
++++ b/frontend/web/src/api/module_platform/index.ts
+@@ -0,0 +1,104 @@
++import { request } from "@utils";
++
++export interface PlatformFieldItem {
++  field_code: string;
++  field_name: string;
++  data_type: string;
++  group: string;
++  sensitive: boolean;
++  source?: string;
++  note?: string;
++  status?: string;
++  status_label?: string;
++  stored_in: string;
++}
++
++export interface PlatformRow {
++  id: string;
++  is_aggregate: number;
++  aggregate_level: string;
++  period_value: string;
++  "PLT-00": string;
++  "PLT-01": string;
++  "PLT-02": string;
++  "PLT-03": number | string;
++  "PLT-04": number;
++  "PLT-05": number;
++  "PLT-06": number;
++  "PLT-08": number;
++  "PLT-09": number;
++  "PLT-10": number;
++  "PLT-11": number;
++  "PLT-12": number;
++  "PLT-13": number;
++  "PLT-37": number;
++  [key: string]: unknown;
++}
++
++export interface PlatformStats {
++  period_value?: string | null;
++  shop_count?: number;
++  platform_count?: number;
++  order_count?: number;
++  shipped_order_count?: number;
++  cancelled_order_count?: number;
++  intake_untaxed_sum?: number | null;
++  shipment_untaxed_sum?: number | null;
++  return_untaxed_sum?: number | null;
++  net_shipment_sum?: number | null;
++  settlement_income_sum?: number | null;
++  return_rate?: number | null;
++  top_platforms?: {
++    platform: string;
++    order_count: number;
++    intake_untaxed: number;
++    shipment_untaxed: number;
++    net_shipment: number;
++    settlement_income: number;
++    return_rate: number;
++  }[];
++}
++
++export interface PlatformPageResult {
++  items: PlatformRow[];
++  columns: PlatformFieldItem[];
++  total: number;
++  page_no: number;
++  page_size: number;
++  has_next: boolean;
++  period_value: string | null;
++  tax_rate: number;
++  summary: PlatformStats;
++}
++
++export interface PlatformQuery {
++  period_value?: string;
++  platform?: string;
++  shop_id?: number;
++  keyword?: string;
++  aggregate_level?: "detail" | "platform" | "all";
++  page_no?: number;
++  page_size?: number;
++}
++
++export const PlatformAnalysisAPI = {
++  fields() {
++    return request<ApiResponse<PlatformFieldItem[]>>({ url: "/platform/fields", method: "get" });
++  },
++  periods() {
++    return request<ApiResponse<string[]>>({ url: "/platform/periods", method: "get" });
++  },
++  platforms() {
++    return request<ApiResponse<string[]>>({ url: "/platform/platforms", method: "get" });
++  },
++  page(params: PlatformQuery) {
++    return request<ApiResponse<PlatformPageResult>>({ url: "/platform/page", method: "get", params });
++  },
++  stats(periodValue?: string) {
++    return request<ApiResponse<PlatformStats>>({
++      url: "/platform/stats",
++      method: "get",
++      params: { period_value: periodValue },
++    });
++  },
++};
+diff --git a/frontend/web/src/views/module_metric/platform/index.vue b/frontend/web/src/views/module_metric/platform/index.vue
+new file mode 100644
+index 00000000..ea086902
+--- /dev/null
++++ b/frontend/web/src/views/module_metric/platform/index.vue
+@@ -0,0 +1,460 @@
++<template>
++  <div class="platform-analysis-page">
++    <ElCard shadow="never">
++      <div class="toolbar">
++        <ElSelect v-model="periodValue" placeholder="期间" clearable style="width: 130px" @change="handleQuery">
++          <ElOption v-for="item in periodOptions" :key="item" :label="item" :value="item" />
++        </ElSelect>
++
++        <ElSelect v-model="platform" placeholder="平台" clearable filterable style="width: 140px" @change="handleQuery">
++          <ElOption v-for="item in platformOptions" :key="item" :label="item" :value="item" />
++        </ElSelect>
++
++        <ElInputNumber
++          v-model="shopId"
++          :min="0"
++          :controls="false"
++          placeholder="店铺编号"
++          style="width: 130px"
++          @change="handleQuery"
++        />
++
++        <ElInput
++          v-model="keyword"
++          placeholder="平台/店铺（模糊）"
++          clearable
++          style="width: 190px"
++          @keyup.enter="handleQuery"
++        />
++
++        <ElRadioGroup v-model="aggregateLevel" @change="handleQuery">
++          <ElRadioButton label="detail">店铺明细</ElRadioButton>
++          <ElRadioButton label="platform">平台小计</ElRadioButton>
++          <ElRadioButton label="all">全部</ElRadioButton>
++        </ElRadioGroup>
++
++        <ElButton type="primary" :loading="loading" @click="handleQuery">查询</ElButton>
++        <ElButton @click="detailVisible = true">字段说明</ElButton>
++        <ElButton @click="openStats">平台排行</ElButton>
++      </div>
++
++      <div class="toolbar toolbar-second">
++        <span class="picker-label">显示字段</span>
++        <ElSelect
++          v-model="visibleFields"
++          multiple
++          collapse-tags
++          collapse-tags-tooltip
++          :max-collapse-tags="9"
++          filterable
++          clearable
++          placeholder="选择要显示的字段"
++          style="width: 620px"
++        >
++          <ElOptionGroup v-for="group in columnGroups" :key="group.name" :label="group.name">
++            <ElOption
++              v-for="col in group.items"
++              :key="col.field_code"
++              :label="`${col.field_name}（${col.field_code}）`"
++              :value="col.field_code"
++            />
++          </ElOptionGroup>
++        </ElSelect>
++        <ElButton link type="primary" @click="resetFields">恢复默认</ElButton>
++      </div>
++
++      <div class="summary">
++        <span>期间 {{ page.period_value || "全部" }} · 税率 {{ page.tax_rate }}%</span>
++        <span>平台 {{ summary.platform_count ?? "-" }} 个</span>
++        <span>店铺 {{ summary.shop_count ?? "-" }} 个</span>
++        <span>订单 {{ summary.order_count ?? 0 }} 张 / 已发货 {{ summary.shipped_order_count ?? 0 }} 张</span>
++        <span>接单未税 {{ formatNumber(summary.intake_untaxed_sum) }}</span>
++        <span>出货未税 {{ formatNumber(summary.shipment_untaxed_sum) }}</span>
++        <span>退货退款 {{ formatNumber(summary.return_untaxed_sum) }}</span>
++        <span>对外出货净额 {{ formatNumber(summary.net_shipment_sum) }}</span>
++        <span>结算收入10% {{ formatNumber(summary.settlement_income_sum) }}</span>
++        <span>退货率 {{ formatPercent(summary.return_rate) }}</span>
++      </div>
++
++      <ElTable
++        v-loading="loading"
++        :data="rows"
++        border
++        stripe
++        height="calc(100vh - 400px)"
++        :row-class-name="rowClassName"
++        @row-click="handleRowClick"
++      >
++        <ElTableColumn type="index" label="#" width="55" fixed />
++        <ElTableColumn
++          v-for="col in displayColumns"
++          :key="col.field_code"
++          :label="col.field_name"
++          :prop="col.field_code"
++          :min-width="columnWidth(col)"
++          show-overflow-tooltip
++          :fixed="col.field_code === 'PLT-01'"
++        >
++          <template #default="{ row }">
++            <span :class="{ 'sensitive-cell': col.sensitive }">
++              {{ formatCell(row[col.field_code], col) }}
++            </span>
++          </template>
++        </ElTableColumn>
++      </ElTable>
++
++      <div class="pager">
++        <ElPagination
++          v-model:current-page="query.page_no"
++          v-model:page-size="query.page_size"
++          :total="page.total"
++          :page-sizes="[20, 50, 100, 200]"
++          layout="total, sizes, prev, pager, next, jumper"
++          @current-change="loadData"
++          @size-change="handleQuery"
++        />
++      </div>
++    </ElCard>
++
++    <!-- 字段说明 -->
++    <ElDrawer v-model="detailVisible" title="平台分析字段说明（PLT-xx）" size="820px">
++      <ElTable :data="columns" border stripe max-height="calc(100vh - 160px)">
++        <ElTableColumn prop="field_code" label="编码" width="100" />
++        <ElTableColumn prop="field_name" label="名称" min-width="140" />
++        <ElTableColumn prop="group" label="分组" width="80" />
++        <ElTableColumn prop="source" label="取数来源" width="150" show-overflow-tooltip />
++        <ElTableColumn label="可出性" width="110">
++          <template #default="{ row }">
++            <ElTag :type="statusTagType(row.status)" size="small">{{ row.status_label }}</ElTag>
++          </template>
++        </ElTableColumn>
++        <ElTableColumn prop="note" label="口径/说明" min-width="280" show-overflow-tooltip />
++      </ElTable>
++    </ElDrawer>
++
++    <!-- 平台排行 -->
++    <ElDrawer v-model="statsVisible" title="平台排行（按对外出货净额）" size="560px">
++      <ElDescriptions :column="2" border size="small">
++        <ElDescriptionsItem label="期间">{{ stats.period_value || "全部" }}</ElDescriptionsItem>
++        <ElDescriptionsItem label="平台数">{{ stats.platform_count ?? 0 }}</ElDescriptionsItem>
++        <ElDescriptionsItem label="订单">{{ stats.order_count ?? 0 }} 张</ElDescriptionsItem>
++        <ElDescriptionsItem label="店铺">{{ stats.shop_count ?? 0 }} 个</ElDescriptionsItem>
++        <ElDescriptionsItem label="净额">{{ formatNumber(stats.net_shipment_sum) }}</ElDescriptionsItem>
++        <ElDescriptionsItem label="结算收入10%">{{ formatNumber(stats.settlement_income_sum) }}</ElDescriptionsItem>
++      </ElDescriptions>
++      <div class="rank-list">
++        <div v-for="(item, index) in stats.top_platforms || []" :key="item.platform" class="rank-item">
++          <div class="rank-head">
++            <span class="rank-index">{{ index + 1 }}</span>
++            <span class="rank-name">{{ item.platform }}</span>
++            <span class="rank-value">{{ formatNumber(item.net_shipment) }}</span>
++          </div>
++          <ElProgress
++            :percentage="percentOfTop(item.net_shipment)"
++            :stroke-width="10"
++            :show-text="false"
++            color="#409eff"
++          />
++          <div class="rank-sub">
++            订单 {{ item.order_count }} 张 · 接单未税 {{ formatNumber(item.intake_untaxed) }} · 出货未税
++            {{ formatNumber(item.shipment_untaxed) }} · 结算收入10% {{ formatNumber(item.settlement_income) }} ·
++            退货率 {{ formatPercent(item.return_rate) }}
++          </div>
++        </div>
++        <ElEmpty v-if="!(stats.top_platforms || []).length" description="暂无数据" />
++      </div>
++    </ElDrawer>
++
++    <!-- 单行全部字段 -->
++    <ElDrawer v-model="rowVisible" :title="`${currentRowLabel} 全部字段`" size="640px">
++      <ElDescriptions :column="1" border>
++        <ElDescriptionsItem
++          v-for="col in columns"
++          :key="col.field_code"
++          :label="`${col.field_name}（${col.field_code}）`"
++        >
++          {{ formatCell(rowDetail[col.field_code], col) }}
++        </ElDescriptionsItem>
++      </ElDescriptions>
++    </ElDrawer>
++  </div>
++</template>
++
++<script setup lang="ts">
++import { ElMessage } from "element-plus";
++import {
++  PlatformAnalysisAPI,
++  type PlatformFieldItem,
++  type PlatformPageResult,
++  type PlatformRow,
++  type PlatformStats,
++} from "@/api/module_platform";
++
++defineOptions({ name: "PlatformAnalysis" });
++
++/** 目录拉不到时的兜底列 */
++const FALLBACK_FIELDS = ["PLT-00", "PLT-01", "PLT-02", "PLT-08", "PLT-09", "PLT-11", "PLT-12", "PLT-13"];
++
++const loading = ref(false);
++const periodOptions = ref<string[]>([]);
++const periodValue = ref<string | undefined>(undefined);
++const platformOptions = ref<string[]>([]);
++const platform = ref<string | undefined>(undefined);
++const shopId = ref<number | undefined>(undefined);
++const keyword = ref("");
++const aggregateLevel = ref<"detail" | "platform" | "all">("detail");
++
++const columns = ref<PlatformFieldItem[]>([]);
++const visibleFields = ref<string[]>([]);
++const rows = ref<PlatformRow[]>([]);
++const query = reactive({ page_no: 1, page_size: 50 });
++const page = reactive({ total: 0, period_value: null as string | null, tax_rate: 13 });
++const summary = ref<PlatformStats>({});
++const stats = ref<PlatformStats>({});
++
++const detailVisible = ref(false);
++const statsVisible = ref(false);
++const rowVisible = ref(false);
++const currentRowLabel = ref("");
++const rowDetail = ref<PlatformRow>({} as PlatformRow);
++
++const displayColumns = computed<PlatformFieldItem[]>(() =>
++  columns.value.filter((col) => visibleFields.value.includes(col.field_code)),
++);
++
++const columnGroups = computed(() => {
++  const groups: { name: string; items: PlatformFieldItem[] }[] = [];
++  columns.value.forEach((col) => {
++    let group = groups.find((item) => item.name === col.group);
++    if (!group) {
++      group = { name: col.group, items: [] };
++      groups.push(group);
++    }
++    group.items.push(col);
++  });
++  return groups;
++});
++
++function columnWidth(col: PlatformFieldItem) {
++  if (col.field_code === "PLT-01") return 110;
++  if (col.field_code === "PLT-02") return 190;
++  if (col.field_code === "PLT-08" || col.field_code === "PLT-09") return 140;
++  return 120;
++}
++
++function formatNumber(value: unknown) {
++  if (value === undefined || value === null || value === "") return "-";
++  const num = Number(value);
++  if (Number.isNaN(num)) return "-";
++  return num.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
++}
++
++function formatPercent(value: unknown) {
++  if (value === undefined || value === null || value === "") return "-";
++  const num = Number(value);
++  if (Number.isNaN(num)) return "-";
++  return `${(num * 100).toFixed(2)}%`;
++}
++
++function formatCell(value: unknown, col: PlatformFieldItem) {
++  if (value === undefined || value === null || value === "") return "-";
++  if (col.data_type === "number") return formatNumber(value);
++  if (col.data_type === "percent") return formatPercent(value);
++  return String(value);
++}
++
++function statusTagType(status?: string) {
++  if (status === "ready") return "success";
++  if (status === "pending_field" || status === "source_found") return "warning";
++  if (status === "missing") return "danger";
++  return "info";
++}
++
++function rowClassName({ row }: { row: PlatformRow }) {
++  if (Number(row.is_aggregate) === 2) return "row-total";
++  if (Number(row.is_aggregate) === 1) return "row-subtotal";
++  return "";
++}
++
++function percentOfTop(value: number) {
++  const max = Math.max(...(stats.value.top_platforms || []).map((item) => Number(item.net_shipment) || 0), 0);
++  if (!max) return 0;
++  return Math.max(1, Math.round((Number(value) / max) * 100));
++}
++
++function applyDefaultFields() {
++  const ready = columns.value.filter((col) => col.status === "ready").map((col) => col.field_code);
++  visibleFields.value = ready.length ? ready : columns.value.map((col) => col.field_code);
++  if (!visibleFields.value.length) visibleFields.value = [...FALLBACK_FIELDS];
++}
++
++function resetFields() {
++  applyDefaultFields();
++}
++
++async function loadMeta() {
++  const [fieldRes, periodRes, platformRes] = await Promise.all([
++    PlatformAnalysisAPI.fields(),
++    PlatformAnalysisAPI.periods(),
++    PlatformAnalysisAPI.platforms(),
++  ]);
++  columns.value = fieldRes.data?.data ?? [];
++  periodOptions.value = periodRes.data?.data ?? [];
++  platformOptions.value = platformRes.data?.data ?? [];
++  if (!visibleFields.value.length) applyDefaultFields();
++  if (!periodValue.value && periodOptions.value.length) periodValue.value = periodOptions.value[0];
++}
++
++async function loadData() {
++  loading.value = true;
++  try {
++    const res = await PlatformAnalysisAPI.page({
++      period_value: periodValue.value,
++      platform: platform.value,
++      shop_id: shopId.value ?? undefined,
++      keyword: keyword.value || undefined,
++      aggregate_level: aggregateLevel.value,
++      page_no: query.page_no,
++      page_size: query.page_size,
++    });
++    const data = res.data?.data as PlatformPageResult | undefined;
++    rows.value = data?.items ?? [];
++    page.total = data?.total ?? 0;
++    page.period_value = data?.period_value ?? null;
++    page.tax_rate = data?.tax_rate ?? 13;
++    summary.value = data?.summary ?? {};
++  } catch (error) {
++    rows.value = [];
++    ElMessage.error("查询平台分析失败");
++    console.error(error);
++  } finally {
++    loading.value = false;
++  }
++}
++
++function handleQuery() {
++  query.page_no = 1;
++  loadData();
++}
++
++async function openStats() {
++  try {
++    const res = await PlatformAnalysisAPI.stats(periodValue.value);
++    stats.value = res.data?.data ?? {};
++    statsVisible.value = true;
++  } catch (error) {
++    ElMessage.error("加载平台排行失败");
++    console.error(error);
++  }
++}
++
++function handleRowClick(row: PlatformRow) {
++  const level = Number(row.is_aggregate);
++  const suffix = level === 2 ? "（全表合计）" : level === 1 ? "（平台小计）" : "";
++  currentRowLabel.value = `${row["PLT-01"] || "-"} / ${row["PLT-02"] || "-"}${suffix}`;
++  rowDetail.value = row;
++  rowVisible.value = true;
++}
++
++onMounted(async () => {
++  try {
++    await loadMeta();
++    await loadData();
++  } catch (error) {
++    ElMessage.error("加载平台分析数据失败");
++    console.error(error);
++  }
++});
++</script>
++
++<style lang="scss" scoped>
++.platform-analysis-page {
++  .toolbar {
++    display: flex;
++    flex-wrap: wrap;
++    gap: 10px;
++    align-items: center;
++  }
++
++  .toolbar-second {
++    margin-top: 10px;
++  }
++
++  .picker-label {
++    font-size: 13px;
++    color: var(--el-text-color-secondary);
++  }
++
++  .summary {
++    display: flex;
++    flex-wrap: wrap;
++    gap: 18px;
++    margin: 10px 0;
++    font-size: 13px;
++    color: var(--el-text-color-regular);
++  }
++
++  .pager {
++    display: flex;
++    justify-content: flex-end;
++    margin-top: 12px;
++  }
++
++  .sensitive-cell {
++    color: var(--el-color-danger);
++  }
++
++  :deep(.row-subtotal) {
++    background: var(--el-fill-color-light);
++    font-weight: 600;
++  }
++
++  :deep(.row-total) {
++    background: var(--el-color-primary-light-9);
++    font-weight: 700;
++  }
++
++  .rank-list {
++    margin-top: 14px;
++  }
++
++  .rank-item {
++    margin-bottom: 16px;
++  }
++
++  .rank-head {
++    display: flex;
++    align-items: center;
++    gap: 8px;
++    font-size: 13px;
++  }
++
++  .rank-index {
++    display: inline-flex;
++    align-items: center;
++    justify-content: center;
++    width: 20px;
++    height: 20px;
++    border-radius: 50%;
++    background: var(--el-color-primary-light-7);
++    color: var(--el-color-primary);
++    font-size: 12px;
++  }
++
++  .rank-name {
++    flex: 1;
++    font-weight: 600;
++  }
++
++  .rank-value {
++    color: var(--el-color-primary);
++    font-weight: 600;
++  }
++
++  .rank-sub {
++    margin-top: 4px;
++    font-size: 12px;
++    color: var(--el-text-color-secondary);
++  }
++}
++</style>
