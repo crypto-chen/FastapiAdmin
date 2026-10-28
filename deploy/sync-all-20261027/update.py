@@ -132,6 +132,8 @@ def main() -> None:
     parser.add_argument("--build-frontend", action="store_true", help="在服务器构建前端")
     parser.add_argument("--frontend-target", default=None, help="nginx 站点目录")
     parser.add_argument("--skip-seeds", action="store_true", help="跳过菜单/任务初始化")
+    parser.add_argument("--backfill-begin", default=None, help="平台指标补算起始期间 YYYY-MM")
+    parser.add_argument("--backfill-end", default=None, help="平台指标补算结束期间 YYYY-MM")
     args = parser.parse_args()
 
     log(f"项目根目录：{ROOT}")
@@ -216,6 +218,24 @@ def main() -> None:
         required=False,
         title="开放应用-平台渠道分析开关",
     )
+
+    # 6) 可选：平台指标历史补算（快照表 platform_metric_snapshot）
+    if args.backfill_begin and args.backfill_end:
+        run(
+            [
+                python_bin(),
+                "scripts/build_platform_snapshots.py",
+                "--begin",
+                args.backfill_begin,
+                "--end",
+                args.backfill_end,
+            ],
+            BACKEND,
+            args.apply,
+            backend_env,
+            required=False,
+            title=f"平台指标补算 {args.backfill_begin} ~ {args.backfill_end}",
+        )
 
     if args.build_frontend:
         build_frontend(args.apply, args.frontend_target)

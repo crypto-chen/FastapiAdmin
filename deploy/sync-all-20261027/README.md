@@ -43,6 +43,16 @@ python deploy/sync-all-20261027/update.py
 | 7 | `check_retail_data.py` / `check_platform_analysis_access.py` | 打印数据量与应用开关状态 |
 | 8 | `systemctl restart fastapiadmin` | 重启，定时任务随之注册 |
 
+**可选：同时补算平台指标历史**（`--backfill-begin/--backfill-end`）：
+
+```bash
+python deploy/sync-all-20261027/update.py --apply --service fastapiadmin \
+  --env prod --backfill-begin 2026-01 --backfill-end 2026-10
+```
+
+脚本最后会跑 `scripts/build_platform_snapshots.py`，逐月写 `platform_metric_snapshot`
+（每期间生成新 `calc_version`，空月份打印 `[SKIP]`）。
+
 ## 3. 这次创建的「平台指标」是什么形态
 
 平台分析指标（PLT-08/09/10/11/12/13/37）**不落宽表、不建 metric_def**，
