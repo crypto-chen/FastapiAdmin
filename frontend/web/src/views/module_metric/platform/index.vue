@@ -36,6 +36,7 @@
         <ElButton type="primary" :loading="loading" @click="handleQuery">查询</ElButton>
         <ElButton @click="detailVisible = true">字段说明</ElButton>
         <ElButton @click="openStats">平台排行</ElButton>
+        <ElButton type="warning" plain @click="openConfig">指标配置</ElButton>
       </div>
 
       <div class="toolbar toolbar-second">
@@ -179,14 +180,106 @@
         </ElDescriptionsItem>
       </ElDescriptions>
     </ElDrawer>
+
+    <!-- 指标配置：新增指标不用改代码 -->
+    <ElDrawer v-model="configVisible" title="平台指标配置" size="960px">
+      <div class="config-toolbar">
+        <ElButton type="primary" @click="openMetricForm()">新增指标</ElButton>
+        <ElButton @click="handleResetMetrics">恢复默认指标</ElButton>
+        <span class="picker-label">新增/修改后刷新列表即可看到新列，无需发版</span>
+      </div>
+
+      <ElTable v-loading="configLoading" :data="configs" border stripe max-height="calc(100vh - 320px)">
+        <ElTableColumn prop="field_code" label="编码" width="100" />
+        <ElTableColumn prop="field_name" label="名称" min-width="140" />
+        <ElTableColumn prop="group" label="分组" width="80" />
+        <ElTableColumn prop="data_type" label="类型" width="90" />
+        <ElTableColumn prop="expression" label="表达式" min-width="240" show-overflow-tooltip />
+        <ElTableColumn prop="sort" label="排序" width="80" align="center" />
+        <ElTableColumn label="状态" width="90" align="center">
+          <template #default="{ row }">
+            <ElTag :type="row.status_num === 0 ? 'success' : 'info'" size="small">
+              {{ row.status_num === 0 ? "启用" : "停用" }}
+            </ElTag>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="操作" width="130" fixed="right">
+          <template #default="{ row }">
+            <ElButton link type="primary" @click="openMetricForm(row as PlatformMetricConfig)">编辑</ElButton>
+            <ElButton link type="danger" @click="handleDeleteMetric(row as PlatformMetricConfig)">删除</ElButton>
+          </template>
+        </ElTableColumn>
+      </ElTable>
+
+      <div class="config-tip">
+        <div><b>可用基础变量：</b>{{ baseVariableText }}</div>
+        <div><b>可用函数：</b>{{ functionText }}</div>
+        <div>表达式示例：<code>PLT-12 * settlement_rate</code>、<code>abs(PLT-11) / choose(PLT-12 &gt; 0, PLT-12, PLT-09)</code></div>
+      </div>
+    </ElDrawer>
+
+    <ElDialog v-model="metricFormVisible" :title="metricForm.id ? '编辑指标' : '新增指标'" width="620px">
+      <ElForm :model="metricForm" label-width="90px">
+        <ElFormItem label="编码" required>
+          <ElInput v-model="metricForm.code" :disabled="!!metricForm.id" placeholder="PLT-39" />
+        </ElFormItem>
+        <ElFormItem label="名称" required>
+          <ElInput v-model="metricForm.name" placeholder="如：取消率" />
+        </ElFormItem>
+        <ElFormItem label="分组">
+          <ElSelect v-model="metricForm.group" style="width: 100%">
+            <ElOption label="维度" value="维度" />
+            <ElOption label="数量" value="数量" />
+            <ElOption label="金额" value="金额" />
+            <ElOption label="比率" value="比率" />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="数据类型">
+          <ElSelect v-model="metricForm.data_type" style="width: 100%">
+            <ElOption label="数值 number" value="number" />
+            <ElOption label="百分比 percent" value="percent" />
+            <ElOption label="文本 string" value="string" />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="表达式" required>
+          <ElInput
+            v-model="metricForm.expression"
+            type="textarea"
+            :rows="3"
+            placeholder="PLT-08 / max(PLT-04 - PLT-06, 1)"
+          />
+        </ElFormItem>
+        <ElFormItem label="单位">
+          <ElInput v-model="metricForm.unit" placeholder="元 / 单 / 元/单" />
+        </ElFormItem>
+        <ElFormItem label="口径说明">
+          <ElInput v-model="metricForm.note" type="textarea" :rows="2" />
+        </ElFormItem>
+        <ElFormItem label="排序">
+          <ElInputNumber v-model="metricForm.sort" :min="0" :max="9999" />
+        </ElFormItem>
+        <ElFormItem label="状态">
+          <ElSwitch v-model="metricForm.enabled" active-text="启用" inactive-text="停用" />
+        </ElFormItem>
+        <ElFormItem label="敏感字段">
+          <ElSwitch v-model="metricForm.sensitive" />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="metricFormVisible = false">取消</ElButton>
+        <ElButton type="primary" :loading="metricSaving" @click="submitMetric">保存</ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import {
   PlatformAnalysisAPI,
   type PlatformFieldItem,
+  type PlatformMetricConfig,
+  type PlatformMetricPayload,
   type PlatformPageResult,
   type PlatformRow,
   type PlatformStats,
@@ -219,6 +312,45 @@ const statsVisible = ref(false);
 const rowVisible = ref(false);
 const currentRowLabel = ref("");
 const rowDetail = ref<PlatformRow>({} as PlatformRow);
+
+const configVisible = ref(false);
+const configLoading = ref(false);
+const configs = ref<PlatformMetricConfig[]>([]);
+const baseVariables = ref<Record<string, string>>({});
+const functions = ref<string[]>([]);
+const metricFormVisible = ref(false);
+const metricSaving = ref(false);
+const metricForm = reactive<{
+  id?: number;
+  code: string;
+  name: string;
+  group: string;
+  data_type: string;
+  unit?: string;
+  expression: string;
+  note?: string;
+  sort: number;
+  enabled: boolean;
+  sensitive: boolean;
+}>({
+  code: "",
+  name: "",
+  group: "金额",
+  data_type: "number",
+  unit: "",
+  expression: "",
+  note: "",
+  sort: 200,
+  enabled: true,
+  sensitive: false,
+});
+
+const baseVariableText = computed(() =>
+  Object.entries(baseVariables.value)
+    .map(([key, desc]) => `${key}（${desc}）`)
+    .join("；"),
+);
+const functionText = computed(() => functions.value.join("、"));
 
 const displayColumns = computed<PlatformFieldItem[]>(() =>
   columns.value.filter((col) => visibleFields.value.includes(col.field_code)),
@@ -350,6 +482,127 @@ async function openStats() {
   }
 }
 
+async function loadConfigs() {
+  configLoading.value = true;
+  try {
+    const res = await PlatformAnalysisAPI.metricConfigs();
+    const data = res.data?.data;
+    configs.value = data?.items ?? [];
+    baseVariables.value = data?.base_variables ?? {};
+    functions.value = data?.functions ?? [];
+  } catch (error) {
+    configs.value = [];
+    ElMessage.error("加载平台指标配置失败");
+    console.error(error);
+  } finally {
+    configLoading.value = false;
+  }
+}
+
+function openConfig() {
+  configVisible.value = true;
+  loadConfigs();
+}
+
+function openMetricForm(row?: PlatformMetricConfig) {
+  Object.assign(metricForm, {
+    id: row?.id,
+    code: row?.field_code ?? "",
+    name: row?.field_name ?? "",
+    group: row?.group ?? "金额",
+    data_type: row?.data_type ?? "number",
+    unit: row?.unit ?? "",
+    expression: row?.expression ?? "",
+    note: row?.note ?? "",
+    sort: row?.sort ?? 200,
+    enabled: (row?.status_num ?? 0) === 0,
+    sensitive: row?.sensitive ?? false,
+  });
+  metricFormVisible.value = true;
+}
+
+function buildMetricPayload(): PlatformMetricPayload {
+  return {
+    code: metricForm.code.trim().toUpperCase(),
+    name: metricForm.name.trim(),
+    group: metricForm.group,
+    data_type: metricForm.data_type,
+    unit: metricForm.unit || null,
+    sensitive: metricForm.sensitive,
+    expression: metricForm.expression.trim(),
+    note: metricForm.note || null,
+    sort: metricForm.sort,
+    status: metricForm.enabled ? 0 : 1,
+  };
+}
+
+async function submitMetric() {
+  if (!metricForm.code.trim() || !metricForm.name.trim() || !metricForm.expression.trim()) {
+    ElMessage.warning("编码、名称、表达式必填");
+    return;
+  }
+  metricSaving.value = true;
+  try {
+    const payload = buildMetricPayload();
+    if (metricForm.id) {
+      await PlatformAnalysisAPI.updateMetric(metricForm.id, payload);
+    } else {
+      await PlatformAnalysisAPI.createMetric(payload);
+    }
+    ElMessage.success("保存成功，刷新列表即可看到新列");
+    metricFormVisible.value = false;
+    await loadConfigs();
+    await loadMeta();
+    await loadData();
+  } catch (error) {
+    ElMessage.error("保存失败，请检查表达式与编码是否重复");
+    console.error(error);
+  } finally {
+    metricSaving.value = false;
+  }
+}
+
+async function handleDeleteMetric(row: PlatformMetricConfig) {
+  try {
+    await ElMessageBox.confirm(`删除指标 ${row.field_code} ${row.field_name}？`, "确认删除", {
+      type: "warning",
+    });
+  } catch {
+    return;
+  }
+  try {
+    await PlatformAnalysisAPI.deleteMetric(row.id);
+    ElMessage.success("已删除");
+    await loadConfigs();
+    await loadMeta();
+    await loadData();
+  } catch (error) {
+    ElMessage.error("删除失败");
+    console.error(error);
+  }
+}
+
+async function handleResetMetrics() {
+  try {
+    await ElMessageBox.confirm("恢复默认平台指标（只补齐/更新默认项，不删除自定义指标）？", "确认", {
+      type: "warning",
+    });
+  } catch {
+    return;
+  }
+  try {
+    const res = await PlatformAnalysisAPI.resetMetrics();
+    const data = res.data?.data ?? {};
+    ElMessage.success(`已恢复：新增 ${data.created ?? 0}，更新 ${data.updated ?? 0}`);
+    await loadConfigs();
+    await loadMeta();
+    await loadData();
+  } catch (error) {
+    ElMessage.error("恢复失败");
+    console.error(error);
+  }
+}
+
 function handleRowClick(row: PlatformRow) {
   const level = Number(row.is_aggregate);
   const suffix = level === 2 ? "（全表合计）" : level === 1 ? "（平台小计）" : "";
@@ -457,6 +710,26 @@ onMounted(async () => {
     margin-top: 4px;
     font-size: 12px;
     color: var(--el-text-color-secondary);
+  }
+
+  .config-toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .config-tip {
+    margin-top: 12px;
+    font-size: 12px;
+    line-height: 1.8;
+    color: var(--el-text-color-secondary);
+
+    code {
+      padding: 0 4px;
+      background: var(--el-fill-color-light);
+      border-radius: 3px;
+    }
   }
 }
 </style>

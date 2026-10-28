@@ -190,6 +190,14 @@ def main() -> None:
             backend_env,
             title="菜单：指标中心-平台分析",
         )
+        # 5) 平台指标定义（指标配置化，新增指标不用改代码）
+        run(
+            [python_bin(), "scripts/seed_platform_metrics.py"],
+            BACKEND,
+            args.apply,
+            backend_env,
+            title="平台指标定义",
+        )
 
     # 5) 自检：数据量 / 开放应用开关
     run(

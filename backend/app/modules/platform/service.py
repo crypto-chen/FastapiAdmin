@@ -1,6 +1,8 @@
-"""平台分析取数：从零售订单/售后/店铺主数据实时汇总，不落宽表。
+"""平台分析取数：基础量从零售订单/售后/店铺实时汇总，指标值按配置表达式计算。
 
-输出按 ``PLT-xx`` 字段编码组织，前端与产品线分析一样按字段编码渲染列。
+- 基础量（orders / intake / shipment / ...）是代码里唯一的取数逻辑；
+- 指标（PLT-xx）存放在 ``platform_metric_def``，用表达式描述，增删改不需要改代码；
+- 输出按字段编码组织，前端与产品线分析一样按字段编码渲染列。
 """
 
 from __future__ import annotations
@@ -10,6 +12,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import CustomException
+from app.modules.openapi.security import CODE_PARAM_INVALID
 from app.modules.retail.model import RetailOrderModel, RetailShopModel
 from app.modules.retail.query_service import (
     RetailQueryService,
@@ -18,23 +22,26 @@ from app.modules.retail.query_service import (
     settlement_rate,
 )
 
-from .fields import PLATFORM_FIELDS
-from .schema import PlatformAnalysisQueryParam
+from .defaults import BASE_VARIABLES, DEFAULT_METRICS
+from .expression import ExpressionError, evaluate
+from .model import PlatformMetricModel
+from .schema import PlatformAnalysisQueryParam, PlatformMetricUpsertParam
 
-# 需要求和的金额/数量字段（比率字段由分子分母重算）
-SUM_FIELDS = (
-    "PLT-04",
-    "PLT-05",
-    "PLT-06",
-    "PLT-08",
-    "PLT-09",
-    "PLT-10",
-    "PLT-11",
-    "PLT-12",
-    "PLT-13",
-    "PLT-23",
+BASE_SUM_KEYS = (
+    "orders",
+    "shipped_orders",
+    "cancelled_orders",
+    "intake",
+    "shipment",
+    "cancelled_amount",
+    "refund",
 )
-NUMERIC_FIELDS = {item["field_code"] for item in PLATFORM_FIELDS if item["data_type"] in {"number", "percent"}}
+DIM_KEYS = {
+    "period": "period",
+    "platform": "platform",
+    "shop_name": "shop_name",
+    "shop_id": "shop_id",
+}
 
 PLATFORM_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("天猫", ("天猫", "淘宝")),
@@ -57,58 +64,27 @@ def normalize_platform(raw: str | None) -> str:
     return "其他"
 
 
-def _rate(return_abs: float, net: float, shipment: float) -> float:
-    base = net if net > 0 else shipment
-    return round(return_abs / base, 4) if base else 0.0
-
-
-def _row(
-    *,
-    period: str,
-    platform: str,
-    shop_name: str,
-    shop_id: int | str,
-    order_count: int,
-    shipped_count: int,
-    cancelled_count: int,
-    intake: float,
-    shipment: float,
-    cancelled: float,
-    refund: float,
-    level: str,
-    row_id: str,
-) -> dict[str, Any]:
-    # PLT-11 退货退款 = 取消单 + 发货后售后（两者都为负数）
-    return_total = round(cancelled + refund, 2)
-    return_abs = abs(return_total)
-    net = round(shipment + return_total, 2)
-    settlement = round(net * settlement_rate() / 100, 2)
-    # 总部分摊 PLT-23 = 营销结算收入 PLT-13 × 4%（符号与 PLT-13 一致；结算收益里按 -PLT-23 扣减）
-    hq_allocation = round(settlement * hq_allocation_rate() / 100, 2)
-    # 客单价 PLT-38 = 接单未税 ÷ 有效订单数（剔除取消单）
-    valid_orders = max(order_count - cancelled_count, 0)
-    avg_order_value = round(intake / valid_orders, 2) if valid_orders else 0.0
+def _rate_vars() -> dict[str, float]:
     return {
-        "id": row_id,
-        "is_aggregate": {"detail": 0, "platform": 1, "total": 2}.get(level, 0),
-        "aggregate_level": level,
-        "period_value": period,
-        "PLT-00": period,
-        "PLT-01": platform,
-        "PLT-02": shop_name,
-        "PLT-03": shop_id,
-        "PLT-04": order_count,
-        "PLT-05": shipped_count,
-        "PLT-06": cancelled_count,
-        "PLT-08": round(intake, 2),
-        "PLT-09": round(shipment, 2),
-        "PLT-10": round(cancelled, 2),
-        "PLT-11": return_total,
-        "PLT-12": net,
-        "PLT-13": settlement,
-        "PLT-23": hq_allocation,
-        "PLT-37": _rate(return_abs, net, shipment),
-        "PLT-38": avg_order_value,
+        "tax_rate": retail_tax_rate(),
+        "settlement_rate": settlement_rate() / 100,
+        "hq_rate": hq_allocation_rate() / 100,
+    }
+
+
+def _field_row(metric: PlatformMetricModel) -> dict[str, Any]:
+    return {
+        "field_code": metric.code,
+        "field_name": metric.name,
+        "data_type": metric.data_type,
+        "group": metric.group,
+        "sensitive": bool(metric.sensitive),
+        "note": metric.note,
+        "unit": metric.unit,
+        "expression": metric.expression,
+        "status": "ready" if metric.status == 0 else "disabled",
+        "status_label": "现用可出" if metric.status == 0 else "已停用",
+        "stored_in": "platform_metric_def",
     }
 
 
@@ -118,9 +94,141 @@ class PlatformAnalysisService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def fields(self) -> list[dict[str, Any]]:
-        return PLATFORM_FIELDS
+    # ── 指标配置 ──────────────────────────────────────────────
+    async def configs(self, only_enabled: bool = True) -> list[PlatformMetricModel]:
+        conditions = [PlatformMetricModel.is_deleted == False]  # noqa: E712
+        if only_enabled:
+            conditions.append(PlatformMetricModel.status == 0)
+        rows = (
+            await self.db.execute(
+                select(PlatformMetricModel)
+                .where(*conditions)
+                .order_by(PlatformMetricModel.sort.asc(), PlatformMetricModel.id.asc())
+            )
+        ).scalars().all()
+        if not rows and only_enabled:
+            # 表还没初始化时不至于白屏：用代码里的默认定义兜底（只读）
+            return [
+                PlatformMetricModel(
+                    code=item["code"],
+                    name=item["name"],
+                    group=item["group"],
+                    data_type=item["data_type"],
+                    unit=item.get("unit"),
+                    sensitive=bool(item.get("sensitive")),
+                    expression=item["expression"],
+                    note=item.get("note"),
+                    sort=item["sort"],
+                    status=0,
+                )
+                for item in DEFAULT_METRICS
+            ]
+        return list(rows)
 
+    async def fields(self) -> list[dict[str, Any]]:
+        return [_field_row(metric) for metric in await self.configs()]
+
+    async def list_metrics(self) -> dict[str, Any]:
+        metrics = await self.configs(only_enabled=False)
+        return {
+            "items": [_field_row(metric) | {"id": metric.id, "status_num": metric.status,
+                                            "sort": metric.sort} for metric in metrics],
+            "base_variables": BASE_VARIABLES,
+            "functions": ["abs(x)", "round(x, n)", "min(a, b)", "max(a, b)", "choose(cond, a, b)"],
+        }
+
+    async def upsert_metric(self, data: PlatformMetricUpsertParam, metric_id: int | None = None) -> dict[str, Any]:
+        code = data.code.strip().upper()
+        existing = (
+            await self.db.execute(
+                select(PlatformMetricModel).where(
+                    PlatformMetricModel.code == code,
+                    PlatformMetricModel.is_deleted == False,  # noqa: E712
+                )
+            )
+        ).scalars().first()
+        if existing is not None and (metric_id is None or existing.id != metric_id):
+            raise CustomException(msg=f"指标编码已存在：{code}", code=CODE_PARAM_INVALID, status_code=400)
+        if data.data_type != "string":
+            self._validate_expression(data.expression, code)
+        payload = {
+            "code": code,
+            "name": data.name.strip(),
+            "group": data.group.strip() or "金额",
+            "data_type": data.data_type,
+            "unit": data.unit,
+            "sensitive": data.sensitive,
+            "expression": data.expression.strip(),
+            "note": data.note,
+            "sort": data.sort,
+            "status": data.status,
+        }
+        if metric_id is not None:
+            target = await self.db.get(PlatformMetricModel, metric_id)
+            if target is None or target.is_deleted or target.id != metric_id:
+                raise CustomException(msg="指标不存在", status_code=404)
+        else:
+            target = PlatformMetricModel(**payload)
+            self.db.add(target)
+        for key, value in payload.items():
+            setattr(target, key, value)
+        await self.db.flush()
+        return _field_row(target) | {"id": target.id, "status_num": target.status, "sort": target.sort}
+
+    async def delete_metric(self, metric_id: int) -> None:
+        target = await self.db.get(PlatformMetricModel, metric_id)
+        if target is None or target.is_deleted:
+            raise CustomException(msg="指标不存在", status_code=404)
+        target.is_deleted = True
+        await self.db.flush()
+
+    async def reset_defaults(self) -> dict[str, Any]:
+        """把默认指标 upsert 回表（不删除自定义指标）。"""
+        created = updated = 0
+        for item in DEFAULT_METRICS:
+            code = item["code"]
+            row = (
+                await self.db.execute(
+                    select(PlatformMetricModel).where(
+                        PlatformMetricModel.code == code,
+                        PlatformMetricModel.is_deleted == False,  # noqa: E712
+                    )
+                )
+            ).scalars().first()
+            payload = {
+                "name": item["name"],
+                "group": item["group"],
+                "data_type": item["data_type"],
+                "unit": item.get("unit"),
+                "sensitive": bool(item.get("sensitive")),
+                "expression": item["expression"],
+                "note": item.get("note"),
+                "sort": item["sort"],
+                "status": 0,
+            }
+            if row is None:
+                self.db.add(PlatformMetricModel(code=code, **payload))
+                created += 1
+            else:
+                for key, value in payload.items():
+                    setattr(row, key, value)
+                updated += 1
+        await self.db.flush()
+        return {"created": created, "updated": updated, "total": len(DEFAULT_METRICS)}
+
+    @staticmethod
+    def _validate_expression(expression: str, code: str) -> None:
+        variables = dict.fromkeys(BASE_VARIABLES, 1.0)
+        variables.update({item["code"]: 1.0 for item in DEFAULT_METRICS})
+        variables[code] = 1.0
+        try:
+            evaluate(expression, variables)
+        except ExpressionError as exc:
+            raise CustomException(
+                msg=f"表达式不合法：{exc}", code=CODE_PARAM_INVALID, status_code=400
+            ) from exc
+
+    # ── 取数 ─────────────────────────────────────────────────
     async def periods(self) -> list[str]:
         rows = (
             await self.db.execute(
@@ -153,108 +261,147 @@ class PlatformAnalysisService:
                 ).where(RetailShopModel.is_deleted == False)  # noqa: E712
             )
         ).all()
-        return {
-            int(row[0]): {"shop_name": row[1], "shop_site": row[2]}
-            for row in rows
-        }
+        return {int(row[0]): {"shop_name": row[1], "shop_site": row[2]} for row in rows}
 
-    async def _detail_rows(self, period_value: str | None) -> list[dict[str, Any]]:
+    async def _base_rows(self, period_value: str | None) -> list[dict[str, Any]]:
         data = await RetailQueryService(self.db).analysis_summary(period_value)
         shop_map = await self._shop_map()
         rows: list[dict[str, Any]] = []
         for item in data.get("items") or []:
             shop_id = int(item["shop_id"])
             shop = shop_map.get(shop_id, {})
-            platform = normalize_platform(shop.get("shop_site"))
-            shop_name = item.get("shop_name") or shop.get("shop_name") or f"店铺{shop_id}"
             rows.append(
-                _row(
-                    period=item["period_value"],
-                    platform=platform,
-                    shop_name=shop_name,
-                    shop_id=shop_id,
-                    order_count=int(item["order_count"]),
-                    shipped_count=int(item["shipped_order_count"]),
-                    cancelled_count=int(item["cancelled_order_count"]),
-                    intake=float(item["intake_untaxed"]),
-                    shipment=float(item["shipment_untaxed"]),
-                    cancelled=float(item["cancelled_untaxed"]),
-                    refund=float(item["refund_untaxed"]),
-                    level="detail",
-                    row_id=f"detail-{item['period_value']}-{shop_id}",
-                )
+                {
+                    "period": item["period_value"],
+                    "shop_id": shop_id,
+                    "shop_name": item.get("shop_name") or shop.get("shop_name") or f"店铺{shop_id}",
+                    "platform": normalize_platform(shop.get("shop_site")),
+                    "orders": int(item["order_count"]),
+                    "shipped_orders": int(item["shipped_order_count"]),
+                    "cancelled_orders": int(item["cancelled_order_count"]),
+                    "intake": float(item["intake_untaxed"]),
+                    "shipment": float(item["shipment_untaxed"]),
+                    "cancelled_amount": float(item["cancelled_untaxed"]),
+                    "refund": float(item["refund_untaxed"]),
+                }
             )
         return rows
 
+    def _to_row(
+        self,
+        base: dict[str, Any],
+        configs: list[PlatformMetricModel],
+        level: str,
+        row_id: str,
+        display: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        variables: dict[str, Any] = {key: base.get(key, 0) for key in BASE_VARIABLES}
+        variables.update(_rate_vars())
+        variables.update(
+            {
+                "period": display.get("period") if display else base.get("period"),
+                "platform": display.get("platform") if display else base.get("platform"),
+                "shop_name": display.get("shop_name") if display else base.get("shop_name"),
+                "shop_id": display.get("shop_id") if display else base.get("shop_id"),
+            }
+        )
+        row: dict[str, Any] = {"id": row_id, "is_aggregate": {"detail": 0, "platform": 1, "total": 2}.get(level, 0),
+                               "aggregate_level": level, "period_value": variables["period"]}
+        # 表达式可能引用其他指标：多轮求值，最多 5 轮处理乱序依赖
+        pending = list(configs)
+        for _ in range(5):
+            remaining: list[PlatformMetricModel] = []
+            progressed = False
+            for metric in pending:
+                if metric.data_type == "string":
+                    dim_key = DIM_KEYS.get(metric.expression.strip())
+                    row[metric.code] = variables.get(dim_key) if dim_key else None
+                    progressed = True
+                    variables[metric.code] = row[metric.code]
+                    continue
+                try:
+                    value = evaluate(metric.expression, variables)
+                except ExpressionError:
+                    remaining.append(metric)
+                    continue
+                # 金额/数量保留 2 位，比率保留 4 位（与页面展示、下游串联口径一致）
+                row[metric.code] = round(value, 4 if metric.data_type == "percent" else 2)
+                variables[metric.code] = row[metric.code]
+                progressed = True
+            pending = remaining
+            if not pending or not progressed:
+                break
+        for metric in pending:
+            row[metric.code] = 0 if metric.data_type != "string" else ""
+        return row
+
     @staticmethod
-    def _aggregate(rows: list[dict[str, Any]], level: str) -> list[dict[str, Any]]:
+    def _sum_base(rows: list[dict[str, Any]], level: str) -> list[dict[str, Any]]:
         buckets: dict[tuple[str, str], dict[str, Any]] = {}
         for row in rows:
-            key = (row["PLT-00"], row["PLT-01"] if level == "platform" else "全部")
+            key = (row["period"], row["platform"] if level == "platform" else "全部")
             bucket = buckets.get(key)
             if bucket is None:
-                bucket = dict.fromkeys(SUM_FIELDS, 0)
-                bucket["PLT-00"] = row["PLT-00"]
-                bucket["PLT-01"] = "全部" if level == "total" else row["PLT-01"]
+                bucket = dict.fromkeys(BASE_SUM_KEYS, 0)
+                bucket["period"] = row["period"]
+                bucket["platform"] = "全部" if level == "total" else row["platform"]
                 buckets[key] = bucket
-            for field in SUM_FIELDS:
+            for field in BASE_SUM_KEYS:
                 bucket[field] = round(float(bucket[field]) + float(row.get(field) or 0), 2)
-
-        result: list[dict[str, Any]] = []
-        for (period, name), bucket in buckets.items():
-            result.append(
-                _row(
-                    period=period,
-                    platform=bucket["PLT-01"],
-                    shop_name="合计" if level == "total" else f"{name} 小计",
-                    shop_id="",
-                    order_count=int(bucket["PLT-04"]),
-                    shipped_count=int(bucket["PLT-05"]),
-                    cancelled_count=int(bucket["PLT-06"]),
-                    intake=float(bucket["PLT-08"]),
-                    shipment=float(bucket["PLT-09"]),
-                    cancelled=float(bucket["PLT-10"]),
-                    # bucket 的 PLT-11 已含取消，这里只取「发货后售后」部分再交给 _row 组装
-                    refund=round(float(bucket["PLT-11"]) - float(bucket["PLT-10"]), 2),
-                    level=level,
-                    row_id=f"{level}-{period}-{name}",
-                )
-            )
-        result.sort(key=lambda item: (item["PLT-00"], item["PLT-12"]), reverse=True)
-        return result
+        return [
+            {
+                **bucket,
+                "shop_id": "",
+                "shop_name": "合计" if level == "total" else f"{bucket['platform']} 小计",
+            }
+            for bucket in buckets.values()
+        ]
 
     async def page(
         self, search: PlatformAnalysisQueryParam, page_no: int, page_size: int
     ) -> dict[str, Any]:
-        rows = await self._detail_rows(search.period_value)
+        configs = await self.configs()
+        rows = await self._base_rows(search.period_value)
         if search.platform:
-            target = search.platform.strip()
-            rows = [row for row in rows if row["PLT-01"] == target]
+            rows = [row for row in rows if row["platform"] == search.platform.strip()]
         if search.shop_id is not None:
-            rows = [row for row in rows if row["PLT-03"] == search.shop_id]
+            rows = [row for row in rows if row["shop_id"] == search.shop_id]
         if search.keyword and search.keyword.strip():
             token = search.keyword.strip()
             rows = [
                 row
                 for row in rows
-                if token in str(row["PLT-01"]) or token in str(row["PLT-02"]) or token == str(row["PLT-03"])
+                if token in str(row["platform"]) or token in str(row["shop_name"]) or token == str(row["shop_id"])
             ]
 
-        platform_rows = self._aggregate(rows, "platform") if rows else []
-        total_rows = self._aggregate(rows, "total") if rows else []
-        if search.aggregate_level == "detail":
-            combined = list(rows)
-        elif search.aggregate_level == "platform":
-            combined = platform_rows
-        else:
-            combined = total_rows + platform_rows + rows
+        platform_rows = self._sum_base(rows, "platform") if rows else []
+        total_rows = self._sum_base(rows, "total") if rows else []
 
-        summary = self._summary(rows, platform_rows)
+        def _mk(base: dict[str, Any], level: str, rid: str) -> dict[str, Any]:
+            display = {
+                "period": base["period"],
+                "platform": base["platform"],
+                "shop_name": base["shop_name"],
+                "shop_id": base["shop_id"],
+            }
+            return self._to_row(base, configs, level, rid, display)
+
+        detail_rows = [_mk(row, "detail", f"detail-{row['period']}-{row['shop_id']}") for row in rows]
+        plat_rows = [_mk(row, "platform", f"platform-{row['period']}-{row['platform']}") for row in platform_rows]
+        tot_rows = [_mk(row, "total", f"total-{row['period']}") for row in total_rows]
+        if search.aggregate_level == "detail":
+            combined = detail_rows
+        elif search.aggregate_level == "platform":
+            combined = plat_rows
+        else:
+            combined = tot_rows + plat_rows + detail_rows
+
+        summary = self._summary(rows, configs)
         total = len(combined)
         start = (page_no - 1) * page_size
         return {
             "items": combined[start : start + page_size],
-            "columns": PLATFORM_FIELDS,
+            "columns": [_field_row(metric) for metric in configs],
             "total": total,
             "page_no": page_no,
             "page_size": page_size,
@@ -264,44 +411,66 @@ class PlatformAnalysisService:
             "summary": summary,
         }
 
-    def _summary(self, detail_rows: list[dict[str, Any]], platform_rows: list[dict[str, Any]]) -> dict[str, Any]:
-        def _sum(field: str) -> float:
-            return round(sum(float(row.get(field) or 0) for row in detail_rows), 2)
+    def _summary(self, rows: list[dict[str, Any]], configs: list[PlatformMetricModel]) -> dict[str, Any]:
+        sums = {field: round(sum(float(row.get(field) or 0) for row in rows), 2) for field in BASE_SUM_KEYS}
+        if not rows:
+            sums = dict.fromkeys(BASE_SUM_KEYS, 0)
+        total_row = self._to_row(
+            {**sums, "period": rows[0]["period"] if rows else None, "platform": "全部", "shop_name": "合计", "shop_id": ""},
+            configs,
+            "total",
+            "summary-total",
+            {"period": rows[0]["period"] if rows else None, "platform": "全部", "shop_name": "合计", "shop_id": ""},
+        )
 
-        intake = _sum("PLT-08")
-        shipment = _sum("PLT-09")
-        valid_orders = int(_sum("PLT-04")) - int(_sum("PLT-06"))
-        # PLT-11 已含取消单（PLT-10），这里只按 PLT-11 取退货合计，避免重复
-        return_abs = abs(_sum("PLT-11"))
-        net = round(shipment - return_abs, 2)
+        def pick(code: str) -> float:
+            value = total_row.get(code)
+            return float(value) if isinstance(value, (int, float)) else 0.0
+
+        plat_metric_rows = [
+            self._to_row(
+                base,
+                configs,
+                "platform",
+                f"summary-platform-{base['period']}-{base['platform']}",
+                {
+                    "period": base["period"],
+                    "platform": base["platform"],
+                    "shop_name": base["shop_name"],
+                    "shop_id": base["shop_id"],
+                },
+            )
+            for base in (self._sum_base(rows, "platform") if rows else [])
+        ]
+
         return {
-            "period_value": detail_rows[0]["PLT-00"] if detail_rows else None,
-            "shop_count": len(detail_rows),
-            "platform_count": len(platform_rows),
-            "order_count": int(_sum("PLT-04")),
-            "shipped_order_count": int(_sum("PLT-05")),
-            "cancelled_order_count": int(_sum("PLT-06")),
-            "intake_untaxed_sum": intake,
-            "shipment_untaxed_sum": shipment,
-            "return_untaxed_sum": round(-return_abs, 2),
-            "net_shipment_sum": net,
-            "settlement_income_sum": round(net * settlement_rate() / 100, 2),
-            "hq_allocation_sum": _sum("PLT-23"),
-            "avg_order_value": round(intake / valid_orders, 2) if valid_orders > 0 else 0.0,
-            "return_rate": _rate(return_abs, net, shipment),
+            "period_value": rows[0]["period"] if rows else None,
+            "shop_count": len(rows),
+            "platform_count": len({row["platform"] for row in rows}),
+            "order_count": int(sums["orders"]),
+            "shipped_order_count": int(sums["shipped_orders"]),
+            "cancelled_order_count": int(sums["cancelled_orders"]),
+            "intake_untaxed_sum": pick("PLT-08"),
+            "shipment_untaxed_sum": pick("PLT-09"),
+            "return_untaxed_sum": pick("PLT-11"),
+            "net_shipment_sum": pick("PLT-12"),
+            "settlement_income_sum": pick("PLT-13"),
+            "hq_allocation_sum": pick("PLT-23"),
+            "avg_order_value": pick("PLT-38"),
+            "return_rate": pick("PLT-37"),
             "top_platforms": sorted(
                 [
                     {
-                        "platform": row["PLT-01"],
-                        "order_count": row["PLT-04"],
-                        "intake_untaxed": row["PLT-08"],
-                        "shipment_untaxed": row["PLT-09"],
-                        "net_shipment": row["PLT-12"],
-                        "settlement_income": row["PLT-13"],
-                        "hq_allocation": row["PLT-23"],
-                        "return_rate": row["PLT-37"],
+                        "platform": row.get("PLT-01"),
+                        "order_count": int(row.get("PLT-04") or 0),
+                        "intake_untaxed": float(row.get("PLT-08") or 0),
+                        "shipment_untaxed": float(row.get("PLT-09") or 0),
+                        "net_shipment": float(row.get("PLT-12") or 0),
+                        "settlement_income": float(row.get("PLT-13") or 0),
+                        "hq_allocation": float(row.get("PLT-23") or 0),
+                        "return_rate": float(row.get("PLT-37") or 0),
                     }
-                    for row in platform_rows
+                    for row in plat_metric_rows
                 ],
                 key=lambda item: item["net_shipment"],
                 reverse=True,
@@ -309,5 +478,5 @@ class PlatformAnalysisService:
         }
 
     async def stats(self, period_value: str | None) -> dict[str, Any]:
-        rows = await self._detail_rows(period_value)
-        return self._summary(rows, self._aggregate(rows, "platform") if rows else [])
+        rows = await self._base_rows(period_value)
+        return self._summary(rows, await self.configs())

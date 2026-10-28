@@ -30,6 +30,7 @@ MIGRATION_PATHS = (
     MIGRATION_DIR / "2026_10_27_1200_retailshop01.py",
     MIGRATION_DIR / "2026_10_27_1353_b0f396df56ac.py",
     MIGRATION_DIR / "2026_10_27_1600_retailplatform01.py",
+    MIGRATION_DIR / "2026_10_28_1000_platformmetric01.py",
 )
 
 OLD_OPEN_CLIENT = """
@@ -78,6 +79,7 @@ def main() -> None:
                 "retail_shop",
                 "retail_after_sale",
                 "retail_after_sale_item",
+                "platform_metric_def",
             }
             assert expected_tables <= tables, f"缺少表: {expected_tables - tables}"
             open_client_columns = {item["name"] for item in inspector.get_columns("open_client")}
@@ -99,7 +101,9 @@ def main() -> None:
                 item["name"] for item in inspector.get_indexes("retail_after_sale_item")
             }
             assert "ix_retail_after_sale_item_sku" in after_sale_item_indexes
-            print("UPGRADE OK: 6 tables + 2 open_client columns + indexes")
+            metric_indexes = {item["name"] for item in inspector.get_indexes("platform_metric_def")}
+            assert "ix_platform_metric_def_code" in metric_indexes
+            print("UPGRADE OK: 7 tables + 2 open_client columns + indexes")
 
             with Operations.context(context):
                 for migration in reversed(migrations):

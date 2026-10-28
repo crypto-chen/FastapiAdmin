@@ -15,3 +15,18 @@ class PlatformAnalysisQueryParam(BaseModel):
     )
     page_no: int = Field(default=1, ge=1, description="页码")
     page_size: int = Field(default=50, ge=1, le=500, description="每页数量")
+
+
+class PlatformMetricUpsertParam(BaseModel):
+    """平台指标配置（新增/修改）。"""
+
+    code: str = Field(..., min_length=2, max_length=32, description="指标编码，如 PLT-39")
+    name: str = Field(..., min_length=1, max_length=128, description="指标名称")
+    group: str = Field(default="金额", max_length=32, description="分组：维度/数量/金额/比率")
+    data_type: str = Field(default="number", pattern="^(number|percent|string)$", description="数据类型")
+    unit: str | None = Field(default=None, max_length=16, description="单位")
+    sensitive: bool = Field(default=False, description="是否敏感字段")
+    expression: str = Field(..., min_length=1, max_length=1000, description="取值表达式")
+    note: str | None = Field(default=None, max_length=1000, description="口径说明")
+    sort: int = Field(default=100, ge=0, le=9999, description="列顺序")
+    status: int = Field(default=0, ge=0, le=1, description="状态(0:启用 1:停用)")

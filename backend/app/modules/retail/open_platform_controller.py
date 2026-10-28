@@ -19,7 +19,8 @@ from app.core.exceptions import CustomException
 from app.modules.openapi.dependencies import OpenClientDep
 from app.modules.openapi.route_class import OpenApiLogRoute
 from app.modules.openapi.security import CODE_METRIC_FORBIDDEN
-from app.modules.platform.service import normalize_platform
+from app.modules.platform.schema import PlatformAnalysisQueryParam
+from app.modules.platform.service import PlatformAnalysisService, normalize_platform
 
 from .model import RetailShopModel
 from .query_service import RetailQueryService
@@ -93,6 +94,39 @@ async def platform_analysis(
             "shop_count": len({(row["period_value"], row["shop_id"]) for row in filtered}),
         }
 
+    result["app_id"] = client.app_id
+    result["generated_at"] = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
+    return SuccessResponse(data=result, msg="查询平台渠道分析指标成功")
+
+
+@OpenRetailPlatformRouter.get(
+    "/metrics",
+    summary="查询平台渠道分析指标（按指标配置返回，新增指标自动出现）",
+    response_model=ResponseSchema[dict],
+)
+async def platform_metrics(
+    client: OpenClientDep,
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    period_value: Annotated[str | None, Query(max_length=16, description="期间 YYYY-MM")] = None,
+    platform: Annotated[str | None, Query(max_length=32, description="平台")] = None,
+    shop_id: Annotated[int | None, Query(ge=0, description="店铺编号")] = None,
+    aggregate_level: Annotated[str, Query(pattern="^(detail|platform|all)$")] = "detail",
+    page_no: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=2000)] = 500,
+) -> JSONResponse:
+    """与「指标中心 → 平台分析」同源：columns 里是当前启用的指标定义，
+    items 的键就是指标编码（如 ``PLT-08``），管理端新增指标后这里自动出现。
+    """
+    _ensure_allowed(client)
+    search = PlatformAnalysisQueryParam(
+        period_value=period_value,
+        platform=platform,
+        shop_id=shop_id,
+        aggregate_level=aggregate_level,
+        page_no=page_no,
+        page_size=page_size,
+    )
+    result = await PlatformAnalysisService(db).page(search, page_no, page_size)
     result["app_id"] = client.app_id
     result["generated_at"] = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
     return SuccessResponse(data=result, msg="查询平台渠道分析指标成功")

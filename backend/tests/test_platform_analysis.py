@@ -14,7 +14,8 @@ from sqlalchemy import delete
 from app import create_app
 from app.core.base_model import MappedBase
 from app.core.database import async_db_session, async_engine
-from app.modules.platform.schema import PlatformAnalysisQueryParam
+from app.modules.platform.expression import evaluate
+from app.modules.platform.schema import PlatformAnalysisQueryParam, PlatformMetricUpsertParam
 from app.modules.platform.service import PlatformAnalysisService, normalize_platform
 from app.modules.retail.model import (
     RetailAfterSaleItemModel,
@@ -32,6 +33,7 @@ _TABLES = (
     "retail_after_sale",
     "retail_after_sale_item",
     "retail_shop",
+    "platform_metric_def",
 )
 
 
@@ -40,6 +42,8 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[Any, None]:
     tables = [MappedBase.metadata.tables[name] for name in _TABLES]
     async with async_engine.begin() as conn:
         await conn.run_sync(MappedBase.metadata.create_all, tables=tables)
+    async with async_db_session() as db, db.begin():
+        await PlatformAnalysisService(db).reset_defaults()
     app.state.redis = redis.asyncio.Redis.from_url("redis://localhost:6379/0")
     yield
 
@@ -59,6 +63,16 @@ def test_normalize_platform() -> None:
     assert normalize_platform("抖音小店") == "抖音"
     assert normalize_platform("商家自有商城") == "其他"
     assert normalize_platform(None) == "其他"
+
+
+def test_expression_supports_metric_codes() -> None:
+    # 形如 PLT-08 的编码会被转成合法标识符
+    assert evaluate("PLT-08 / max(PLT-04 - PLT-06, 1)", {"PLT-08": 200.0, "PLT-04": 1.0, "PLT-06": 0.0}) == 200.0
+    assert evaluate(
+        "abs(PLT-11) / choose(PLT-12 > 0, PLT-12, PLT-09)",
+        {"PLT-11": -442.48, "PLT-12": -342.48, "PLT-09": 100.0},
+    ) == 4.4248
+    assert evaluate("PLT-08 / 0", {"PLT-08": 100.0}) == 0.0
 
 
 def test_platform_page_requires_auth(platform_client: TestClient) -> None:
@@ -156,3 +170,42 @@ def test_platform_service_aggregates(platform_client: TestClient) -> None:
             }
 
     asyncio.run(_check())
+
+
+def test_custom_metric_added_without_code_change(platform_client: TestClient) -> None:
+    """新增平台指标只需插一行配置：页面列与取值立即生效，不需要改代码。"""
+
+    async def _add() -> None:
+        async with async_db_session() as db, db.begin():
+            result = await PlatformAnalysisService(db).upsert_metric(
+                PlatformMetricUpsertParam(
+                    code="PLT-90",
+                    name="取消率",
+                    group="比率",
+                    data_type="percent",
+                    expression="PLT-06 / max(PLT-04, 1)",
+                    note="取消单数 ÷ 订单数（示例：通过配置新增的指标）",
+                    sort=200,
+                )
+            )
+            assert result["field_code"] == "PLT-90"
+
+    asyncio.run(_add())
+
+    async def _check_and_cleanup() -> None:
+        async with async_db_session() as db:
+            service = PlatformAnalysisService(db)
+            page = await service.page(
+                PlatformAnalysisQueryParam(period_value="2026-10", aggregate_level="platform"), 1, 20
+            )
+            assert "PLT-90" in {col["field_code"] for col in page["columns"]}
+            mx = next(row for row in page["items"] if row["PLT-01"] == "天猫")
+            assert mx["PLT-90"] == 0.5  # 2 单里 1 单取消
+            assert mx["PLT-08"] == 542.48  # 既有指标不受影响
+        async with async_db_session() as db, db.begin():
+            service = PlatformAnalysisService(db)
+            rows = await service.configs(only_enabled=False)
+            target = next(metric for metric in rows if metric.code == "PLT-90")
+            await service.delete_metric(target.id)
+
+    asyncio.run(_check_and_cleanup())

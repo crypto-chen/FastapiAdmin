@@ -86,6 +86,39 @@ export interface PlatformQuery {
   page_size?: number;
 }
 
+export interface PlatformMetricConfig {
+  id: number;
+  field_code: string;
+  field_name: string;
+  group: string;
+  data_type: string;
+  unit?: string | null;
+  sensitive: boolean;
+  expression: string;
+  note?: string | null;
+  sort: number;
+  status_num: number;
+}
+
+export interface PlatformMetricConfigList {
+  items: PlatformMetricConfig[];
+  base_variables: Record<string, string>;
+  functions: string[];
+}
+
+export interface PlatformMetricPayload {
+  code: string;
+  name: string;
+  group: string;
+  data_type: string;
+  unit?: string | null;
+  sensitive: boolean;
+  expression: string;
+  note?: string | null;
+  sort: number;
+  status: number;
+}
+
 export const PlatformAnalysisAPI = {
   fields() {
     return request<ApiResponse<PlatformFieldItem[]>>({ url: "/platform/fields", method: "get" });
@@ -104,6 +137,28 @@ export const PlatformAnalysisAPI = {
       url: "/platform/stats",
       method: "get",
       params: { period_value: periodValue },
+    });
+  },
+  metricConfigs() {
+    return request<ApiResponse<PlatformMetricConfigList>>({ url: "/platform/metrics", method: "get" });
+  },
+  createMetric(data: PlatformMetricPayload) {
+    return request<ApiResponse<PlatformMetricConfig>>({ url: "/platform/metrics", method: "post", data });
+  },
+  updateMetric(id: number, data: PlatformMetricPayload) {
+    return request<ApiResponse<PlatformMetricConfig>>({
+      url: `/platform/metrics/${id}`,
+      method: "put",
+      data,
+    });
+  },
+  deleteMetric(id: number) {
+    return request<ApiResponse<null>>({ url: `/platform/metrics/${id}`, method: "delete" });
+  },
+  resetMetrics() {
+    return request<ApiResponse<Record<string, number>>>({
+      url: "/platform/metrics/reset",
+      method: "post",
     });
   },
 };
