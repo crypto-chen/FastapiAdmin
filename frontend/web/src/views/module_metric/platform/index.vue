@@ -62,6 +62,7 @@
           </ElOptionGroup>
         </ElSelect>
         <ElButton link type="primary" @click="resetFields">恢复默认</ElButton>
+        <ElButton link type="primary" @click="selectReadyFields">只看现用可出</ElButton>
       </div>
 
       <div class="summary">
@@ -196,6 +197,11 @@
         <ElTableColumn prop="data_type" label="类型" width="90" />
         <ElTableColumn prop="expression" label="表达式" min-width="240" show-overflow-tooltip />
         <ElTableColumn prop="sort" label="排序" width="80" align="center" />
+        <ElTableColumn label="可出性" width="100" align="center">
+          <template #default="{ row }">
+            <ElTag :type="statusTagType(row.status)" size="small">{{ row.status_label }}</ElTag>
+          </template>
+        </ElTableColumn>
         <ElTableColumn label="状态" width="90" align="center">
           <template #default="{ row }">
             <ElTag :type="row.status_num === 0 ? 'success' : 'info'" size="small">
@@ -239,6 +245,14 @@
             <ElOption label="数值 number" value="number" />
             <ElOption label="百分比 percent" value="percent" />
             <ElOption label="文本 string" value="string" />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="可出性">
+          <ElSelect v-model="metricForm.readiness" style="width: 100%">
+            <ElOption label="现用可出（表达式必填）" value="ready" />
+            <ElOption label="待确认（口径未定）" value="pending" />
+            <ElOption label="待做（缺录入/接口）" value="todo" />
+            <ElOption label="缺数据源" value="missing" />
           </ElSelect>
         </ElFormItem>
         <ElFormItem label="表达式" required>
@@ -332,6 +346,7 @@ const metricForm = reactive<{
   sort: number;
   enabled: boolean;
   sensitive: boolean;
+  readiness: string;
 }>({
   code: "",
   name: "",
@@ -343,6 +358,7 @@ const metricForm = reactive<{
   sort: 200,
   enabled: true,
   sensitive: false,
+  readiness: "ready",
 });
 
 const baseVariableText = computed(() =>
@@ -424,6 +440,11 @@ function applyDefaultFields() {
 
 function resetFields() {
   applyDefaultFields();
+}
+
+function selectReadyFields() {
+  applyDefaultFields();
+  ElMessage.success("已切换为「现用可出」字段");
 }
 
 async function loadMeta() {
@@ -517,6 +538,7 @@ function openMetricForm(row?: PlatformMetricConfig) {
     sort: row?.sort ?? 200,
     enabled: (row?.status_num ?? 0) === 0,
     sensitive: row?.sensitive ?? false,
+    readiness: (row?.status as string) || "ready",
   });
   metricFormVisible.value = true;
 }
@@ -530,6 +552,7 @@ function buildMetricPayload(): PlatformMetricPayload {
     unit: metricForm.unit || null,
     sensitive: metricForm.sensitive,
     expression: metricForm.expression.trim(),
+    readiness: metricForm.readiness,
     note: metricForm.note || null,
     sort: metricForm.sort,
     status: metricForm.enabled ? 0 : 1,

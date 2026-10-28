@@ -21,11 +21,11 @@ from typing import Any
 MAX_EXPRESSION_LENGTH = 1000
 
 # 指标编码形如 PLT-08，Python 会解析成减法（且 08 是非法八进制），这里统一换成下划线形式
-_CODE_PATTERN = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z]+)-(\d+)(?![0-9])")
+_CODE_PATTERN = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z]+)-([A-Za-z]?\d+)(?![A-Za-z0-9_])")
 
 
 def normalize_code(text: str) -> str:
-    """``PLT-08`` → ``PLT_08``；用于变量名与表达式。"""
+    """``PLT-08`` → ``PLT_08``、``PLT-A02`` → ``PLT_A02``；用于变量名与表达式。"""
     return _CODE_PATTERN.sub(r"\1_\2", text)
 
 

@@ -33,8 +33,15 @@ class PlatformMetricModel(ModelMixin):
     )
     expression: Mapped[str] = mapped_column(
         Text,
-        nullable=False,
+        default="",
+        nullable=True,
         comment="取值表达式：可用 base 变量（orders/intake/shipment/...）与其他指标编码",
+    )
+    readiness: Mapped[str] = mapped_column(
+        String(16),
+        default="ready",
+        nullable=False,
+        comment="可出性：ready 现用可出 / pending 待确认 / todo 待做 / missing 缺数据源",
     )
     note: Mapped[str | None] = mapped_column(Text, default=None, nullable=True, comment="口径说明")
     sort: Mapped[int] = mapped_column(Integer, default=100, nullable=False, comment="列顺序")

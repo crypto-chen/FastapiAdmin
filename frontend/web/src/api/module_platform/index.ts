@@ -95,6 +95,10 @@ export interface PlatformMetricConfig {
   unit?: string | null;
   sensitive: boolean;
   expression: string;
+  readiness: string;
+  status: string;
+  status_label: string;
+  enabled: boolean;
   note?: string | null;
   sort: number;
   status_num: number;
@@ -114,6 +118,7 @@ export interface PlatformMetricPayload {
   unit?: string | null;
   sensitive: boolean;
   expression: string;
+  readiness: string;
   note?: string | null;
   sort: number;
   status: number;

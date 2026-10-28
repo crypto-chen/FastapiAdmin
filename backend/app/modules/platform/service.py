@@ -43,6 +43,13 @@ DIM_KEYS = {
     "shop_id": "shop_id",
 }
 
+READINESS_LABELS = {
+    "ready": "现用可出",
+    "pending": "待确认",
+    "todo": "待做",
+    "missing": "缺数据源",
+}
+
 PLATFORM_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("天猫", ("天猫", "淘宝")),
     ("京东", ("京东",)),
@@ -73,6 +80,7 @@ def _rate_vars() -> dict[str, float]:
 
 
 def _field_row(metric: PlatformMetricModel) -> dict[str, Any]:
+    readiness = metric.readiness or "ready"
     return {
         "field_code": metric.code,
         "field_name": metric.name,
@@ -82,8 +90,11 @@ def _field_row(metric: PlatformMetricModel) -> dict[str, Any]:
         "note": metric.note,
         "unit": metric.unit,
         "expression": metric.expression,
-        "status": "ready" if metric.status == 0 else "disabled",
-        "status_label": "现用可出" if metric.status == 0 else "已停用",
+        # 页面「可出性」标签用 readiness；启用/停用另给 enabled
+        "status": readiness,
+        "status_label": READINESS_LABELS.get(readiness, readiness),
+        "enabled": metric.status == 0,
+        "readiness": readiness,
         "stored_in": "platform_metric_def",
     }
 
@@ -149,7 +160,7 @@ class PlatformAnalysisService:
         ).scalars().first()
         if existing is not None and (metric_id is None or existing.id != metric_id):
             raise CustomException(msg=f"指标编码已存在：{code}", code=CODE_PARAM_INVALID, status_code=400)
-        if data.data_type != "string":
+        if (data.readiness or "ready") == "ready" and data.data_type != "string":
             self._validate_expression(data.expression, code)
         payload = {
             "code": code,
@@ -159,6 +170,7 @@ class PlatformAnalysisService:
             "unit": data.unit,
             "sensitive": data.sensitive,
             "expression": data.expression.strip(),
+            "readiness": data.readiness or "ready",
             "note": data.note,
             "sort": data.sort,
             "status": data.status,
@@ -202,6 +214,7 @@ class PlatformAnalysisService:
                 "unit": item.get("unit"),
                 "sensitive": bool(item.get("sensitive")),
                 "expression": item["expression"],
+                "readiness": item.get("readiness", "ready"),
                 "note": item.get("note"),
                 "sort": item["sort"],
                 "status": 0,
@@ -313,6 +326,12 @@ class PlatformAnalysisService:
             remaining: list[PlatformMetricModel] = []
             progressed = False
             for metric in pending:
+                if (metric.readiness or "ready") != "ready" or not (metric.expression or "").strip():
+                    # 待确认/待做指标先占位：页面显示「-」，不影响其他指标计算
+                    row[metric.code] = None
+                    variables[metric.code] = 0
+                    progressed = True
+                    continue
                 if metric.data_type == "string":
                     dim_key = DIM_KEYS.get(metric.expression.strip())
                     row[metric.code] = variables.get(dim_key) if dim_key else None

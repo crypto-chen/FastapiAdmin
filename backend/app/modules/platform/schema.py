@@ -26,7 +26,16 @@ class PlatformMetricUpsertParam(BaseModel):
     data_type: str = Field(default="number", pattern="^(number|percent|string)$", description="数据类型")
     unit: str | None = Field(default=None, max_length=16, description="单位")
     sensitive: bool = Field(default=False, description="是否敏感字段")
-    expression: str = Field(..., min_length=1, max_length=1000, description="取值表达式")
+    expression: str = Field(
+        default="",
+        max_length=1000,
+        description="取值表达式；现用可出(ready)必填，待确认/待做可留空",
+    )
+    readiness: str = Field(
+        default="ready",
+        pattern="^(ready|pending|todo|missing)$",
+        description="可出性：ready 现用可出 / pending 待确认 / todo 待做 / missing 缺数据源",
+    )
     note: str | None = Field(default=None, max_length=1000, description="口径说明")
     sort: int = Field(default=100, ge=0, le=9999, description="列顺序")
     status: int = Field(default=0, ge=0, le=1, description="状态(0:启用 1:停用)")

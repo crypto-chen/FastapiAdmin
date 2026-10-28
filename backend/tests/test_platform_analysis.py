@@ -138,6 +138,8 @@ def test_platform_service_aggregates(platform_client: TestClient) -> None:
             assert by_platform["京东"]["PLT-23"] == 0.8  # 20 × 4%
             # 客单价 = 接单未税 ÷ 有效订单数（剔除取消）
             assert by_platform["京东"]["PLT-38"] == 200.0  # 200 / 1
+            # 待确认指标先占位为空，不参与计算
+            assert by_platform["京东"]["PLT-03"] in (None, "")
             assert by_platform["天猫"]["PLT-08"] == 542.48
             assert by_platform["天猫"]["PLT-09"] == 100.0
             assert by_platform["天猫"]["PLT-11"] == -442.48
@@ -183,7 +185,7 @@ def test_custom_metric_added_without_code_change(platform_client: TestClient) ->
                     name="取消率",
                     group="比率",
                     data_type="percent",
-                    expression="PLT-06 / max(PLT-04, 1)",
+                    expression="PLT-A04 / max(PLT-A02, 1)",
                     note="取消单数 ÷ 订单数（示例：通过配置新增的指标）",
                     sort=200,
                 )
