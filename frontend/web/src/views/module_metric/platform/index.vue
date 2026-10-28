@@ -37,6 +37,7 @@
         <ElButton @click="detailVisible = true">字段说明</ElButton>
         <ElButton @click="openStats">平台排行</ElButton>
         <ElButton type="warning" plain @click="openConfig">指标配置</ElButton>
+        <ElButton :loading="rebuilding" @click="handleRebuild">按期间计算</ElButton>
       </div>
 
       <div class="toolbar toolbar-second">
@@ -78,6 +79,9 @@
         <span>总部分摊4% {{ formatNumber(summary.hq_allocation_sum) }}</span>
         <span>退货率 {{ formatPercent(summary.return_rate) }}</span>
         <span>客单价 {{ formatNumber(summary.avg_order_value) }}</span>
+        <span class="summary-extra">
+          最近计算 {{ latestRun ? `v${latestRun.calc_version} · ${latestRun.calc_time || "-"} · ${latestRun.row_count} 行` : "暂无（每天 00/07/12/18 自动计算）" }}
+        </span>
       </div>
 
       <ElTable
@@ -296,6 +300,7 @@ import {
   type PlatformMetricPayload,
   type PlatformPageResult,
   type PlatformRow,
+  type PlatformSnapshotRun,
   type PlatformStats,
 } from "@/api/module_platform";
 
@@ -328,6 +333,8 @@ const currentRowLabel = ref("");
 const rowDetail = ref<PlatformRow>({} as PlatformRow);
 
 const configVisible = ref(false);
+const rebuilding = ref(false);
+const latestRun = ref<PlatformSnapshotRun | null>(null);
 const configLoading = ref(false);
 const configs = ref<PlatformMetricConfig[]>([]);
 const baseVariables = ref<Record<string, string>>({});
@@ -487,6 +494,41 @@ async function loadData() {
   }
 }
 
+async function loadLatestRun() {
+  try {
+    const res = await PlatformAnalysisAPI.runs(periodValue.value);
+    latestRun.value = (res.data?.data ?? [])[0] ?? null;
+  } catch {
+    latestRun.value = null;
+  }
+}
+
+async function handleRebuild() {
+  rebuilding.value = true;
+  try {
+    const res = await PlatformAnalysisAPI.rebuild(periodValue.value);
+    const data = (res.data?.data ?? {}) as {
+      status?: string;
+      calc_version?: number;
+      row_count?: number;
+      rows?: number;
+      reason?: string;
+    };
+    if (data.status === "success") {
+      ElMessage.success(`计算完成：v${data.calc_version}，写入 ${data.rows ?? 0} 行`);
+      await loadLatestRun();
+      await loadData();
+    } else {
+      ElMessage.warning(data.reason || "该期间没有数据");
+    }
+  } catch (error) {
+    ElMessage.error("计算失败，请查看后端日志");
+    console.error(error);
+  } finally {
+    rebuilding.value = false;
+  }
+}
+
 function handleQuery() {
   query.page_no = 1;
   loadData();
@@ -576,6 +618,7 @@ async function submitMetric() {
     metricFormVisible.value = false;
     await loadConfigs();
     await loadMeta();
+    await loadLatestRun();
     await loadData();
   } catch (error) {
     ElMessage.error("保存失败，请检查表达式与编码是否重复");

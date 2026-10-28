@@ -117,3 +117,24 @@ async def reset_platform_metrics(
 ) -> JSONResponse:
     result = await PlatformAnalysisService(db).reset_defaults()
     return SuccessResponse(data=result, msg="已恢复默认平台指标")
+
+
+@PlatformAnalysisRouter.post("/rebuild", response_model=ResponseSchema[dict])
+async def rebuild_platform_snapshot(
+    auth: Annotated[AuthSchema, Security(AuthPermission([PERM_QUERY]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    period_value: Annotated[str | None, Query(max_length=16, description="期间 YYYY-MM，缺省当月")] = None,
+) -> JSONResponse:
+    """按期间计算平台指标并落快照（与每日任务同一套逻辑）。"""
+    result = await PlatformAnalysisService(db).build_snapshot(period_value)
+    return SuccessResponse(data=result, msg="平台指标计算完成" if result.get("status") == "success" else "该期间没有数据")
+
+
+@PlatformAnalysisRouter.get("/runs", response_model=ResponseSchema[list[dict]])
+async def list_platform_snapshot_runs(
+    auth: Annotated[AuthSchema, Security(AuthPermission([PERM_QUERY]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    period_value: Annotated[str | None, Query(max_length=16, description="期间 YYYY-MM")] = None,
+) -> JSONResponse:
+    result = await PlatformAnalysisService(db).snapshot_runs(period_value)
+    return SuccessResponse(data=result, msg="查询平台指标计算批次成功")

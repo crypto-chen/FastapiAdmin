@@ -34,6 +34,7 @@ _TABLES = (
     "retail_after_sale_item",
     "retail_shop",
     "platform_metric_def",
+    "platform_metric_snapshot",
 )
 
 
@@ -211,3 +212,24 @@ def test_custom_metric_added_without_code_change(platform_client: TestClient) ->
             await service.delete_metric(target.id)
 
     asyncio.run(_check_and_cleanup())
+
+
+def test_snapshot_build_and_runs(platform_client: TestClient) -> None:
+    """按期间计算快照：写入 店铺/平台/合计 三层结果，并可查询批次。"""
+
+    async def _build() -> dict:
+        async with async_db_session() as db, db.begin():
+            return await PlatformAnalysisService(db).build_snapshot("2026-10")
+
+    result = asyncio.run(_build())
+    assert result["status"] == "success"
+    assert result["calc_version"] >= 1
+    assert result["rows"] > 0
+
+    async def _check() -> None:
+        async with async_db_session() as db:
+            runs = await PlatformAnalysisService(db).snapshot_runs("2026-10")
+            assert runs and runs[0]["calc_version"] == result["calc_version"]
+            assert runs[0]["row_count"] == result["rows"]
+
+    asyncio.run(_check())

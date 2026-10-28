@@ -7,9 +7,10 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import CustomException
@@ -24,7 +25,7 @@ from app.modules.retail.query_service import (
 
 from .defaults import BASE_VARIABLES, DEFAULT_METRICS
 from .expression import ExpressionError, evaluate
-from .model import PlatformMetricModel
+from .model import PlatformMetricModel, PlatformMetricSnapshotModel
 from .schema import PlatformAnalysisQueryParam, PlatformMetricUpsertParam
 
 BASE_SUM_KEYS = (
@@ -499,3 +500,139 @@ class PlatformAnalysisService:
     async def stats(self, period_value: str | None) -> dict[str, Any]:
         rows = await self._base_rows(period_value)
         return self._summary(rows, await self.configs())
+
+    # ── 每日快照（与指标轮次一起跑，供历史/审计） ──────────────
+    async def build_snapshot(self, period_value: str | None = None) -> dict[str, Any]:
+        """计算指定期间（默认当月）的平台指标并落快照。"""
+        period = (period_value or datetime.now().strftime("%Y-%m")).strip()
+        configs = await self.configs()
+        rows = await self._base_rows(period)
+        if not rows:
+            return {"period_value": period, "status": "skipped", "reason": "该期间没有零售订单", "rows": 0}
+
+        current = (
+            await self.db.execute(
+                select(func.max(PlatformMetricSnapshotModel.calc_version)).where(
+                    PlatformMetricSnapshotModel.period_value == period
+                )
+            )
+        ).scalar() or 0
+        version = int(current) + 1
+        batch_id = f"platform-{period}-{datetime.now(UTC):%Y%m%d%H%M%S}"
+        now = datetime.now(UTC)
+
+        def _emit(row: dict[str, Any], level: str, dim_key: str, dim_name: str, platform: str | None, shop_id: int | None):
+            for metric in configs:
+                value = row.get(metric.code)
+                if value is None:
+                    continue
+                self.db.add(
+                    PlatformMetricSnapshotModel(
+                        period_value=period,
+                        level=level,
+                        dim_key=dim_key,
+                        dim_name=dim_name,
+                        platform=platform,
+                        shop_id=shop_id,
+                        metric_code=metric.code,
+                        value=float(value) if isinstance(value, (int, float)) else 0,
+                        calc_version=version,
+                        batch_id=batch_id,
+                        calc_time=now,
+                    )
+                )
+
+        for base in rows:
+            display = {
+                "period": base["period"],
+                "platform": base["platform"],
+                "shop_name": base["shop_name"],
+                "shop_id": base["shop_id"],
+            }
+            _emit(
+                self._to_row(base, configs, "detail", f"detail-{base['shop_id']}", display),
+                "shop",
+                str(base["shop_id"]),
+                base["shop_name"],
+                base["platform"],
+                int(base["shop_id"]),
+            )
+        for base in self._sum_base(rows, "platform"):
+            display = {
+                "period": base["period"],
+                "platform": base["platform"],
+                "shop_name": base["shop_name"],
+                "shop_id": base["shop_id"],
+            }
+            _emit(
+                self._to_row(base, configs, "platform", f"platform-{base['platform']}", display),
+                "platform",
+                base["platform"],
+                base["shop_name"],
+                base["platform"],
+                None,
+            )
+        for base in self._sum_base(rows, "total"):
+            display = {"period": base["period"], "platform": "全部", "shop_name": "合计", "shop_id": ""}
+            _emit(
+                self._to_row(base, configs, "total", "total-ALL", display),
+                "total",
+                "ALL",
+                "合计",
+                None,
+                None,
+            )
+        await self.db.flush()
+        count = (
+            await self.db.execute(
+                select(func.count(PlatformMetricSnapshotModel.id)).where(
+                    PlatformMetricSnapshotModel.period_value == period,
+                    PlatformMetricSnapshotModel.calc_version == version,
+                )
+            )
+        ).scalar() or 0
+        return {
+            "period_value": period,
+            "status": "success",
+            "calc_version": version,
+            "batch_id": batch_id,
+            "shop_count": len(rows),
+            "rows": int(count),
+        }
+
+    async def snapshot_runs(self, period_value: str | None = None) -> list[dict[str, Any]]:
+        conditions = []
+        if period_value:
+            conditions.append(PlatformMetricSnapshotModel.period_value == period_value.strip())
+        rows = (
+            await self.db.execute(
+                select(
+                    PlatformMetricSnapshotModel.period_value,
+                    PlatformMetricSnapshotModel.calc_version,
+                    PlatformMetricSnapshotModel.batch_id,
+                    func.count(PlatformMetricSnapshotModel.id).label("row_count"),
+                    func.max(PlatformMetricSnapshotModel.calc_time).label("calc_time"),
+                )
+                .where(*conditions)
+                .group_by(
+                    PlatformMetricSnapshotModel.period_value,
+                    PlatformMetricSnapshotModel.calc_version,
+                    PlatformMetricSnapshotModel.batch_id,
+                )
+                .order_by(
+                    PlatformMetricSnapshotModel.period_value.desc(),
+                    PlatformMetricSnapshotModel.calc_version.desc(),
+                )
+                .limit(50)
+            )
+        ).all()
+        return [
+            {
+                "period_value": row[0],
+                "calc_version": row[1],
+                "batch_id": row[2],
+                "row_count": int(row[3]),
+                "calc_time": row[4].strftime("%Y-%m-%d %H:%M:%S") if row[4] else None,
+            }
+            for row in rows
+        ]

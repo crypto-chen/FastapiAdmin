@@ -124,6 +124,14 @@ export interface PlatformMetricPayload {
   status: number;
 }
 
+export interface PlatformSnapshotRun {
+  period_value: string;
+  calc_version: number;
+  batch_id: string;
+  row_count: number;
+  calc_time?: string | null;
+}
+
 export const PlatformAnalysisAPI = {
   fields() {
     return request<ApiResponse<PlatformFieldItem[]>>({ url: "/platform/fields", method: "get" });
@@ -164,6 +172,21 @@ export const PlatformAnalysisAPI = {
     return request<ApiResponse<Record<string, number>>>({
       url: "/platform/metrics/reset",
       method: "post",
+    });
+  },
+  rebuild(periodValue?: string) {
+    return request<ApiResponse<Record<string, unknown>>>({
+      url: "/platform/rebuild",
+      method: "post",
+      params: { period_value: periodValue },
+      timeout: 5 * 60 * 1000,
+    });
+  },
+  runs(periodValue?: string) {
+    return request<ApiResponse<PlatformSnapshotRun[]>>({
+      url: "/platform/runs",
+      method: "get",
+      params: { period_value: periodValue },
     });
   },
 };
