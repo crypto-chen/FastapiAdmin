@@ -1,0 +1,77 @@
+客户编码匹配改造验证记录
+日期：2026-10-31
+目标：CRM orderAnalyze / getCusotmerList 客户维度匹配由 ID 改为编码
+
+一、产物路径
+MODIFIED_FILE：D:\永锢\06.核算指标系统\FastapiAdmin\deploy\customer-code-20261031\MODIFIED_customer_build.py
+DIFF_FILE：D:\永锢\06.核算指标系统\FastapiAdmin\deploy\customer-code-20261031\CHANGES.diff
+VERIFICATION：D:\永锢\06.核算指标系统\FastapiAdmin\deploy\customer-code-20261031\VERIFICATION.txt
+ROLLBACK：D:\永锢\06.核算指标系统\FastapiAdmin\deploy\customer-code-20261031\ROLLBACK.sh
+
+二、哈希
+基线 customer/build.py（git HEAD）SHA256：88A091E89A4D0597ACC8A01E065E31BFB8267462BF5C51B4777018CCE49EB83D
+修改后 customer/build.py SHA256：5B9CDC52D5611CA0818110A079766F40D307C0ACEF59C1D6C36EF7A5782E0F74
+
+三、BASELINE（改动前，数据库现存历史版本）
+命令：
+  python - <<'PY'
+  # 查询 dwd_order_full_chain 2026-10 v33 / metric_value 最新历史行
+  PY
+输入：period=2026-10，order calc_version=33，metric STF-47/STF-48
+输出：
+  零售单 1,281 条；customer_number 以 LS 开头 0 条
+  LS202610-00004 -> code=20200807-009318 name=邦讯技术股份有限公司（定制客户，错误）
+  STF-47 总客户数 = 10,077（2026-10-28 04:36:58）
+  STF-48 本月下单老客户数 = 1,222（2026-10-28 04:37:10）
+退出码：0
+
+四、MODIFIED（改动后，本地重建）
+1) 单元测试
+命令：cd backend; .venv\Scripts\python.exe -m pytest tests\test_customer_code_mapping.py tests\test_order_retail_type3.py -q
+输出：6 passed in 0.24s
+退出码：0
+
+2) 订单全链路 2026-10 v34
+命令：python scripts/run_order_build.py --period 2026-10
+输出：orders=2805
+校验：
+  零售单 1,512 条；LS 编码 1,506；空编码 0；其它编码 6（外贸零售 WM 单，归属定制客户）
+  LS202610-00004 -> code=LS20250819004637 name=tb021384_88 is_retail=1
+
+3) 客户分析 2026-10 v21
+命令：python scripts/run_customer_build.py --period 2026-10
+输出：客户行 23,071；零售客户行 14,386
+对账：CUS 接单未税合计 8,604,217.37 = 订单全链路接单未税合计 8,604,217.37
+
+4) 指标重算（2025-07 ~ 2026-10）
+命令：python scripts/recalc_metrics_batch.py --code marketing_person_new_customer_intake_untaxed --code marketing_person_old_customer_intake_untaxed --code marketing_person_old_customer_order_count --code marketing_person_total_customer_count --with-dependents --period-from 2025-07 --period-to 2026-10
+输出（2026-10）：
+  STF-40 新客户业绩 = 769,101.15
+  STF-41 老客户业绩 = 7,835,116.22
+  STF-48 本月下单老客户数 = 1,411
+  STF-47 总客户数 = 25,057
+  STF-49 复购率 = 5.6791%
+对账（原始批次按 customer_code 去重/汇总）：
+  STF-40 = 481,069.39 + 76,088.72 + 211,943.04 = 769,101.15
+  STF-41 = 6,118,580.92 + 999,493.93 + 717,041.37 = 7,835,116.22
+  STF-48 = 内贸 686 + 外贸 60 + 零售 665 的编码并集 = 1,411
+  STF-48 无编码行不再按“一单一个客户”计入：2025-07 由 1,804 修正为 1,099（= 原始批次编码并集）
+退出码：0
+
+5) 自检脚本
+命令：python scripts/check_customer_code_mapping.py --period 2026-10
+输出：
+  订单全链路 v34：零售单 1512，LS 编码 1506，空编码 0，其它编码 6
+  客户分析 v21：客户行 23071，零售客户行 14386
+  STF-47 = 25057；STF-48 = 1411；STF-49 = 5.6791
+退出码：0
+
+五、ROLLBACK
+命令：bash deploy/customer-code-20261031/ROLLBACK.sh
+行为：git revert 本次提交 → seed 旧指标定义 → 用旧代码重建订单全链路/客户分析 → 重算 STF-40/41/47/48/49
+验证：在当前修改后的工作树上执行 git apply -R --check CHANGES.diff，退出码 0（补丁可反向还原到基线）；
+      bash -n ROLLBACK.sh，退出码 0（脚本语法通过）。
+
+六、服务器
+命令：python deploy/customer-code-20261031/update.py --apply --service fastapiadmin
+状态：脚本已就绪，等待服务器执行（当前环境无服务器 SSH 凭据）。

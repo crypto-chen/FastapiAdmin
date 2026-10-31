@@ -12,6 +12,10 @@
   新老客户/未出货库存等订单类指标同时汇总内贸、外贸、零售三路；零售行金额取
   ``remove_taxes_freight``，订单类型固定为零售（3）。发货明细接口尚无零售批次，
   出货类指标维持原口径（零售出货取聚水潭）。
+- 2026-10-31 起客户匹配由「客户 ID」改为「客户编码」：订单 ``customer_code``
+  （旧批次为 ``customer_number``）→ 客户档案 ``number``。定制客户与零售客户分属
+  两张表、ID 会重复，编码唯一；客户档案新增 ``is_retail``（0=定制，1=零售）。
+  STF-47 总客户数量同时包含定制与零售客户。
 - 接单未税（STF-13）归属月 = 收款日期 ``collectiontime`` 所在月（订单明细按建单月
   回看 12 期、前看 1 期，覆盖收款月与建单月错位的订单）；业务员下推金额（STF-23）
   同样按收款日期 ``collectiontime`` 所在月归期，并按建单月前看 2 期；
@@ -98,7 +102,7 @@ MONTH_DATE_RANGE: dict = {
     ]
 }
 
-# 客户列表是「当前全量快照」（无时间参数、每次约 2.5 万行），随每日三轮同步刷新。
+# 客户列表是「当前全量快照」（无时间参数、每次约 4 万行：定制 + 零售），随每日四轮同步刷新。
 CUSTOMER_CRON = "0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?"
 
 # 一个来源对象一条：同一接口按 type 拆成内贸/外贸/零售三条（来源对象 code 唯一）
@@ -444,13 +448,14 @@ METRICS = [
         "excel_code": "STF-48",
         "rule": "本月下单老客户数量（家）= 当期订单中 **is_new=2（老客户）** 的客户去重数，"
         "按订单创建月 createtime 落当期，只统计有效订单 status=384，按业务员（下单人 create_id）分组；"
-        "同一客户当月多单只算一次、跨内贸外贸也只算一次；公司合计取全部业务员的客户并集。",
+        "同一客户当月多单只算一次、跨内贸外贸也只算一次；客户按 **customer_code（客户编码）** 去重，"
+        "旧批次没有编码时回退 customer_number / customer(ID)；公司合计取全部业务员的客户并集。",
         "measures": {
             "kind": "crm_person_amount",
             "group_by": "person",
             "person_field": "create_id",
             "value_mode": "count_customers",
-            "customer_field": "customer",
+            "customer_fields": ["customer_code", "customer_number", "customer"],
             "unit": "家",
             **VALID_ORDER,
             **OLD_CUSTOMER,
@@ -462,16 +467,19 @@ METRICS = [
         "name": "营销中心业务员总客户数量",
         "excel_code": "STF-47",
         "rule": "总客户数量（家）= 客户表中**所属业务员（principal_id）**为本业务员的客户数量；"
-        "来源 CRM 客户列表接口（未分页全量，当前快照），未分配业务员（principal_id 为空）的客户不计入；"
+        "来源 CRM 客户列表接口（未分页全量，当前快照，**含定制客户 is_retail=0 与零售客户 is_retail=1**），"
+        "按客户编码 number 去重，未分配业务员（principal_id 为空）的客户不计入；"
         "该指标是时点快照口径，历史期间取重算时点最新的客户列表批次。",
         "measures": {
             "kind": "crm_person_amount",
             "group_by": "person",
             "person_field": "principal_id",
             "value_mode": "count_customers",
-            "customer_field": "id",
+            "customer_field": "number",
             "exclude_empty_person": True,
             "unit": "家",
+            # 客户列表是当前全量快照：只取最近一次批次，避免把历史上已删除/合并的客户并进来
+            "use_latest_batch_only": True,
             # 客户表没有订单状态字段：不按 status 过滤
             "status_field": None,
             "status_allow": [],

@@ -393,12 +393,25 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     person_index = await _load_person_index(db)
     world_map = await _load_world_map()
 
-    master: dict[int, dict] = {}
+    # 定制客户与零售客户分属两张表、ID 会重复；客户编码 number 唯一，主档以编码为键。
+    master: dict[str, dict] = {}
+    master_by_id: dict[int, dict] = {}
+    ambiguous_ids: set[int] = set()
     for row in master_rows:
+        code = str(row.get("number") or "").strip()
+        if code:
+            master[code] = row
         try:
-            master[int(row.get("id"))] = row
+            cid = int(row.get("id"))
         except (TypeError, ValueError):
             continue
+        # 同一 ID 命中两套客户表时无法判断归属，旧批次兜底不使用该 ID
+        if cid in master_by_id:
+            ambiguous_ids.add(cid)
+        else:
+            master_by_id[cid] = row
+    for cid in ambiguous_ids:
+        master_by_id.pop(cid, None)
 
     version = int(
         (
@@ -425,13 +438,20 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     buckets: dict[Any, dict[str, Any]] = {}
     for row in order_rows:
         extra = row.extra or {}
-        # 订单宽表没有 customer_name 物理列，客户名放在 extra（零售单也可能没有 customer_id）
-        key = row.customer_id or extra.get("customer_number") or extra.get("customer_name") or 0
+        # 订单宽表没有 customer_name 物理列，客户名放在 extra。
+        # 客户编码唯一，优先按编码归集；旧批次没有编码时才退回 ID。
+        code = str(extra.get("customer_number") or "").strip()
+        key = f"code:{code}" if code else (
+            f"id:{row.customer_id}" if row.customer_id else (
+                f"name:{extra.get('customer_name')}" if extra.get("customer_name") else f"order:{row.order_number}"
+            )
+        )
         bucket = buckets.setdefault(
             key,
             {
                 "customer_id": row.customer_id,
-                "customer_code": str(extra.get("customer_number") or "") or None,
+                "customer_code": code or None,
+                "customer_is_retail": extra.get("customer_is_retail"),
                 "customer_name": str(extra.get("customer_name") or "") or None,
                 "salesman_code": str(row.salesman_code or "") or None,
                 "salesman_name": str(extra.get("salesman_name") or "") or None,
@@ -463,6 +483,10 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                 "contribution_margin": 0.0,
             },
         )
+        if not bucket.get("customer_code") and code:
+            bucket["customer_code"] = code
+        if bucket.get("customer_is_retail") is None and extra.get("customer_is_retail") is not None:
+            bucket["customer_is_retail"] = extra.get("customer_is_retail")
         bucket["order_count"] += 1
         if str(extra.get("is_new_code") or extra.get("is_new") or "") == "2":
             bucket["repeat_order_count"] += 1
@@ -520,7 +544,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     bucket_by_code = {
         str(bucket["customer_code"]): bucket for bucket in buckets.values() if bucket.get("customer_code")
     }
-    master_by_code = {str(row.get("number")): row for row in master_rows if row.get("number")}
+    master_by_code = master
     for code, ar in ar_rows.items():
         if not code:
             continue
@@ -532,6 +556,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
             bucket = {
                 "customer_id": master_row.get("id"),
                 "customer_code": code,
+                "customer_is_retail": master_row.get("is_retail"),
                 "customer_name": str(ar.get("name") or master_row.get("name") or "") or None,
                 "salesman_code": str(principal) if principal not in (None, "") else None,
                 "salesman_name": (principal_meta or {}).get("person_name"),
@@ -625,10 +650,15 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
     rev01 = company.get("REV-01", 0.0)
 
     for bucket in buckets.values():
-        master_row = master.get(int(bucket["customer_id"])) if bucket["customer_id"] else None
+        code = str(bucket.get("customer_code") or "").strip()
+        master_row = master.get(code) if code else (
+            master_by_id.get(int(bucket["customer_id"])) if bucket.get("customer_id") else None
+        )
         if master_row:
             bucket["customer_code"] = bucket["customer_code"] or str(master_row.get("number") or "")
             bucket["customer_name"] = bucket["customer_name"] or str(master_row.get("name") or "")
+            if bucket.get("customer_is_retail") is None:
+                bucket["customer_is_retail"] = master_row.get("is_retail")
         # 地区以客户主档为准（内贸取 region 省市县，外贸取 country 国家），订单行为兜底
         master_type = str((master_row or {}).get("type") or "").strip()
         region_value = ""
@@ -706,6 +736,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
             "repeat_order_count": bucket["repeat_order_count"],
             "collection_term_raw": _concat(bucket["term_counter"]),
             "buy_frequency_year": (master_row or {}).get("buy_frequency_year"),
+            "is_retail": bucket.get("customer_is_retail"),
         }
         records.append(
             CustomerAnalysisModel(
@@ -724,7 +755,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
                 contribution_margin=contribution,
                 extra=extra_out,
                 data_quality_flag=(
-                    "ar_only" if bucket["ar_only"] else ("ok" if bucket["customer_id"] else "customer_unmapped")
+                    "ar_only" if bucket["ar_only"] else ("ok" if bucket["customer_code"] else "customer_unmapped")
                 ),
             )
         )

@@ -406,16 +406,33 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
         }
         batches["base_dict"] = len(base_names)
 
-        # 客户主数据：以客户列表接口为唯一权威来源（订单上的 wangwang 是旺旺号，不是客户名）
-        customer_map = {
-            int(row["id"]): {
+        # 客户主数据：以客户列表接口为唯一权威来源（订单上的 wangwang 是旺旺号，不是客户名）。
+        # 定制客户与零售客户分属两张表、ID 会重复，客户编码 number 才唯一 → 以编码为键。
+        customer_map: dict[str, dict] = {}
+        customer_by_id: dict[int, dict] = {}
+        ambiguous_ids: set[int] = set()
+        for row in customer_rows:
+            code = str(row.get("number") or "").strip()
+            if not code:
+                continue
+            item = {
                 "name": row.get("name"),
-                "number": row.get("number"),
+                "number": code,
                 "principal_id": row.get("principal_id"),
+                "is_retail": row.get("is_retail"),
             }
-            for row in customer_rows
-            if row.get("id")
-        }
+            customer_map[code] = item
+            try:
+                cid = int(row.get("id"))
+            except (TypeError, ValueError):
+                continue
+            # 同一 ID 在两套客户表都出现时无法判断归属，旧批次兜底不使用该 ID
+            if cid in customer_by_id:
+                ambiguous_ids.add(cid)
+            else:
+                customer_by_id[cid] = item
+        for cid in ambiguous_ids:
+            customer_by_id.pop(cid, None)
         return_by_order: dict[str, float] = {}
         for row in return_rows:
             number = str(row.get("number") or "").strip()
@@ -489,6 +506,7 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int 
                     category_names,
                     base_names,
                     is_retail=is_retail,
+                    customer_by_id=customer_by_id,
                 )
                 if record is None:
                     continue
@@ -541,7 +559,7 @@ def build_record(
     trade_type: str,
     period_value: str,
     calc_version: int,
-    customer_map: dict[int, dict],
+    customer_map: dict[str, dict],
     person_index: dict[str, dict],
     shipments_by_order: dict[str, float],
     ship_qty_by_order_id: dict[int, float],
@@ -551,6 +569,7 @@ def build_record(
     category_names: dict[int, str],
     base_names: dict[int, str],
     is_retail: bool = False,
+    customer_by_id: dict[int, dict] | None = None,
 ) -> tuple[OrderFullChainModel | None, list[str]]:
     """单行 CRM 订单 → 宽表记录。返回 (记录, 质量标记列表)。"""
     number = str(row.get("number") or "").strip()
@@ -725,18 +744,25 @@ def build_record(
         order_date and datetime(order_date.year, order_date.month, order_date.day), ship_date
     )
     customer_id = to_number(pick(row, SOURCE_KEYS["customer_id"]))
-    if customer_id is not None:
-        customer = customer_map.get(int(customer_id)) or {}
+    customer_code = str(pick(row, SOURCE_KEYS["customer_code"]) or "").strip()
+    customer = customer_map.get(customer_code) if customer_code else None
+    # 旧批次没有 customer_code 时才按 ID 兜底；customer_by_id 已剔除跨两套客户表的重复 ID
+    if customer is None and customer_id is not None and customer_by_id:
+        customer = customer_by_id.get(int(customer_id))
+    if customer:
         # 客户列表是权威来源：查到就用它覆盖订单上的值（订单上的 wangwang 只是聊天账号）
+        extra["customer_number"] = customer.get("number") or customer_code
         extra["customer_name"] = customer.get("name") or extra.get("customer_name")
-        extra["customer_number"] = customer.get("number")
+        extra["customer_is_retail"] = customer.get("is_retail")
         principal = customer.get("principal_id")
         extra["customer_principal"] = str(principal) if principal is not None else None
         extra["customer_principal_name"] = (
             (person_index.get(str(principal)) or {}).get("person_name") if principal is not None else None
         )
     else:
-        extra["customer_number"] = None
+        # 主档没匹配上时保留订单自带编码/名称，不丢客户维度
+        extra["customer_number"] = customer_code or None
+        extra["customer_is_retail"] = None
         extra["customer_principal"] = None
         extra["customer_principal_name"] = None
 

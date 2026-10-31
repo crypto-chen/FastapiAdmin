@@ -1,0 +1,913 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index ab53176d..30253ed8 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -11,6 +11,7 @@
+ - **2026-09-03** 存储与工作流模块重构，调整目录结构与初始化逻辑
+ 
+ ### 新增
++- **2026-10-31** 客户维度匹配由「客户 ID」改为「客户编码」：CRM `orderAnalyze` 新增 `customer_code`（旧批次回退 `customer_number`），客户档案 `getCusotmerList` 新增 `is_retail`（0=定制，1=零售）；定制/零售两套客户表 ID 重复，编码 `number` 唯一。订单全链路、客户分析、STF-47 总客户数量、STF-48 本月下单老客户数量全部改按编码匹配/去重，STF-47 纳入零售客户；重建 2025-07 ~ 2026-10 订单全链路与客户分析并重算 STF-40/41/47/48/49。上线脚本 `deploy/customer-code-20261031/update.py`
+ - **2026-10-21** CRM `orderAnalyze` 新增 `type=3`（零售订单范围）接入：订单全链路新增零售单（`order_type=3`，贸易类型按行内 `type` 落内贸/外贸，接单未税取 `remove_taxes_freight`，剔除 `status=522` 作废单）；新增来源对象与同步任务「CRM 订单明细（零售）」，调度与回补覆盖该来源；业务员接单/订单数/新老客户/未出货库存等指标增加零售分支；重建 2024-10 ~ 2026-10 订单全链路、零售有数据期间（2025-07 ~ 2026-10）的客户/产品线宽表，并重算受影响业务员指标及下游。部署脚本见 `deploy/order-analyze-retail-20261021/`
+ - **2026-10-16** 接入金蝶《存货收发存汇总表》全量数据源（组织 100 · 全仓 · 全物料）：新增 `backend/scripts/seed_inventory_inout_summary_full.py`（来源对象 code `HS_INOUTSTOCKSUMMARYRPT_FULL`，FormId 由请求模板指定 `HS_INOUTSTOCKSUMMARYRPT`；标准实体 `inventory_inout_summary_full` / 表 `dwd_inventory_inout_summary_full`；同步任务「存货收发存汇总表-组织100（全仓全物料）」每天 05:00 取当期）与校验脚本 `backend/scripts/check_inventory_inout_summary.py`。21 列含**库存结存成本**（期末结存金额 `FENDAmount` + 数量 `FENDQty`）与**物料成本**（期末结存单价 `FENDPrice`）。2026-09 实测 46151 行（明细 28905 / 小计 17246）、期末结存金额 1,509,397.23 元、期末结存数量 954,956.2281，与金蝶实时取数逐列差异 0。元数据同步支持请求模板里用 `FormId` 覆盖提交给金蝶的业务对象（`app/modules/metadata/sync.py` 的 `resolve_report_target`），同一金蝶报表可按不同口径建多个数据源而不撞 `meta_source_object.code`；踩坑：`FYearPeriod` 需 `FIsDisplayPeriod = true`，`FEXPENSEID/FEXPENSENAME` 本组合不可查
+ - **2026-10-12** 对接文档再升级：新增「5.1 指标分组（按主题看编码）」（报价/接单/出货与收入/下推/库存/费用与收益/客户与复购/线索/工时与人均）与「5.2 Excel 科目编码对照表」（STF ↔ 系统编码 ↔ 单位），并在字段说明补充「单位请读 `data.metrics[].unit`，不要自行推断」；当前 33 个指标 / 463 行 / 40KB
+diff --git a/backend/app/modules/customer/build.py b/backend/app/modules/customer/build.py
+index df8cf864..d101c0ec 100644
+--- a/backend/app/modules/customer/build.py
++++ b/backend/app/modules/customer/build.py
+@@ -393,12 +393,25 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
+     person_index = await _load_person_index(db)
+     world_map = await _load_world_map()
+ 
+-    master: dict[int, dict] = {}
++    # 定制客户与零售客户分属两张表、ID 会重复；客户编码 number 唯一，主档以编码为键。
++    master: dict[str, dict] = {}
++    master_by_id: dict[int, dict] = {}
++    ambiguous_ids: set[int] = set()
+     for row in master_rows:
++        code = str(row.get("number") or "").strip()
++        if code:
++            master[code] = row
+         try:
+-            master[int(row.get("id"))] = row
++            cid = int(row.get("id"))
+         except (TypeError, ValueError):
+             continue
++        # 同一 ID 命中两套客户表时无法判断归属，旧批次兜底不使用该 ID
++        if cid in master_by_id:
++            ambiguous_ids.add(cid)
++        else:
++            master_by_id[cid] = row
++    for cid in ambiguous_ids:
++        master_by_id.pop(cid, None)
+ 
+     version = int(
+         (
+@@ -425,13 +438,20 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
+     buckets: dict[Any, dict[str, Any]] = {}
+     for row in order_rows:
+         extra = row.extra or {}
+-        # 订单宽表没有 customer_name 物理列，客户名放在 extra（零售单也可能没有 customer_id）
+-        key = row.customer_id or extra.get("customer_number") or extra.get("customer_name") or 0
++        # 订单宽表没有 customer_name 物理列，客户名放在 extra。
++        # 客户编码唯一，优先按编码归集；旧批次没有编码时才退回 ID。
++        code = str(extra.get("customer_number") or "").strip()
++        key = f"code:{code}" if code else (
++            f"id:{row.customer_id}" if row.customer_id else (
++                f"name:{extra.get('customer_name')}" if extra.get("customer_name") else f"order:{row.order_number}"
++            )
++        )
+         bucket = buckets.setdefault(
+             key,
+             {
+                 "customer_id": row.customer_id,
+-                "customer_code": str(extra.get("customer_number") or "") or None,
++                "customer_code": code or None,
++                "customer_is_retail": extra.get("customer_is_retail"),
+                 "customer_name": str(extra.get("customer_name") or "") or None,
+                 "salesman_code": str(row.salesman_code or "") or None,
+                 "salesman_name": str(extra.get("salesman_name") or "") or None,
+@@ -463,6 +483,10 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
+                 "contribution_margin": 0.0,
+             },
+         )
++        if not bucket.get("customer_code") and code:
++            bucket["customer_code"] = code
++        if bucket.get("customer_is_retail") is None and extra.get("customer_is_retail") is not None:
++            bucket["customer_is_retail"] = extra.get("customer_is_retail")
+         bucket["order_count"] += 1
+         if str(extra.get("is_new_code") or extra.get("is_new") or "") == "2":
+             bucket["repeat_order_count"] += 1
+@@ -520,7 +544,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
+     bucket_by_code = {
+         str(bucket["customer_code"]): bucket for bucket in buckets.values() if bucket.get("customer_code")
+     }
+-    master_by_code = {str(row.get("number")): row for row in master_rows if row.get("number")}
++    master_by_code = master
+     for code, ar in ar_rows.items():
+         if not code:
+             continue
+@@ -532,6 +556,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
+             bucket = {
+                 "customer_id": master_row.get("id"),
+                 "customer_code": code,
++                "customer_is_retail": master_row.get("is_retail"),
+                 "customer_name": str(ar.get("name") or master_row.get("name") or "") or None,
+                 "salesman_code": str(principal) if principal not in (None, "") else None,
+                 "salesman_name": (principal_meta or {}).get("person_name"),
+@@ -625,10 +650,15 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
+     rev01 = company.get("REV-01", 0.0)
+ 
+     for bucket in buckets.values():
+-        master_row = master.get(int(bucket["customer_id"])) if bucket["customer_id"] else None
++        code = str(bucket.get("customer_code") or "").strip()
++        master_row = master.get(code) if code else (
++            master_by_id.get(int(bucket["customer_id"])) if bucket.get("customer_id") else None
++        )
+         if master_row:
+             bucket["customer_code"] = bucket["customer_code"] or str(master_row.get("number") or "")
+             bucket["customer_name"] = bucket["customer_name"] or str(master_row.get("name") or "")
++            if bucket.get("customer_is_retail") is None:
++                bucket["customer_is_retail"] = master_row.get("is_retail")
+         # 地区以客户主档为准（内贸取 region 省市县，外贸取 country 国家），订单行为兜底
+         master_type = str((master_row or {}).get("type") or "").strip()
+         region_value = ""
+@@ -706,6 +736,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
+             "repeat_order_count": bucket["repeat_order_count"],
+             "collection_term_raw": _concat(bucket["term_counter"]),
+             "buy_frequency_year": (master_row or {}).get("buy_frequency_year"),
++            "is_retail": bucket.get("customer_is_retail"),
+         }
+         records.append(
+             CustomerAnalysisModel(
+@@ -724,7 +755,7 @@ async def build_period(db: AsyncSession, period_value: str) -> dict[str, Any]:
+                 contribution_margin=contribution,
+                 extra=extra_out,
+                 data_quality_flag=(
+-                    "ar_only" if bucket["ar_only"] else ("ok" if bucket["customer_id"] else "customer_unmapped")
++                    "ar_only" if bucket["ar_only"] else ("ok" if bucket["customer_code"] else "customer_unmapped")
+                 ),
+             )
+         )
+diff --git a/backend/app/modules/metric/engine.py b/backend/app/modules/metric/engine.py
+index 885f5fef..5b0aa59e 100644
+--- a/backend/app/modules/metric/engine.py
++++ b/backend/app/modules/metric/engine.py
+@@ -716,6 +716,10 @@ def extract_person_amount(
+     terms = _amount_terms(config)
+     value_mode = str(config.get("value_mode") or "amount")
+     customer_field = str(config.get("customer_field") or "customer")
++    # 客户去重字段：优先客户编码（唯一），旧批次没有编码时按配置顺序回退到客户 ID
++    customer_fields = config.get("customer_fields") or [customer_field]
++    if isinstance(customer_fields, str):
++        customer_fields = [customer_fields]
+     exclude_empty_person = bool(config.get("exclude_empty_person"))
+     omit_zero = bool(config.get("omit_zero_persons", True))
+     persons: dict[str, dict] = {}
+@@ -738,9 +742,15 @@ def extract_person_amount(
+         bucket["value"] = round(float(bucket["value"]) + amount, 4)
+         bucket["rows"] = int(bucket["rows"]) + 1
+         if value_mode == "count_customers":
+-            # 客户去重：内贸/外贸可能同一客户重复下单，按客户ID去重后再计数
+-            customer = _text(_cell(row, fields, customer_field))
+-            bucket.setdefault("customers", set()).add(customer or f"__row_{matched_rows}")
++            # 客户去重：内贸/外贸可能同一客户重复下单，按客户编码去重后再计数
++            customer = ""
++            for field_name in customer_fields:
++                customer = _text(_cell(row, fields, str(field_name)))
++                if customer:
++                    break
++            # 没有客户编码/ID 的行无法识别是哪个客户，不计入客户去重数（否则一单会被当成一个新客户）
++            if customer:
++                bucket.setdefault("customers", set()).add(customer)
+     if value_mode == "count_orders":
+         persons = {
+             key: {"value": float(bucket["rows"]), "rows": bucket["rows"]}
+diff --git a/backend/app/modules/order/build.py b/backend/app/modules/order/build.py
+index e349928b..82080220 100644
+--- a/backend/app/modules/order/build.py
++++ b/backend/app/modules/order/build.py
+@@ -406,16 +406,33 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int
+         }
+         batches["base_dict"] = len(base_names)
+ 
+-        # 客户主数据：以客户列表接口为唯一权威来源（订单上的 wangwang 是旺旺号，不是客户名）
+-        customer_map = {
+-            int(row["id"]): {
++        # 客户主数据：以客户列表接口为唯一权威来源（订单上的 wangwang 是旺旺号，不是客户名）。
++        # 定制客户与零售客户分属两张表、ID 会重复，客户编码 number 才唯一 → 以编码为键。
++        customer_map: dict[str, dict] = {}
++        customer_by_id: dict[int, dict] = {}
++        ambiguous_ids: set[int] = set()
++        for row in customer_rows:
++            code = str(row.get("number") or "").strip()
++            if not code:
++                continue
++            item = {
+                 "name": row.get("name"),
+-                "number": row.get("number"),
++                "number": code,
+                 "principal_id": row.get("principal_id"),
++                "is_retail": row.get("is_retail"),
+             }
+-            for row in customer_rows
+-            if row.get("id")
+-        }
++            customer_map[code] = item
++            try:
++                cid = int(row.get("id"))
++            except (TypeError, ValueError):
++                continue
++            # 同一 ID 在两套客户表都出现时无法判断归属，旧批次兜底不使用该 ID
++            if cid in customer_by_id:
++                ambiguous_ids.add(cid)
++            else:
++                customer_by_id[cid] = item
++        for cid in ambiguous_ids:
++            customer_by_id.pop(cid, None)
+         return_by_order: dict[str, float] = {}
+         for row in return_rows:
+             number = str(row.get("number") or "").strip()
+@@ -489,6 +506,7 @@ async def build_period(db: AsyncSession, period_value: str, prune_versions: int
+                     category_names,
+                     base_names,
+                     is_retail=is_retail,
++                    customer_by_id=customer_by_id,
+                 )
+                 if record is None:
+                     continue
+@@ -541,7 +559,7 @@ def build_record(
+     trade_type: str,
+     period_value: str,
+     calc_version: int,
+-    customer_map: dict[int, dict],
++    customer_map: dict[str, dict],
+     person_index: dict[str, dict],
+     shipments_by_order: dict[str, float],
+     ship_qty_by_order_id: dict[int, float],
+@@ -551,6 +569,7 @@ def build_record(
+     category_names: dict[int, str],
+     base_names: dict[int, str],
+     is_retail: bool = False,
++    customer_by_id: dict[int, dict] | None = None,
+ ) -> tuple[OrderFullChainModel | None, list[str]]:
+     """单行 CRM 订单 → 宽表记录。返回 (记录, 质量标记列表)。"""
+     number = str(row.get("number") or "").strip()
+@@ -725,18 +744,25 @@ def build_record(
+         order_date and datetime(order_date.year, order_date.month, order_date.day), ship_date
+     )
+     customer_id = to_number(pick(row, SOURCE_KEYS["customer_id"]))
+-    if customer_id is not None:
+-        customer = customer_map.get(int(customer_id)) or {}
++    customer_code = str(pick(row, SOURCE_KEYS["customer_code"]) or "").strip()
++    customer = customer_map.get(customer_code) if customer_code else None
++    # 旧批次没有 customer_code 时才按 ID 兜底；customer_by_id 已剔除跨两套客户表的重复 ID
++    if customer is None and customer_id is not None and customer_by_id:
++        customer = customer_by_id.get(int(customer_id))
++    if customer:
+         # 客户列表是权威来源：查到就用它覆盖订单上的值（订单上的 wangwang 只是聊天账号）
++        extra["customer_number"] = customer.get("number") or customer_code
+         extra["customer_name"] = customer.get("name") or extra.get("customer_name")
+-        extra["customer_number"] = customer.get("number")
++        extra["customer_is_retail"] = customer.get("is_retail")
+         principal = customer.get("principal_id")
+         extra["customer_principal"] = str(principal) if principal is not None else None
+         extra["customer_principal_name"] = (
+             (person_index.get(str(principal)) or {}).get("person_name") if principal is not None else None
+         )
+     else:
+-        extra["customer_number"] = None
++        # 主档没匹配上时保留订单自带编码/名称，不丢客户维度
++        extra["customer_number"] = customer_code or None
++        extra["customer_is_retail"] = None
+         extra["customer_principal"] = None
+         extra["customer_principal_name"] = None
+ 
+diff --git a/backend/app/modules/order/fields.py b/backend/app/modules/order/fields.py
+index 75549d4a..49525826 100644
+--- a/backend/app/modules/order/fields.py
++++ b/backend/app/modules/order/fields.py
+@@ -107,6 +107,9 @@ SOURCE_KEYS: dict[str, list[str]] = {
+     "qty": ["qty"],
+     "size": ["size"],
+     "customer_id": ["customer"],
++    # 客户编码：CRM 2026-10 起 orderAnalyze 返回 customer_code（客户档案/零售客户表编码唯一）；
++    # 旧批次只有 customer_number（零售单）或没有编码，保留兜底。
++    "customer_code": ["customer_code", "customer_number"],
+     # 客户名称以「客户列表接口」为准（见 build.py），订单上的 customer_name/customer_name_retail 只作兜底；
+     # 注意：``wangwang`` 是旺旺号/客户备注，不是客户名称，不能当客户名用。
+     "customer_name": ["customer_name", "customer_name_retail"],
+diff --git a/backend/scripts/check_customer_code_mapping.py b/backend/scripts/check_customer_code_mapping.py
+new file mode 100644
+index 00000000..25a50bea
+--- /dev/null
++++ b/backend/scripts/check_customer_code_mapping.py
+@@ -0,0 +1,120 @@
++"""客户编码匹配自检（只读）。
++
++校验：
++- 订单全链路里零售单是否落到 LS 客户编码、是否还残留定制客户编码；
++- 客户分析是否出现零售客户独立行（extra.is_retail=1）；
++- STF-47 总客户数、STF-48 本月下单老客户数是否按编码去重。
++
++用法：
++    python scripts/check_customer_code_mapping.py
++    python scripts/check_customer_code_mapping.py --period 2026-10
++"""
++
++import argparse
++import asyncio
++import sys
++from pathlib import Path
++
++from sqlalchemy import func, select
++
++PROJECT_ROOT = Path(__file__).resolve().parents[1]
++if str(PROJECT_ROOT) not in sys.path:
++    sys.path.insert(0, str(PROJECT_ROOT))
++
++from app.core.base_model import MappedBase  # noqa: E402
++from app.core.database import async_db_session, async_engine  # noqa: E402
++from app.modules.customer.model import CustomerAnalysisModel  # noqa: E402
++from app.modules.metric.model import MetricDefModel, MetricValueModel  # noqa: E402
++from app.modules.order.model import OrderFullChainModel  # noqa: E402
++from app.utils.import_util import ImportUtil  # noqa: E402
++
++ImportUtil.find_models(MappedBase)
++
++METRIC_CODES = (
++    "marketing_person_total_customer_count",
++    "marketing_person_old_customer_order_count",
++    "marketing_person_repurchase_rate",
++)
++
++
++async def main() -> None:
++    parser = argparse.ArgumentParser(description="客户编码匹配自检")
++    parser.add_argument("--period", default="2026-10", help="期间 YYYY-MM，默认 2026-10")
++    args = parser.parse_args()
++    period = args.period
++
++    async with async_db_session() as db:
++        order_version = (
++            await db.execute(
++                select(func.max(OrderFullChainModel.calc_version)).where(
++                    OrderFullChainModel.period_value == period
++                )
++            )
++        ).scalar()
++        rows = (
++            await db.execute(
++                select(OrderFullChainModel.order_type, OrderFullChainModel.extra).where(
++                    OrderFullChainModel.period_value == period,
++                    OrderFullChainModel.calc_version == order_version,
++                )
++            )
++        ).all()
++        retail = [
++            (extra or {}).get("customer_number") or ""
++            for order_type, extra in rows
++            if str(order_type or "") == "3"
++        ]
++        ls = sum(1 for code in retail if str(code).startswith("LS"))
++        blank = sum(1 for code in retail if not str(code))
++        print(
++            f"[{period}] 订单全链路 v{order_version}：零售单 {len(retail)}，"
++            f"LS 编码 {ls}，空编码 {blank}，其它编码 {len(retail) - ls - blank}"
++        )
++
++        cus_version = (
++            await db.execute(
++                select(func.max(CustomerAnalysisModel.calc_version)).where(
++                    CustomerAnalysisModel.period_value == period
++                )
++            )
++        ).scalar()
++        cus_rows = (
++            await db.execute(
++                select(CustomerAnalysisModel.customer_code, CustomerAnalysisModel.extra).where(
++                    CustomerAnalysisModel.period_value == period,
++                    CustomerAnalysisModel.calc_version == cus_version,
++                    CustomerAnalysisModel.is_aggregate == 0,
++                )
++            )
++        ).all()
++        retail_rows = sum(
++            1 for _code, extra in cus_rows if str((extra or {}).get("is_retail")) == "1"
++        )
++        print(
++            f"[{period}] 客户分析 v{cus_version}：客户行 {len(cus_rows)}，"
++            f"零售客户行 {retail_rows}"
++        )
++
++        for code in METRIC_CODES:
++            metric_id = (
++                await db.execute(select(MetricDefModel.id).where(MetricDefModel.code == code))
++            ).scalar()
++            if metric_id is None:
++                print(f"{code}: 指标定义不存在")
++                continue
++            total = (
++                await db.execute(
++                    select(MetricValueModel.value).where(
++                        MetricValueModel.metric_id == metric_id,
++                        MetricValueModel.period_value == period,
++                        MetricValueModel.person_code.is_(None),
++                    )
++                    .order_by(MetricValueModel.calc_time.desc())
++                    .limit(1)
++                )
++            ).scalars().first()
++            print(f"{code}: 期间 {period} 合计 = {total}")
++
++
++if __name__ == "__main__":
++    asyncio.run(main())
+diff --git a/backend/scripts/seed_crm_person_metrics.py b/backend/scripts/seed_crm_person_metrics.py
+index da552aab..3248e97c 100644
+--- a/backend/scripts/seed_crm_person_metrics.py
++++ b/backend/scripts/seed_crm_person_metrics.py
+@@ -12,6 +12,10 @@
+   新老客户/未出货库存等订单类指标同时汇总内贸、外贸、零售三路；零售行金额取
+   ``remove_taxes_freight``，订单类型固定为零售（3）。发货明细接口尚无零售批次，
+   出货类指标维持原口径（零售出货取聚水潭）。
++- 2026-10-31 起客户匹配由「客户 ID」改为「客户编码」：订单 ``customer_code``
++  （旧批次为 ``customer_number``）→ 客户档案 ``number``。定制客户与零售客户分属
++  两张表、ID 会重复，编码唯一；客户档案新增 ``is_retail``（0=定制，1=零售）。
++  STF-47 总客户数量同时包含定制与零售客户。
+ - 接单未税（STF-13）归属月 = 收款日期 ``collectiontime`` 所在月（订单明细按建单月
+   回看 12 期、前看 1 期，覆盖收款月与建单月错位的订单）；业务员下推金额（STF-23）
+   同样按收款日期 ``collectiontime`` 所在月归期，并按建单月前看 2 期；
+@@ -98,7 +102,7 @@ MONTH_DATE_RANGE: dict = {
+     ]
+ }
+ 
+-# 客户列表是「当前全量快照」（无时间参数、每次约 2.5 万行），随每日三轮同步刷新。
++# 客户列表是「当前全量快照」（无时间参数、每次约 4 万行：定制 + 零售），随每日四轮同步刷新。
+ CUSTOMER_CRON = "0 0 0 * * ?;0 0 7 * * ?;0 0 12 * * ?;0 0 18 * * ?"
+ 
+ # 一个来源对象一条：同一接口按 type 拆成内贸/外贸/零售三条（来源对象 code 唯一）
+@@ -444,13 +448,14 @@ METRICS = [
+         "excel_code": "STF-48",
+         "rule": "本月下单老客户数量（家）= 当期订单中 **is_new=2（老客户）** 的客户去重数，"
+         "按订单创建月 createtime 落当期，只统计有效订单 status=384，按业务员（下单人 create_id）分组；"
+-        "同一客户当月多单只算一次、跨内贸外贸也只算一次；公司合计取全部业务员的客户并集。",
++        "同一客户当月多单只算一次、跨内贸外贸也只算一次；客户按 **customer_code（客户编码）** 去重，"
++        "旧批次没有编码时回退 customer_number / customer(ID)；公司合计取全部业务员的客户并集。",
+         "measures": {
+             "kind": "crm_person_amount",
+             "group_by": "person",
+             "person_field": "create_id",
+             "value_mode": "count_customers",
+-            "customer_field": "customer",
++            "customer_fields": ["customer_code", "customer_number", "customer"],
+             "unit": "家",
+             **VALID_ORDER,
+             **OLD_CUSTOMER,
+@@ -462,16 +467,19 @@ METRICS = [
+         "name": "营销中心业务员总客户数量",
+         "excel_code": "STF-47",
+         "rule": "总客户数量（家）= 客户表中**所属业务员（principal_id）**为本业务员的客户数量；"
+-        "来源 CRM 客户列表接口（未分页全量，当前快照），未分配业务员（principal_id 为空）的客户不计入；"
++        "来源 CRM 客户列表接口（未分页全量，当前快照，**含定制客户 is_retail=0 与零售客户 is_retail=1**），"
++        "按客户编码 number 去重，未分配业务员（principal_id 为空）的客户不计入；"
+         "该指标是时点快照口径，历史期间取重算时点最新的客户列表批次。",
+         "measures": {
+             "kind": "crm_person_amount",
+             "group_by": "person",
+             "person_field": "principal_id",
+             "value_mode": "count_customers",
+-            "customer_field": "id",
++            "customer_field": "number",
+             "exclude_empty_person": True,
+             "unit": "家",
++            # 客户列表是当前全量快照：只取最近一次批次，避免把历史上已删除/合并的客户并进来
++            "use_latest_batch_only": True,
+             # 客户表没有订单状态字段：不按 status 过滤
+             "status_field": None,
+             "status_allow": [],
+diff --git a/backend/tests/test_customer_code_mapping.py b/backend/tests/test_customer_code_mapping.py
+new file mode 100644
+index 00000000..a05f1546
+--- /dev/null
++++ b/backend/tests/test_customer_code_mapping.py
+@@ -0,0 +1,95 @@
++"""订单宽表客户匹配：编码优先、ID 仅在唯一时兜底。"""
++
++from app.modules.order.build import build_record
++
++
++def _row(**overrides):
++    row = {
++        "id": 1,
++        "number": "DY202610-00001",
++        "type": "1",
++        "status": "384",
++        "createtime": "2026-10-01 10:00:00",
++        "collectiontime": "2026-10-01",
++        "qty": "1.00",
++        "remove_taxes_freight": "100.00",
++        "material_cost_total": "60.00",
++        "process_cost_total": "20.00",
++        "customer": 123,
++        "customer_code": "LS20260101000123",
++        "create_id": "35",
++        "is_new": "1",
++    }
++    row.update(overrides)
++    return row
++
++
++def _build(row, customer_map, customer_by_id=None):
++    record, _quality = build_record(
++        row,
++        "domestic",
++        "2026-10",
++        1,
++        customer_map,
++        {},
++        {},
++        {},
++        {},
++        {},
++        {},
++        {},
++        {},
++        customer_by_id=customer_by_id,
++    )
++    assert record is not None
++    return record
++
++
++def test_customer_code_wins_over_colliding_id():
++    customer_map = {
++        "LS20260101000123": {
++            "name": "零售客户",
++            "number": "LS20260101000123",
++            "principal_id": 9,
++            "is_retail": 1,
++        },
++        "20200101-000123": {
++            "name": "定制客户",
++            "number": "20200101-000123",
++            "principal_id": 8,
++            "is_retail": 0,
++        },
++    }
++    # 同一 ID 两张表都有 → 调用方不会放进 customer_by_id
++    record = _build(_row(), customer_map, customer_by_id={})
++
++    assert record.extra["customer_number"] == "LS20260101000123"
++    assert record.extra["customer_name"] == "零售客户"
++    assert record.extra["customer_is_retail"] == 1
++
++
++def test_missing_code_falls_back_to_unique_id():
++    customer_map = {
++        "20200101-000123": {
++            "name": "定制客户",
++            "number": "20200101-000123",
++            "principal_id": 8,
++            "is_retail": 0,
++        }
++    }
++    record = _build(
++        _row(customer_code=None),
++        customer_map,
++        customer_by_id={123: customer_map["20200101-000123"]},
++    )
++
++    assert record.extra["customer_number"] == "20200101-000123"
++    assert record.extra["customer_name"] == "定制客户"
++    assert record.extra["customer_is_retail"] == 0
++
++
++def test_no_code_no_unique_id_keeps_order_code_empty():
++    record = _build(_row(customer_code=None), {}, customer_by_id={})
++
++    assert record.extra.get("customer_number") is None
++    assert record.extra.get("customer_is_retail") is None
+diff --git a/deploy/customer-code-20261031/README.md b/deploy/customer-code-20261031/README.md
+new file mode 100644
+index 00000000..f9d64322
+--- /dev/null
++++ b/deploy/customer-code-20261031/README.md
+@@ -0,0 +1,70 @@
++# 客户编码匹配改造（2026-10-31）
++
++## 改了什么
++
++CRM 定制客户与零售客户分属两张表，`id` 会重复；两个接口已改为返回唯一编码：
++
++- `hs/order/orderAnalyze` 新增 `customer_code`（零售单为 `LS...`，旧批次回退 `customer_number`）；
++- `hs/customer/getCusotmerList` 新增 `is_retail`（0=定制，1=零售），客户编码 `number` 唯一。
++
++本系统把所有客户匹配从「客户 ID」改为「客户编码」：
++
++| 位置 | 改动 |
++| --- | --- |
++| 订单全链路 `order/build.py` | 客户主档按 `number` 建索引；订单优先用 `customer_code` 匹配，ID 仅在旧批次且唯一时兜底；`extra.customer_is_retail` 落零售标识 |
++| 客户分析 `customer/build.py` | 主档/分桶按客户编码；零售客户生成独立 CUS 行；`extra.is_retail` 输出 |
++| STF-48 本月下单老客户数 | 按 `customer_code` 去重（回退 customer_number / customer） |
++| STF-47 总客户数 | 按 `number` 去重，**含零售客户** |
++| STF-49 复购率 | 随 STF-47/48 自动重算 |
++
++## 服务器执行（conda，不用 Docker）
++
++```bash
++cd /path/to/FastapiAdmin
++python deploy/customer-code-20261031/update.py            # 预演
++python deploy/customer-code-20261031/update.py --apply --service fastapiadmin
++```
++
++脚本顺序：
++
++1. `git fetch origin master` + 快进；本地提交与远端分叉且工作区干净时自动 `git reset --hard origin/master`
++2. `python scripts/seed_crm_person_metrics.py`
++3. 重新同步客户档案 + 订单明细（内贸/外贸/零售）2025-07 ~ 2026-10
++4. `python scripts/run_order_build.py --period ...`
++5. `python scripts/run_customer_build.py --period ...`
++6. `python scripts/recalc_metrics_batch.py --code ... --with-dependents --period-from 2025-07 --period-to 2026-10`
++7. `python scripts/check_customer_code_mapping.py --period 2026-10`
++8. `systemctl restart fastapiadmin`（Windows 无 systemctl 时自动跳过，需手动重启后端进程）
++
++脚本会先探测 `prod` / `dev` 两个环境，选第一个能读到 `DATABASE_PASSWORD` 的 `.env`；
++服务器只配了 `.env.dev` 时自动使用 dev，也可显式传 `--env dev`。
++
++跳过某一步：`--skip-sync` / `--skip-build` / `--skip-pull`。
++
++## 手工命令（等价）
++
++```bash
++cd backend
++python scripts/seed_crm_person_metrics.py
++python scripts/run_meta_sync.py --name "CRM业务员指标-CRM 客户列表（业务员客户数）" --period 2026-10
++python scripts/run_meta_sync.py --name "CRM业务员指标-CRM 订单明细（内贸）" --period 2025-07,2025-08,2025-09,2025-10,2025-11,2025-12,2026-01,2026-02,2026-03,2026-04,2026-05,2026-06,2026-07,2026-08,2026-09,2026-10
++python scripts/run_meta_sync.py --name "CRM业务员指标-CRM 订单明细（外贸）" --period 2025-07,2025-08,2025-09,2025-10,2025-11,2025-12,2026-01,2026-02,2026-03,2026-04,2026-05,2026-06,2026-07,2026-08,2026-09,2026-10
++python scripts/run_meta_sync.py --name "CRM业务员指标-CRM 订单明细（零售）" --period 2025-07,2025-08,2025-09,2025-10,2025-11,2025-12,2026-01,2026-02,2026-03,2026-04,2026-05,2026-06,2026-07,2026-08,2026-09,2026-10
++python scripts/run_order_build.py --period 2025-07,...,2026-10
++python scripts/run_customer_build.py --period 2025-07,...,2026-10
++python scripts/recalc_metrics_batch.py --code marketing_person_new_customer_intake_untaxed --code marketing_person_old_customer_intake_untaxed --code marketing_person_old_customer_order_count --code marketing_person_total_customer_count --with-dependents --period-from 2025-07 --period-to 2026-10
++python scripts/check_customer_code_mapping.py --period 2026-10
++```
++
++## 回滚
++
++代码回滚到上一提交后，用旧代码重跑同样的同步/构建/重算命令即可覆盖结果版本：
++
++```bash
++git revert --no-commit HEAD && git commit -m "revert: 客户编码匹配"
++cd backend
++python scripts/seed_crm_person_metrics.py
++python scripts/run_order_build.py --period 2025-07,...,2026-10
++python scripts/run_customer_build.py --period 2025-07,...,2026-10
++python scripts/recalc_metrics_batch.py --code marketing_person_new_customer_intake_untaxed --code marketing_person_old_customer_intake_untaxed --code marketing_person_old_customer_order_count --code marketing_person_total_customer_count --with-dependents --period-from 2025-07 --period-to 2026-10
++```
+diff --git a/deploy/customer-code-20261031/update.py b/deploy/customer-code-20261031/update.py
+new file mode 100644
+index 00000000..61382acf
+--- /dev/null
++++ b/deploy/customer-code-20261031/update.py
+@@ -0,0 +1,263 @@
++"""客户编码匹配改造上线（conda Python，不使用 Docker）。
++
++改动：
++- 订单 `customer_code`（旧批次回退 customer_number）→ 客户档案 `number` 匹配；
++- 客户档案 `is_retail`（0 定制 / 1 零售）区分两套客户表，ID 重复不再误配；
++- STF-47 总客户数量包含零售客户，STF-48 按客户编码去重；
++- 重跑订单全链路、客户分析，并重算 STF-40/41/47/48 及下游 STF-49。
++
++服务器项目根目录执行：
++
++    python deploy/customer-code-20261031/update.py --apply --service fastapiadmin
++
++只预演（默认，不执行任何命令）：
++
++    python deploy/customer-code-20261031/update.py
++
++可重复执行：同步/构建都会生成新版本，指标按最新版本覆盖。
++"""
++
++from __future__ import annotations
++
++import argparse
++import os
++import shutil
++import subprocess
++import sys
++from datetime import datetime
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++BACKEND = ROOT / "backend"
++LOG_PATH = Path(__file__).resolve().parent / "update_run.log"
++
++PERIODS = ",".join(
++    [f"2025-{m:02d}" for m in range(7, 13)]
++    + [f"2026-{m:02d}" for m in range(1, 11)]
++)
++
++CUSTOMER_JOB = "CRM业务员指标-CRM 客户列表（业务员客户数）"
++ORDER_JOBS = (
++    "CRM业务员指标-CRM 订单明细（内贸）",
++    "CRM业务员指标-CRM 订单明细（外贸）",
++    "CRM业务员指标-CRM 订单明细（零售）",
++)
++METRIC_CODES = (
++    "marketing_person_new_customer_intake_untaxed",
++    "marketing_person_old_customer_intake_untaxed",
++    "marketing_person_old_customer_order_count",
++    "marketing_person_total_customer_count",
++)
++
++
++def python_bin() -> str:
++    """优先用项目自带 venv（本机），否则用当前解释器（服务器 conda）。"""
++    for candidate in (
++        BACKEND / ".venv" / "Scripts" / "python.exe",
++        BACKEND / ".venv" / "bin" / "python",
++    ):
++        if candidate.exists():
++            return str(candidate)
++    return sys.executable
++
++
++def log(message: str) -> None:
++    line = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}"
++    try:
++        print(line)
++    except UnicodeEncodeError:
++        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
++        print(line.encode(encoding, "replace").decode(encoding, "replace"))
++    with LOG_PATH.open("a", encoding="utf-8") as fh:
++        fh.write(line + "\n")
++
++
++def run(
++    cmd: list[str],
++    cwd: Path,
++    apply: bool,
++    env_extra: dict[str, str] | None = None,
++    required: bool = True,
++    title: str | None = None,
++) -> None:
++    if title:
++        log(f"== {title} ==")
++    log("$ " + " ".join(str(item) for item in cmd))
++    if not apply:
++        return
++    env = os.environ.copy()
++    if env_extra:
++        env.update(env_extra)
++    result = subprocess.run(
++        cmd,
++        cwd=cwd,
++        text=True,
++        capture_output=True,
++        encoding="utf-8",
++        errors="replace",
++        env=env,
++    )
++    if result.stdout.strip():
++        log(result.stdout.strip())
++    if result.stderr.strip():
++        log(result.stderr.strip())
++    if result.returncode != 0:
++        message = f"命令失败（退出码 {result.returncode}）：{' '.join(cmd)}"
++        if required:
++            raise SystemExit(message)
++        log("WARN " + message)
++
++
++def env_works(env_name: str) -> bool:
++    """探测某个 ENVIRONMENT 能否加载到数据库密码（服务器可能只有 .env.dev）。"""
++    code = (
++        "from app.config.setting import settings;"
++        "print('OK' if settings.DATABASE_PASSWORD else 'EMPTY')"
++    )
++    env = os.environ.copy()
++    env["ENVIRONMENT"] = env_name
++    result = subprocess.run(
++        [python_bin(), "-c", code],
++        cwd=BACKEND,
++        text=True,
++        capture_output=True,
++        encoding="utf-8",
++        errors="replace",
++        env=env,
++    )
++    lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
++    return result.returncode == 0 and bool(lines) and lines[-1] == "OK"
++
++
++def sync_code(apply: bool) -> None:
++    """fetch + 快进；若服务器曾拉过被改写的提交导致分叉，工作区干净时自动 reset 到 origin/master。"""
++    run(["git", "fetch", "origin", "master"], ROOT, apply, title="拉取代码")
++    if not apply:
++        return
++    ancestor = subprocess.run(
++        ["git", "merge-base", "--is-ancestor", "HEAD", "origin/master"],
++        cwd=ROOT,
++        capture_output=True,
++    )
++    if ancestor.returncode == 0:
++        run(["git", "merge", "--ff-only", "origin/master"], ROOT, apply)
++        return
++    status = subprocess.run(
++        ["git", "status", "--porcelain", "--untracked-files=no"],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        encoding="utf-8",
++        errors="replace",
++    )
++    if (status.stdout or "").strip():
++        raise SystemExit("本地有未提交的已跟踪修改，无法自动对齐 origin/master，请先处理")
++    log("检测到本地提交与 origin/master 分叉，工作区干净 → git reset --hard origin/master")
++    run(["git", "reset", "--hard", "origin/master"], ROOT, apply)
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="客户编码匹配改造上线")
++    parser.add_argument("--apply", action="store_true", help="执行；缺省只预演")
++    parser.add_argument("--skip-pull", action="store_true", help="跳过 git pull")
++    parser.add_argument("--skip-sync", action="store_true", help="跳过 CRM 重新同步")
++    parser.add_argument("--skip-build", action="store_true", help="跳过宽表重建")
++    parser.add_argument("--env", default="prod", help="后端环境 dev/prod，默认 prod")
++    parser.add_argument("--service", default=None, help="systemd 服务名，如 fastapiadmin")
++    args = parser.parse_args()
++
++    log(f"项目根目录：{ROOT}")
++    log(f"模式：{'执行' if args.apply else '预演'}")
++    log(f"期间：{PERIODS}")
++
++    if not args.skip_pull:
++        sync_code(args.apply)
++
++    # 服务器可能没有 .env.prod（或密码为空）：按 prod → dev 探测，选第一个能读到密码的环境。
++    # 都探测不到时不强制 ENVIRONMENT，子进程沿用服务器当前环境变量。
++    chosen_env = next(
++        (name for name in dict.fromkeys([args.env, "prod", "dev"]) if env_works(name)),
++        None,
++    )
++    if chosen_env:
++        log(f"数据库环境：{chosen_env}")
++        backend_env = {"ENVIRONMENT": chosen_env}
++    else:
++        log("未探测到可用的 ENVIRONMENT 配置，子进程沿用当前环境变量")
++        backend_env = {}
++
++    run(
++        [python_bin(), "scripts/seed_crm_person_metrics.py"],
++        BACKEND,
++        args.apply,
++        backend_env,
++        title="指标定义（客户编码匹配 + 零售客户计入 STF-47）",
++    )
++
++    if not args.skip_sync:
++        run(
++            [python_bin(), "scripts/run_meta_sync.py", "--name", CUSTOMER_JOB, "--period", "2026-10"],
++            BACKEND,
++            args.apply,
++            backend_env,
++            title="同步客户档案（含 is_retail）",
++        )
++        for job in ORDER_JOBS:
++            run(
++                [python_bin(), "scripts/run_meta_sync.py", "--name", job, "--period", PERIODS],
++                BACKEND,
++                args.apply,
++                backend_env,
++                title=f"同步订单明细：{job}",
++            )
++
++    if not args.skip_build:
++        run(
++            [python_bin(), "scripts/run_order_build.py", "--period", PERIODS],
++            BACKEND,
++            args.apply,
++            backend_env,
++            title="重建订单全链路",
++        )
++        run(
++            [python_bin(), "scripts/run_customer_build.py", "--period", PERIODS],
++            BACKEND,
++            args.apply,
++            backend_env,
++            title="重建客户分析",
++        )
++
++    cmd = [
++        python_bin(),
++        "scripts/recalc_metrics_batch.py",
++        "--with-dependents",
++        "--period-from",
++        "2025-07",
++        "--period-to",
++        "2026-10",
++    ]
++    for code in METRIC_CODES:
++        cmd.extend(["--code", code])
++    run(cmd, BACKEND, args.apply, backend_env, title="重算客户类指标（含下游）")
++
++    run(
++        [python_bin(), "scripts/check_customer_code_mapping.py", "--period", "2026-10"],
++        BACKEND,
++        args.apply,
++        backend_env,
++        required=False,
++        title="校验",
++    )
++
++    if args.service and shutil.which("systemctl"):
++        run(["systemctl", "restart", args.service], ROOT, args.apply, title="重启服务")
++    elif args.service:
++        log("未找到 systemctl（Windows 环境），跳过自动重启；请手动重启后端进程")
++    else:
++        log("未指定 --service，跳过重启；服务器请按现有方式重启后端进程")
++
++    log("完成")
++
++
++if __name__ == "__main__":
++    main()

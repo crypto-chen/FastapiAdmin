@@ -716,6 +716,10 @@ def extract_person_amount(
     terms = _amount_terms(config)
     value_mode = str(config.get("value_mode") or "amount")
     customer_field = str(config.get("customer_field") or "customer")
+    # 客户去重字段：优先客户编码（唯一），旧批次没有编码时按配置顺序回退到客户 ID
+    customer_fields = config.get("customer_fields") or [customer_field]
+    if isinstance(customer_fields, str):
+        customer_fields = [customer_fields]
     exclude_empty_person = bool(config.get("exclude_empty_person"))
     omit_zero = bool(config.get("omit_zero_persons", True))
     persons: dict[str, dict] = {}
@@ -738,9 +742,15 @@ def extract_person_amount(
         bucket["value"] = round(float(bucket["value"]) + amount, 4)
         bucket["rows"] = int(bucket["rows"]) + 1
         if value_mode == "count_customers":
-            # 客户去重：内贸/外贸可能同一客户重复下单，按客户ID去重后再计数
-            customer = _text(_cell(row, fields, customer_field))
-            bucket.setdefault("customers", set()).add(customer or f"__row_{matched_rows}")
+            # 客户去重：内贸/外贸可能同一客户重复下单，按客户编码去重后再计数
+            customer = ""
+            for field_name in customer_fields:
+                customer = _text(_cell(row, fields, str(field_name)))
+                if customer:
+                    break
+            # 没有客户编码/ID 的行无法识别是哪个客户，不计入客户去重数（否则一单会被当成一个新客户）
+            if customer:
+                bucket.setdefault("customers", set()).add(customer)
     if value_mode == "count_orders":
         persons = {
             key: {"value": float(bucket["rows"]), "rows": bucket["rows"]}

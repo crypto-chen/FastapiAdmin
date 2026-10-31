@@ -107,6 +107,9 @@ SOURCE_KEYS: dict[str, list[str]] = {
     "qty": ["qty"],
     "size": ["size"],
     "customer_id": ["customer"],
+    # 客户编码：CRM 2026-10 起 orderAnalyze 返回 customer_code（客户档案/零售客户表编码唯一）；
+    # 旧批次只有 customer_number（零售单）或没有编码，保留兜底。
+    "customer_code": ["customer_code", "customer_number"],
     # 客户名称以「客户列表接口」为准（见 build.py），订单上的 customer_name/customer_name_retail 只作兜底；
     # 注意：``wangwang`` 是旺旺号/客户备注，不是客户名称，不能当客户名用。
     "customer_name": ["customer_name", "customer_name_retail"],
