@@ -211,5 +211,13 @@ async def main() -> None:
         print(f"metric_value 指标值：{value}（差 {round(float(value or 0) - total, 2)}）")
 
 
+async def _run() -> None:
+    """先关闭连接池再结束事件循环，避免 aiomysql 在 Windows 上退出时刷 __del__ 报错。"""
+    try:
+        await main()
+    finally:
+        await async_engine.dispose()
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(_run())
