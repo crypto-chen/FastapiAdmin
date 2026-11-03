@@ -51,6 +51,8 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str]] = [
     ("customer_principal_name", "客户所属业务员", "string", "基础", False, ""),
     ("salesman_code", "业务员编码", "string", "基础", False, ""),
     ("salesman_name", "业务员", "string", "基础", False, "ORD-05"),
+    ("engineer_code", "负责工程编码", "string", "基础", False, ""),
+    ("engineer_name", "负责工程", "string", "基础", False, ""),
     ("platform", "平台（名称）", "string", "维度", False, "ORD-06"),
     ("platform_id", "平台ID", "number", "维度", False, ""),
     ("shop", "店铺（名称）", "string", "维度", False, "ORD-07"),
@@ -114,6 +116,8 @@ SOURCE_KEYS: dict[str, list[str]] = {
     # 注意：``wangwang`` 是旺旺号/客户备注，不是客户名称，不能当客户名用。
     "customer_name": ["customer_name", "customer_name_retail"],
     "salesman_code": ["create_id"],
+    # 负责工程：CRM 订单上的 principal_engineering（CRM 用户ID），build.py 再映射为姓名
+    "engineer_code": ["principal_engineering"],
     "order_type": ["order_type"],
     "platform": ["source_platform"],
     # 店铺取 orderAnalyze 的 source 字段（业务口径确认）；store_name 是外贸侧的另一套编码

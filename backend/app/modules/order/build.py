@@ -779,6 +779,13 @@ def build_record(
     extra["salesman_name"] = (
         (person_index.get(str(salesman_raw)) or {}).get("person_name") if salesman_raw is not None else None
     ) or extra.get("salesman_name")
+    # 负责工程：CRM orderAnalyze 的 principal_engineering（CRM 用户ID）→ 姓名。
+    # 与业务员 create_id 走同一套 CRM 人员索引，避免再维护一份映射。
+    engineer_raw = pick(row, SOURCE_KEYS["engineer_code"])
+    extra["engineer_code"] = str(engineer_raw) if engineer_raw is not None else None
+    extra["engineer_name"] = (
+        (person_index.get(str(engineer_raw)) or {}).get("person_name") if engineer_raw is not None else None
+    )
     extra["data_quality_flag"] = quality_flag
     extra["schema_version"] = SCHEMA_VERSION
     extra = jsonable(extra)
@@ -807,7 +814,7 @@ def build_record(
     return record, quality
 
 
-SCHEMA_VERSION = "2026-10-13"
+SCHEMA_VERSION = "2026-11-03"
 
 
 async def prune_old_versions(db: AsyncSession, period_value: str, keep: int = 3) -> int:

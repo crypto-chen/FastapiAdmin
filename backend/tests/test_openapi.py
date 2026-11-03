@@ -27,6 +27,7 @@ from app.modules.metric.model import MetricDefModel, MetricValueModel
 from app.modules.openapi.model import OpenApiLogModel, OpenClientModel
 from app.modules.openapi.schema import OpenClientCreateSchema, OpenClientUpdateSchema
 from app.modules.openapi.service import OpenClientService
+from app.modules.order.model import OrderBuildRunModel, OrderFullChainModel
 
 APP_ID = "pytest_bi"
 METRIC_CODE = "pytest_openapi_metric"
@@ -42,6 +43,8 @@ _TABLES = (
     "metric_value",
     "open_client",
     "open_api_log",
+    "dwd_order_full_chain",
+    "dwd_order_build_run",
 )
 
 
@@ -67,9 +70,22 @@ async def _prepare() -> None:
     async with async_db_session() as db, db.begin():
         await db.execute(delete(MetricValueModel).where(MetricValueModel.batch_id == BATCH_ID))
         await db.execute(delete(MetricDefModel).where(MetricDefModel.code == METRIC_CODE))
+        await db.execute(
+            delete(OrderFullChainModel).where(
+                OrderFullChainModel.order_number.in_(
+                    ("DY202611-00001", "WM202611-00002", "LS202611-00003")
+                )
+            )
+        )
+        await db.execute(
+            delete(OrderBuildRunModel).where(OrderBuildRunModel.period_value == "2026-11")
+        )
         await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == APP_ID))
         await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == f"{APP_ID}_limit"))
         await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == f"{APP_ID}_log"))
+        await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == f"{APP_ID}_mes"))
+        await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == f"{APP_ID}_mes_denied"))
+        await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == f"{APP_ID}_mes_scope"))
         metric = MetricDefModel(
             code=METRIC_CODE, name="测试指标", excel_code=METRIC_EXCEL_CODE, period_type="month", status=0
         )
@@ -115,6 +131,76 @@ async def _prepare() -> None:
                     batch_id=BATCH_ID,
                     dept_code="D01",
                     dept_name="销售部",
+                ),
+                OrderFullChainModel(
+                    order_number="DY202611-00001",
+                    period_value="2026-11",
+                    calc_version=1,
+                    trade_type="domestic",
+                    order_type="1",
+                    qty=9,
+                    extra={
+                        "customer_name": "旧版本客户",
+                        "engineer_name": "旧工程",
+                        "product_series": "旧系列",
+                        "sku": "OLD",
+                        "size": "old",
+                    },
+                    data_quality_flag="ok",
+                ),
+                OrderFullChainModel(
+                    order_number="DY202611-00001",
+                    period_value="2026-11",
+                    calc_version=2,
+                    trade_type="domestic",
+                    order_type="1",
+                    qty=2,
+                    extra={
+                        "customer_name": "测试客户A",
+                        "engineer_name": "黎胜华",
+                        "product_series": "壳体",
+                        "sku": "J01B",
+                        "size": "100-200-300",
+                    },
+                    data_quality_flag="ok",
+                ),
+                OrderFullChainModel(
+                    order_number="WM202611-00002",
+                    period_value="2026-11",
+                    calc_version=2,
+                    trade_type="export",
+                    order_type="1",
+                    qty=5,
+                    extra={
+                        "customer_name": "Test Customer B",
+                        "engineer_name": "刘志学",
+                        "product_series": "机箱",
+                        "sku": "H27A",
+                        "size": "76-35-100",
+                    },
+                    data_quality_flag="ok",
+                ),
+                OrderFullChainModel(
+                    order_number="LS202611-00003",
+                    period_value="2026-11",
+                    calc_version=2,
+                    trade_type="domestic",
+                    order_type="3",
+                    qty=1,
+                    extra={
+                        "customer_name": "零售客户",
+                        "engineer_name": "不应出现",
+                        "product_series": "零售",
+                        "sku": "R01",
+                        "size": "1-2-3",
+                    },
+                    data_quality_flag="ok",
+                ),
+                OrderBuildRunModel(
+                    period_value="2026-11",
+                    calc_version=2,
+                    status="success",
+                    order_count=3,
                 ),
             ]
         )
@@ -321,6 +407,85 @@ def test_open_call_log_written(openapi_client):
     assert rows, "开放接口调用未落日志"
     assert rows[0].path == "/open/v1/metrics"
     assert rows[0].http_status == 200
+
+
+def test_mes_order_query(openapi_client):
+    """MES 接口：只返回内外贸、每期最新版本，七个业务字段与全部查询条件可用。"""
+    asyncio.run(_prepare())
+    client = asyncio.run(_admin_create_client(f"{APP_ID}_mes", allow_order_detail=True))
+    token = _token(openapi_client, f"{APP_ID}_mes", client["app_secret"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = openapi_client.get("/open/v1/mes/orders", headers=headers)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["total"] == 2, data
+    assert data["schema_version"] == "2026-11-03"
+    by_order = {item["crm_order_no"]: item for item in data["items"]}
+    assert set(by_order) == {"DY202611-00001", "WM202611-00002"}
+
+    domestic = by_order["DY202611-00001"]
+    assert domestic == {
+        "crm_order_no": "DY202611-00001",
+        "customer_name": "测试客户A",
+        "engineer_name": "黎胜华",
+        "product_series": "壳体",
+        "product_model": "J01B",
+        "product_size": "100-200-300",
+        "quantity": 2.0,
+        "trade_type": "domestic",
+        "order_date": None,
+    }
+    assert by_order["WM202611-00002"]["trade_type"] == "export"
+
+    # 每个查询条件独立生效
+    cases = {
+        "crm_order_no=DY202611": "DY202611-00001",
+        "customer_name=测试": "DY202611-00001",
+        "engineer_name=刘": "WM202611-00002",
+        "product_series=机箱": "WM202611-00002",
+        "product_model=H27": "WM202611-00002",
+        "product_size=100-200": "DY202611-00001",
+        "trade_type=export": "WM202611-00002",
+    }
+    for query, expected in cases.items():
+        filtered = openapi_client.get(f"/open/v1/mes/orders?{query}", headers=headers)
+        assert filtered.status_code == 200, filtered.text
+        body = filtered.json()["data"]
+        assert body["total"] == 1, (query, body)
+        assert body["items"][0]["crm_order_no"] == expected, (query, body)
+
+    page = openapi_client.get("/open/v1/mes/orders?page_no=1&page_size=1", headers=headers)
+    assert page.status_code == 200, page.text
+    assert page.json()["data"]["has_more"] is True
+
+    # 未开通订单权限：403
+    denied = asyncio.run(_admin_create_client(f"{APP_ID}_mes_denied"))
+    denied_token = _token(openapi_client, f"{APP_ID}_mes_denied", denied["app_secret"])
+    denied_resp = openapi_client.get(
+        "/open/v1/mes/orders", headers={"Authorization": f"Bearer {denied_token}"}
+    )
+    assert denied_resp.status_code == 403, denied_resp.text
+    assert denied_resp.json()["code"] == 40101
+
+    # 应用级范围：只允许内贸时，显式查外贸要拒绝，缺省只返回内贸
+    scoped = asyncio.run(
+        _admin_create_client(
+            f"{APP_ID}_mes_scope",
+            allow_order_detail=True,
+            order_scope={"trade_type": "domestic"},
+        )
+    )
+    scoped_token = _token(openapi_client, f"{APP_ID}_mes_scope", scoped["app_secret"])
+    scoped_headers = {"Authorization": f"Bearer {scoped_token}"}
+    forbidden = openapi_client.get(
+        "/open/v1/mes/orders?trade_type=export", headers=scoped_headers
+    )
+    assert forbidden.status_code == 403, forbidden.text
+    scoped_list = openapi_client.get("/open/v1/mes/orders", headers=scoped_headers)
+    assert scoped_list.status_code == 200, scoped_list.text
+    assert scoped_list.json()["data"]["total"] == 1
+
 
 def test_admin_routes_registered(openapi_client):
     """管理端路由存在（未带令牌时应为 401/403，而不是 404）。"""
