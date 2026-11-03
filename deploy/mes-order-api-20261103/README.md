@@ -34,14 +34,16 @@ GET /open/v1/mes/orders
 git pull
 ```
 
-### 2. 回填历史负责工程
+### 2. 同步 CRM 人员并回填历史负责工程
 
 ```bash
 cd backend
+python scripts/sync_crm_personnel.py --target person
 python scripts/backfill_order_engineer.py
 python scripts/backfill_order_engineer.py --apply
 ```
 
+人员同步已并入每轮指标任务（00/07/12/18），首次部署先手工跑一次。
 预演输出 `待写入 N 行`，确认后执行 `--apply`。新订单由每日构建自动写入，不需要每天回填。
 
 ### 3. 创建 MES 应用

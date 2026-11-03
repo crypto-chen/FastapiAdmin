@@ -23,6 +23,7 @@ from app.core.base_model import MappedBase
 from app.core.base_schema import AuthSchema, CoreUserSchema, JWTPayloadSchema
 from app.core.database import async_db_session, async_engine
 from app.core.security import create_access_token
+from app.modules.masterdata.model import SourcePersonModel
 from app.modules.metric.model import MetricDefModel, MetricValueModel
 from app.modules.openapi.model import OpenApiLogModel, OpenClientModel
 from app.modules.openapi.schema import OpenClientCreateSchema, OpenClientUpdateSchema
@@ -45,6 +46,7 @@ _TABLES = (
     "open_api_log",
     "dwd_order_full_chain",
     "dwd_order_build_run",
+    "source_person",
 )
 
 
@@ -79,6 +81,12 @@ async def _prepare() -> None:
         )
         await db.execute(
             delete(OrderBuildRunModel).where(OrderBuildRunModel.period_value == "2026-11")
+        )
+        await db.execute(
+            delete(SourcePersonModel).where(
+                SourcePersonModel.source_type == "crm",
+                SourcePersonModel.source_code == "lishenghua",
+            )
         )
         await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == APP_ID))
         await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == f"{APP_ID}_limit"))
@@ -157,7 +165,8 @@ async def _prepare() -> None:
                     qty=2,
                     extra={
                         "customer_name": "测试客户A",
-                        "engineer_name": "黎胜华",
+                        "engineer_code": "100039",
+                        "engineer_name": "旧快照",
                         "product_series": "壳体",
                         "sku": "J01B",
                         "size": "100-200-300",
@@ -201,6 +210,13 @@ async def _prepare() -> None:
                     calc_version=2,
                     status="success",
                     order_count=3,
+                ),
+                SourcePersonModel(
+                    source_type="crm",
+                    source_code="lishenghua",
+                    source_name="黎胜华（新）",
+                    raw_json={"id": 100039, "number": "YG20039"},
+                    status=0,
                 ),
             ]
         )
@@ -428,7 +444,8 @@ def test_mes_order_query(openapi_client):
     assert domestic == {
         "crm_order_no": "DY202611-00001",
         "customer_name": "测试客户A",
-        "engineer_name": "黎胜华",
+        "engineer_code": "100039",
+        "engineer_name": "黎胜华（新）",
         "product_series": "壳体",
         "product_model": "J01B",
         "product_size": "100-200-300",
@@ -443,6 +460,7 @@ def test_mes_order_query(openapi_client):
         "crm_order_no=DY202611": "DY202611-00001",
         "customer_name=测试": "DY202611-00001",
         "engineer_name=刘": "WM202611-00002",
+        "engineer_name=黎胜华（新）": "DY202611-00001",
         "product_series=机箱": "WM202611-00002",
         "product_model=H27": "WM202611-00002",
         "product_size=100-200": "DY202611-00001",

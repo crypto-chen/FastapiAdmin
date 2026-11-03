@@ -24,14 +24,14 @@ def _row(**overrides):
     return row
 
 
-def _build(row, customer_map, customer_by_id=None):
+def _build(row, customer_map, customer_by_id=None, person_index=None):
     record, _quality = build_record(
         row,
         "domestic",
         "2026-10",
         1,
         customer_map,
-        {},
+        person_index or {},
         {},
         {},
         {},
@@ -93,3 +93,15 @@ def test_no_code_no_unique_id_keeps_order_code_empty():
 
     assert record.extra.get("customer_number") is None
     assert record.extra.get("customer_is_retail") is None
+
+
+def test_principal_engineering_maps_to_crm_person_name():
+    """负责工程存 CRM 人员ID，宽表落人员姓名。"""
+    record = _build(
+        _row(principal_engineering=100039),
+        {},
+        person_index={"100039": {"person_name": "黎胜华", "person_code": "lishenghua"}},
+    )
+
+    assert record.extra["engineer_code"] == "100039"
+    assert record.extra["engineer_name"] == "黎胜华"

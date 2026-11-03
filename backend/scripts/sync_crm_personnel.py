@@ -1,4 +1,7 @@
-"""手动同步 CRM 人员架构与人员到主数据来源表（不做定时任务）。
+"""手动同步 CRM 人员架构与人员到主数据来源表。
+
+服务运行期间，CRM 人员会由指标轮次每 4 小时自动同步一次（00/07/12/18）；
+本脚本用于首次部署、补跑或排查，不会与定时任务冲突（按来源编码幂等 upsert）。
 
 两个独立任务，可单独执行：
 
@@ -15,7 +18,7 @@
 
 同口径的手动入口还有：「系统映射管理 → 人工绑定」页面的两个同步按钮，
 接口 ``POST /system-mapping/sync/crm-org``、``POST /system-mapping/sync/crm-person``；
-三者共用 ``app/modules/crm/personnel_sync.py``，均**不注册** Cron。
+三者共用 ``app/modules/crm/personnel_sync.py``；定时入口在 ``metric/schedule.py``。
 
 落库口径：
 

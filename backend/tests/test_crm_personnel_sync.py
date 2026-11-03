@@ -5,7 +5,12 @@ fixture 按 ``/hs/base/getDepartment`` 与 ``/hs/base/getPersonnel`` 的真实�
 （含审批分组）、``getPersonnel`` 里有 ``state`` 与工号重复的情况。
 """
 
+import asyncio
+from datetime import datetime
+from unittest.mock import patch
+
 from app.modules.crm.org_person import build_source_rows, node_code
+from app.modules.metric.schedule import _refresh_round_upstream
 
 DEPARTMENTS = [
     {
@@ -206,3 +211,30 @@ def test_source_codes_are_unique():
     assert len({o.source_code for o in orgs}) == len(orgs)
     assert len({(d.source_org_code, d.source_code) for d in depts}) == len(depts)
     assert len({p.source_code for p in persons}) == len(persons)
+
+
+def test_metric_round_syncs_crm_personnel_before_order_build():
+    """每轮先同步 CRM 人员，再构建订单，保证负责工程姓名与 CRM 同频。"""
+    calls: list[str] = []
+
+    async def fake_wait(_slot) -> None:
+        calls.append("sync_wait")
+
+    async def fake_person() -> None:
+        calls.append("person")
+
+    async def fake_order() -> None:
+        calls.append("order")
+
+    async def fake_customer() -> None:
+        calls.append("customer")
+
+    with (
+        patch("app.modules.metadata.sync.wait_for_sync_jobs", new=fake_wait),
+        patch("app.modules.metric.schedule._refresh_crm_personnel", new=fake_person),
+        patch("app.modules.order.schedule.execute_order_build_job", new=fake_order),
+        patch("app.modules.customer.schedule.execute_customer_build_job", new=fake_customer),
+    ):
+        asyncio.run(_refresh_round_upstream(datetime(2026, 11, 3, 7, 0)))
+
+    assert calls == ["sync_wait", "person", "order", "customer"]

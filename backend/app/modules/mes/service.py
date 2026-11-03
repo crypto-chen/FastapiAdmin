@@ -7,6 +7,8 @@ from typing import Any
 from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.crm.org_person import CRM_SOURCE_TYPE
+from app.modules.masterdata.model import SourcePersonModel
 from app.modules.order.model import OrderBuildRunModel, OrderFullChainModel
 
 from .schema import MesOrderQueryParam
@@ -62,6 +64,30 @@ async def _latest_versions(db: AsyncSession) -> list[tuple[str, int]]:
     return [(str(period), int(version)) for period, version in fallback if period and version]
 
 
+async def _person_names(db: AsyncSession) -> dict[str, str]:
+    """CRM 人员ID → 当前姓名；每次查询都取最新 ``source_person``。
+
+    负责工程在订单里只存 ``principal_engineering``（人员ID）。MES 返回姓名时
+    实时映射到最新人员表，CRM 人员改名/离职后无需等历史订单重算。
+    """
+    rows = (
+        await db.execute(
+            select(SourcePersonModel.source_name, SourcePersonModel.raw_json).where(
+                SourcePersonModel.source_type == CRM_SOURCE_TYPE,
+                SourcePersonModel.is_deleted == False,  # noqa: E712
+            )
+        )
+    ).all()
+    names: dict[str, str] = {}
+    for source_name, raw in rows:
+        raw = raw if isinstance(raw, dict) else {}
+        crm_id = raw.get("id")
+        name = _text_or_none(source_name)
+        if crm_id is not None and name:
+            names[str(crm_id)] = name
+    return names
+
+
 def _base_conditions() -> list[Any]:
     return [
         OrderFullChainModel.is_deleted == False,  # noqa: E712
@@ -73,7 +99,7 @@ def _base_conditions() -> list[Any]:
     ]
 
 
-def _search_conditions(search: MesOrderQueryParam) -> list[Any]:
+def _search_conditions(search: MesOrderQueryParam, person_names: dict[str, str]) -> list[Any]:
     conditions: list[Any] = []
     if search.crm_order_no:
         conditions.append(OrderFullChainModel.order_number.like(_like(search.crm_order_no)))
@@ -82,7 +108,12 @@ def _search_conditions(search: MesOrderQueryParam) -> list[Any]:
     if search.customer_name:
         conditions.append(OrderFullChainModel.extra["customer_name"].as_string().like(_like(search.customer_name)))
     if search.engineer_name:
-        conditions.append(OrderFullChainModel.extra["engineer_name"].as_string().like(_like(search.engineer_name)))
+        keyword = search.engineer_name.strip()
+        matched_ids = [crm_id for crm_id, name in person_names.items() if keyword in name]
+        engineer_conditions = [OrderFullChainModel.extra["engineer_name"].as_string().like(_like(keyword))]
+        if matched_ids:
+            engineer_conditions.append(OrderFullChainModel.extra["engineer_code"].as_string().in_(matched_ids))
+        conditions.append(or_(*engineer_conditions))
     if search.product_series:
         conditions.append(OrderFullChainModel.extra["product_series"].as_string().like(_like(search.product_series)))
     if search.product_model:
@@ -92,12 +123,15 @@ def _search_conditions(search: MesOrderQueryParam) -> list[Any]:
     return conditions
 
 
-def _to_item(row: OrderFullChainModel) -> dict[str, Any]:
+def _to_item(row: OrderFullChainModel, person_names: dict[str, str]) -> dict[str, Any]:
     extra = row.extra or {}
+    engineer_code = _text_or_none(extra.get("engineer_code"))
+    engineer_name = person_names.get(engineer_code) if engineer_code else None
     return {
         "crm_order_no": row.order_number,
         "customer_name": _text_or_none(extra.get("customer_name")),
-        "engineer_name": _text_or_none(extra.get("engineer_name")),
+        "engineer_code": engineer_code,
+        "engineer_name": engineer_name or _text_or_none(extra.get("engineer_name")),
         "product_series": _text_or_none(extra.get("product_series")),
         "product_model": _text_or_none(extra.get("sku")),
         "product_size": _text_or_none(extra.get("size")),
@@ -117,10 +151,11 @@ class MesOrderService:
         latest = await _latest_versions(self.db)
         if not latest:
             return {"total": 0, "page_no": page_no, "page_size": page_size, "has_more": False, "items": []}
+        person_names = await _person_names(self.db)
         conditions = [
             *_base_conditions(),
             tuple_(OrderFullChainModel.period_value, OrderFullChainModel.calc_version).in_(latest),
-            *_search_conditions(search),
+            *_search_conditions(search, person_names),
         ]
 
         total = (await self.db.execute(select(func.count()).select_from(OrderFullChainModel).where(*conditions))).scalar() or 0
@@ -147,5 +182,5 @@ class MesOrderService:
             "page_no": page_no,
             "page_size": page_size,
             "has_more": page_no * page_size < int(total),
-            "items": [_to_item(row) for row in rows],
+            "items": [_to_item(row, person_names) for row in rows],
         }

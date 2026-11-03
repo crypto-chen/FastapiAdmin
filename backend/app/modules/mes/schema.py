@@ -23,6 +23,7 @@ class MesOrderItemSchema(BaseModel):
 
     crm_order_no: str = Field(..., description="CRM 订单号")
     customer_name: str | None = Field(default=None, description="客户名称")
+    engineer_code: str | None = Field(default=None, description="负责工程人员ID（CRM principal_engineering）")
     engineer_name: str | None = Field(default=None, description="负责工程")
     product_series: str | None = Field(default=None, description="产品系列")
     product_model: str | None = Field(default=None, description="产品型号")

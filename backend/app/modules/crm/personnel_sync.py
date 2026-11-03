@@ -4,8 +4,9 @@
 - 任务二「同步 CRM 人员」：``GET /hs/base/getPersonnel``（组织树只用于解析所属组织/部门）
   → ``source_person``
 
-两个任务都可独立执行，**不注册任何定时任务**（无 Cron / APScheduler 项）；
-入口有三处，逻辑共用本模块：
+两个任务都可独立执行；服务运行期间，**人员同步由指标轮次每 4 小时自动调用一次**
+（00:00 / 07:00 / 12:00 / 18:00，见 ``app/modules/metric/schedule.py``），
+保证 MES 订单接口的「负责工程」与 CRM 人员变动同频。手动入口有三处，逻辑共用本模块：
 
 1. 页面按钮：「系统映射管理 → 人工绑定」工具栏
 2. 接口：``POST /system-mapping/sync/crm-org``、``/system-mapping/sync/crm-person``

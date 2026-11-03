@@ -24,6 +24,7 @@ MES ──GET /open/v1/mes/orders──> 核算指标系统 ──读取──> 
 | --- | --- | --- |
 | CRM 订单号 | `crm_order_no` | CRM `orderAnalyze.number` |
 | 客户名称 | `customer_name` | CRM 客户主档名称 |
+| 负责工程ID | `engineer_code` | CRM `orderAnalyze.principal_engineering` 原值（人员ID） |
 | 负责工程 | `engineer_name` | CRM `principal_engineering` 对应人员姓名 |
 | 产品系列 | `product_series` | CRM 产品系列字典名称 |
 | 产品型号 | `product_model` | CRM 产品型号字典名称（如 `H27A`） |
@@ -43,7 +44,8 @@ MES ──GET /open/v1/mes/orders──> 核算指标系统 ──读取──> 
 ### 1.3 数据更新频率
 
 - CRM 订单明细与订单宽表每天重建 **4 次**：`00:00 / 07:00 / 12:00 / 18:00`（Asia/Shanghai）；
-- 每个轮次先同步 CRM，再重建最近 3 个期间；
+- 每个轮次先同步 CRM 订单，再同步 CRM 人员到 `source_person`，然后重建最近 3 个期间；
+- 「负责工程」的 CRM 人员ID → 姓名映射随人员同步刷新，人员改名/离职同样每轮更新；
 - 新订单/变更通常在 **下一个轮次完成后** 可查，最长等待约 6 小时；
 - 历史订单只有在 CRM 回补或重算后才会变化。
 
@@ -186,6 +188,7 @@ GET /open/v1/mes/orders?customer_name=SubDude&product_model=K22C
       {
         "crm_order_no": "PL202610-02941",
         "customer_name": "埃尔利德（广东）智能科技有限公司",
+        "engineer_code": "100039",
         "engineer_name": "胡嘉怡",
         "product_series": "H系列",
         "product_model": "H30A",
@@ -214,6 +217,7 @@ GET /open/v1/mes/orders?customer_name=SubDude&product_model=K22C
 | `schema_version` | string | 否 | 字段版本，变更时更新 |
 | `items[].crm_order_no` | string | 否 | CRM 订单号 |
 | `items[].customer_name` | string | 是 | 客户名称 |
+| `items[].engineer_code` | string | 是 | 负责工程人员ID（CRM `principal_engineering`） |
 | `items[].engineer_name` | string | 是 | 负责工程姓名 |
 | `items[].product_series` | string | 是 | 产品系列 |
 | `items[].product_model` | string | 是 | 产品型号 |
@@ -237,7 +241,7 @@ GET /open/v1/mes/orders?customer_name=SubDude&product_model=K22C
 | --- | --- | --- |
 | `crm_order_no` | `orderAnalyze.number` | 原样返回 |
 | `customer_name` | `orderAnalyze.customer` → `getCusotmerList.name` | 客户主档优先，订单自带名称兜底 |
-| `engineer_name` | `orderAnalyze.principal_engineering` → CRM 人员姓名 | 与业务员 `create_id` 使用同一套人员索引 |
+| `engineer_name` | `orderAnalyze.principal_engineering` → `source_person.raw_json.id` → `source_name` | 订单只存人员ID；查询时实时映射最新 CRM 人员姓名，人员同步每 4 小时一次 |
 | `product_series` | `orderAnalyze.product_series` → 产品系列字典 | 返回字典名称，不返回编码 |
 | `product_model` | `orderAnalyze.product_model` → 产品型号字典 | 返回型号名称（如 `H27A`） |
 | `product_size` | `orderAnalyze.size` | 原样返回 |
@@ -248,7 +252,7 @@ GET /open/v1/mes/orders?customer_name=SubDude&product_model=K22C
 ### 4.1 空值说明
 
 - CRM 本身没有维护时，字段返回 `null`；
-- 负责工程为空时，先确认该订单 CRM 是否填写 `principal_engineering`；
+- 负责工程为空时，先确认该订单 CRM 是否填写 `principal_engineering`，再确认 CRM 人员已同步（`source_person` 是否有对应 ID）；
 - 产品型号为空时，确认 CRM 型号字典是否匹配；
 - 接口不会用业务员、客户负责人等字段替代负责工程。
 
@@ -360,7 +364,15 @@ git pull
 
 重启后端进程（按服务器现有方式，如系统服务或进程管理器）。
 
-### 7.2 回填历史负责工程
+### 7.2 同步 CRM 人员（首次部署先跑一次）
+
+```bash
+python scripts/sync_crm_personnel.py --target person
+```
+
+服务启动后，该同步已并入每轮指标任务（00/07/12/18），无需再手工执行。
+
+### 7.3 回填历史负责工程
 
 首次上线执行一次；预演确认数量后再写库：
 
@@ -377,7 +389,7 @@ python scripts/backfill_order_engineer.py --apply
 
 > 新构建的订单会自动写入负责工程，无需每天执行回填。
 
-### 7.3 创建 MES 接入应用
+### 7.4 创建 MES 接入应用
 
 ```bash
 python scripts/seed_mes_open_client.py \
@@ -389,7 +401,7 @@ python scripts/seed_mes_open_client.py \
 
 保存输出的 `app_secret`，只显示一次。
 
-### 7.4 验证
+### 7.5 验证
 
 ```bash
 curl "http://120.237.174.243:6479/open/v1/mes/orders?page_no=1&page_size=1" \

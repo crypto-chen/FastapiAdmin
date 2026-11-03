@@ -3,6 +3,9 @@
 **一个批次任务** + 每日四次刷新：00:00、07:00、12:00、18:00 按依赖分层重算一次
 **当月**数值，每次计算保留一个 ``calc_version``，可按日期回溯当天的口径。
 
+每个轮次先同步 CRM 人员（``source_person``），再重建订单/客户宽表；MES 订单接口的
+「负责工程」依赖 ``principal_engineering`` → CRM 人员姓名，因此人员同步与订单构建同频。
+
 分层调度（见 ``batch.py``）保证组成指标先于派生指标完成；派生指标计算前还有一层
 「组成指标当天算过」的新鲜度校验（见 ``engine._ensure_component_values``）兜底
 单指标重算与开放接口触发。
@@ -61,10 +64,15 @@ async def execute_metric_calc_job() -> None:
 
 
 async def _refresh_round_upstream(slot: datetime) -> None:
-    """每一轮：先等同步完成，再重建订单/客户宽表，最后计算指标。"""
+    """每一轮：先等同步完成、同步 CRM 人员，再重建订单/客户宽表，最后计算指标。"""
     from app.modules.metadata.sync import wait_for_sync_jobs
 
     await wait_for_sync_jobs(slot)
+
+    try:
+        await _refresh_crm_personnel()
+    except Exception as exc:  # noqa: BLE001 - 人员同步失败不阻断订单构建，沿用现有人员数据
+        logger.exception(f"本轮 CRM 人员同步失败，继续使用现有人员数据：{exc}")
 
     from app.modules.order.schedule import execute_order_build_job
 
@@ -79,6 +87,19 @@ async def _refresh_round_upstream(slot: datetime) -> None:
         await execute_customer_build_job()
     except Exception as exc:  # noqa: BLE001 - 上游宽表失败时仍用现有版本算指标
         logger.exception(f"本轮客户分析构建失败，指标将使用现有宽表：{exc}")
+
+
+async def _refresh_crm_personnel() -> None:
+    """同步 CRM 人员到 ``source_person``，保证负责工程/业务员姓名与 CRM 同频。"""
+    from app.core.database import async_db_session
+    from app.modules.crm.personnel_sync import sync_crm_personnel
+
+    async with async_db_session() as db, db.begin():
+        result = (await sync_crm_personnel(db)).as_dict()
+    logger.info(
+        "CRM 人员同步完成：新增 {persons_created}，更新 {persons_updated}，"
+        "共 {person_total} 人（在职 {person_active}）".format(**result)
+    )
 
 
 async def _settle_previous_period(metrics: list[dict]) -> None:
