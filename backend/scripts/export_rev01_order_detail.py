@@ -316,6 +316,10 @@ async def build_crm_detail(db, metric_code: str, period: str, metric_run) -> tup
             row, trade = master
             row_order_type = text_value(row.get("order_type"))
             chuhuo_date = iso_date(row.get("chuhuo_date"))
+            # CRM 部分批次会把已出货订单的 chuhuo_date 留空；此时以发货明细月份为准。
+            # 不补这一步会把“10 月已发货、但订单表出货日期为空”的订单漏掉。
+            if not chuhuo_date and order_id in target_month_order_ids:
+                chuhuo_date = f"{period}（发货月）"
             qty = number(row.get("qty"))
             intake = (
                 number(row.get("receivable")) - number(row.get("taxes"))
