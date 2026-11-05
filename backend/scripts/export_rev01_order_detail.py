@@ -725,6 +725,12 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="导出 REV-01-a-1/a-2/a-3 订单明细")
     parser.add_argument("--period", required=True, help="期间 YYYY-MM，如 2026-10")
     parser.add_argument("--output", default=None, help="输出 xlsx 路径")
+    parser.add_argument(
+        "--max-tail",
+        type=float,
+        default=1.0,
+        help="允许的尾差上限（元）；超过视为明细与指标未匹配，默认 1 元",
+    )
     args = parser.parse_args()
     period = args.period.strip()
 
@@ -741,6 +747,12 @@ async def main() -> None:
             detail, detail_total, info = await build_crm_detail(db, metric.code, period, run)
             metric_value = round(float(value_row.value or 0), 4)
             tail = round(metric_value - detail_total, 4)
+            if abs(tail) > args.max_tail:
+                raise SystemExit(
+                    f"{excel_code} 明细合计 {detail_total:,.4f} 与指标值 {metric_value:,.4f} "
+                    f"相差 {tail:+,.4f}，超过尾差上限 {args.max_tail:,.2f}。"
+                    "这不是四舍五入尾差：请先重算该指标，或检查服务器订单/发货批次是否完整。"
+                )
             if abs(tail) > 0.00005:
                 # 逐单金额按 4 位小数四舍五入后与源接口汇总会有极小尾差；
                 # 单列一行尾差调整，保证明细合计与指标值一致。
