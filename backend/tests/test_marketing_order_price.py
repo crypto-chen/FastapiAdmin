@@ -54,6 +54,54 @@ def test_order_price_is_ratio_intake_over_count():
     assert set(measures["denominator_metric_codes"]) <= codes
 
 
+def test_order_price_breakdown_is_ratio_amount_over_type_count():
+    module = _load_seed_module()
+    codes = {item["code"] for item in module.METRICS}
+    cases = {
+        "marketing_domestic_order_price": (
+            "marketing_domestic_order_untaxed",
+            "marketing_domestic_order_count",
+        ),
+        "marketing_export_order_price": (
+            "marketing_export_order_untaxed",
+            "marketing_export_order_count",
+        ),
+        "marketing_retail_order_price": (
+            "marketing_retail_order_untaxed",
+            "marketing_retail_order_count",
+        ),
+    }
+    for code, (numerator, denominator) in cases.items():
+        measures = _metric(module, code)["measures"]
+        assert measures["kind"] == METRIC_RATIO_KIND
+        assert measures["numerator_metric_codes"] == [numerator]
+        assert measures["denominator_metric_codes"] == [denominator]
+        assert measures["ratio_scale"] == 1
+        assert measures["unit"] == "元/单"
+        assert numerator in codes
+        assert denominator in codes
+
+
+def test_order_count_breakdown_reads_order_analyze_by_type():
+    module = _load_seed_module()
+    cases = {
+        "marketing_domestic_order_count": "/hs/order/orderAnalyze?type=1",
+        "marketing_export_order_count": "/hs/order/orderAnalyze?type=2",
+        "marketing_retail_order_count": "/hs/order/orderAnalyze?type=3",
+    }
+    for code, source_object_code in cases.items():
+        metric = _metric(module, code)
+        measures = metric["measures"]
+        assert measures["kind"] == "crm_person_amount"
+        assert measures["value_mode"] == "count_orders"
+        assert measures["status_field"] == "status"
+        assert measures["status_allow"] == ["384"]
+        components = measures["components"]
+        assert len(components) == 1
+        assert components[0]["source_object_code"] == source_object_code
+        assert metric["status"] == 1
+
+
 def test_units_are_declared():
     module = _load_seed_module()
     assert resolve_metric_unit("营销中心订单数", _metric(module, "marketing_order_count")["measures"]) == "单"
@@ -69,3 +117,22 @@ def test_order_price_math_matches_engine():
     assert order_price(3138000.0, 3138) == 1000.0
     assert order_price(100.0, 3) == 33.3333
     assert order_price(100.0, 0) == 0.0
+
+
+def test_order_price_breakdown_weighted_average_matches_total():
+    """三个分类型客单价按订单数加权，应回到公司客单价。"""
+
+    def order_price(intake: float, count: int) -> float:
+        return round(intake / count, 4) if count else 0.0
+
+    domestic = (1000.0, 2)
+    export = (500.0, 1)
+    retail = (100.0, 4)
+    total_amount = domestic[0] + export[0] + retail[0]
+    total_count = domestic[1] + export[1] + retail[1]
+    weighted = (
+        order_price(*domestic) * domestic[1]
+        + order_price(*export) * export[1]
+        + order_price(*retail) * retail[1]
+    ) / total_count
+    assert round(weighted, 4) == order_price(total_amount, total_count)

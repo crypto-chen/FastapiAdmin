@@ -19,6 +19,10 @@
 - 订单数：``/hs/getOrderCount``（控制器 ``app\\api\\controller\\accounting\\v1\\XcOrder``）
   返回内贸 + 外贸 + 零售三类有效订单（``status=384``）的条数合计，取值路径 ``data.count``；
   客单价 = 接单金额（未税）÷ 订单数（``kind = metric_ratio``，分母为 0 时取 0）。
+- 客单价拆分（KPI-18-1/2/3）：内贸/外贸/零售客单价 = 对应类型订单未税 ÷ 对应类型订单数；
+  分母取 CRM 订单明细 ``/hs/order/orderAnalyze?type=1/2/3`` 的有效订单条数
+  （``status=384``，一行一单），来源对象由 ``seed_crm_person_metrics.py`` 创建，
+  本脚本只引用、不重复建同步任务。
 
 声明式维护：``SOURCE_OBJECTS`` 一个接口一条（同步任务按接口建，多个指标可共用），
 ``METRICS`` 一个指标一条，加指标只需在 ``METRICS`` 里加一条。
@@ -74,6 +78,27 @@ BASE_MEASURES = {
     "data_field": "data",
 }
 DIMENSIONS = {"org": False, "dept": False}
+
+# 客单价拆分的分母来源：CRM 订单明细按内贸/外贸/零售拆分。
+# 这三个来源对象（及同步任务）由 seed_crm_person_metrics.py 创建，本脚本只引用。
+ORDER_ANALYZE_COMPONENTS = {
+    "domestic": {
+        "label": "内贸",
+        "source_object_code": "/hs/order/orderAnalyze?type=1",
+        "amount_terms": [{"field": "remove_taxes_freight", "sign": 1}],
+    },
+    "export": {
+        "label": "外贸",
+        "source_object_code": "/hs/order/orderAnalyze?type=2",
+        "amount_terms": [{"field": "receivable_CNY", "sign": 1}],
+    },
+    "retail": {
+        "label": "零售",
+        "source_object_code": "/hs/order/orderAnalyze?type=3",
+        "amount_terms": [{"field": "remove_taxes_freight", "sign": 1}],
+    },
+}
+VALID_ORDER = {"status_field": "status", "status_allow": ["384"]}
 
 # 一个接口一条：params 是 dateRange 之外的固定请求参数（同步任务按接口建，多个指标共用）
 SOURCE_OBJECTS = [
@@ -213,6 +238,68 @@ METRICS = [
         "measures": {"data_field": "data.count", "unit": "单"},
     },
     {
+        # 客单价拆分分母：内贸有效订单条数（内部辅助指标，不在指标目录展示）
+        "code": "marketing_domestic_order_count",
+        "name": "营销中心内贸订单数",
+        "path": None,
+        "status": 1,
+        "dimensions": {"org": False, "dept": False, "person": True},
+        "rule": "内贸订单数（单）= CRM 订单明细 type=1 中有效订单 status=384 的条数，"
+        "按订单创建月 createtime 落在当期，一行一单；不按是否出货/订单类型/金额过滤。",
+        "measures": {
+            "kind": "crm_person_amount",
+            "group_by": "person",
+            "person_field": "create_id",
+            "value_mode": "count_orders",
+            "unit": "单",
+            # 订单明细是整月全量快照：只取最近一次批次，避免历史批次里已删除/改号的订单被并回来
+            "use_latest_batch_only": True,
+            **VALID_ORDER,
+            "components": [ORDER_ANALYZE_COMPONENTS["domestic"]],
+        },
+    },
+    {
+        # 客单价拆分分母：外贸有效订单条数（内部辅助指标）
+        "code": "marketing_export_order_count",
+        "name": "营销中心外贸订单数",
+        "path": None,
+        "status": 1,
+        "dimensions": {"org": False, "dept": False, "person": True},
+        "rule": "外贸订单数（单）= CRM 订单明细 type=2 中有效订单 status=384 的条数，"
+        "按订单创建月 createtime 落在当期，一行一单；不按是否出货/订单类型/金额过滤。",
+        "measures": {
+            "kind": "crm_person_amount",
+            "group_by": "person",
+            "person_field": "create_id",
+            "value_mode": "count_orders",
+            "unit": "单",
+            "use_latest_batch_only": True,
+            **VALID_ORDER,
+            "components": [ORDER_ANALYZE_COMPONENTS["export"]],
+        },
+    },
+    {
+        # 客单价拆分分母：零售有效订单条数（内部辅助指标）
+        "code": "marketing_retail_order_count",
+        "name": "营销中心零售订单数",
+        "path": None,
+        "status": 1,
+        "dimensions": {"org": False, "dept": False, "person": True},
+        "rule": "零售订单数（单）= CRM 订单明细 type=3 中有效订单 status=384 的条数，"
+        "按订单创建月 createtime 落在当期，一行一单；含零售订单与外贸 order_type=3，"
+        "不按是否出货/订单类型/金额过滤。",
+        "measures": {
+            "kind": "crm_person_amount",
+            "group_by": "person",
+            "person_field": "create_id",
+            "value_mode": "count_orders",
+            "unit": "单",
+            "use_latest_batch_only": True,
+            **VALID_ORDER,
+            "components": [ORDER_ANALYZE_COMPONENTS["retail"]],
+        },
+    },
+    {
         # 比率指标：不取数，值 = 分子指标当期值 ÷ 分母指标当期值 × ratio_scale
         "code": "marketing_order_price",
         "name": "营销中心客单价",
@@ -225,6 +312,58 @@ METRICS = [
             "kind": "metric_ratio",
             "numerator_metric_codes": ["marketing_order_intake_untaxed"],
             "denominator_metric_codes": ["marketing_order_count"],
+            "ratio_scale": 1,
+            "unit": "元/单",
+        },
+    },
+    {
+        # 内贸客单价：内贸订单未税 ÷ 内贸订单数
+        "code": "marketing_domestic_order_price",
+        "name": "营销中心内贸客单价",
+        "path": None,
+        "rule": "内贸客单价（元/单）= 内贸订单未税 ÷ 内贸订单数："
+        "分子取「营销中心内贸订单（未税）」（SUM(receivable - taxes)，status=384，按 createtime）；"
+        "分母取「营销中心内贸订单数」（orderAnalyze type=1 的有效订单条数，status=384）；"
+        "两者同为当月，分母为 0 时取 0。",
+        "measures": {
+            "kind": "metric_ratio",
+            "numerator_metric_codes": ["marketing_domestic_order_untaxed"],
+            "denominator_metric_codes": ["marketing_domestic_order_count"],
+            "ratio_scale": 1,
+            "unit": "元/单",
+        },
+    },
+    {
+        # 外贸客单价：外贸订单未税 ÷ 外贸订单数
+        "code": "marketing_export_order_price",
+        "name": "营销中心外贸客单价",
+        "path": None,
+        "rule": "外贸客单价（元/单）= 外贸订单未税 ÷ 外贸订单数："
+        "分子取「营销中心外贸订单（未税）」（SUM(receivable_CNY)，status=384，按 createtime）；"
+        "分母取「营销中心外贸订单数」（orderAnalyze type=2 的有效订单条数，status=384）；"
+        "两者同为当月，分母为 0 时取 0。",
+        "measures": {
+            "kind": "metric_ratio",
+            "numerator_metric_codes": ["marketing_export_order_untaxed"],
+            "denominator_metric_codes": ["marketing_export_order_count"],
+            "ratio_scale": 1,
+            "unit": "元/单",
+        },
+    },
+    {
+        # 零售客单价：零售订单未税 ÷ 零售订单数
+        "code": "marketing_retail_order_price",
+        "name": "营销中心零售客单价",
+        "path": None,
+        "rule": "零售客单价（元/单）= 零售订单未税 ÷ 零售订单数："
+        "分子取「营销中心零售订单（未税）」（外贸 order_type=3 的 receivable_CNY + "
+        "retail_order 的 receivable - taxes，status=384，按 createtime）；"
+        "分母取「营销中心零售订单数」（orderAnalyze type=3 的有效订单条数，status=384）；"
+        "两者同为当月，分母为 0 时取 0。",
+        "measures": {
+            "kind": "metric_ratio",
+            "numerator_metric_codes": ["marketing_retail_order_untaxed"],
+            "denominator_metric_codes": ["marketing_retail_order_count"],
             "ratio_scale": 1,
             "unit": "元/单",
         },
@@ -329,7 +468,7 @@ async def main() -> None:
             metric.name = name
             metric.period_type = "month"
             metric.sensitivity = 0
-            metric.dimensions = DIMENSIONS
+            metric.dimensions = spec.get("dimensions", DIMENSIONS)
             measures = {**BASE_MEASURES, **spec.get("measures", {})}
             if path:
                 measures["source_object_code"] = path
@@ -353,6 +492,19 @@ async def main() -> None:
                     component_codes = [*numerator_codes, *denominator_codes]
                     source_text = (
                         f"数据来源：本系统内 {len(component_codes)} 个营销中心 CRM 订单指标当期结果（相除）；"
+                    )
+                elif measures.get("kind") == "crm_person_amount":
+                    # 业务员明细类辅助指标（如客单价拆分的分类型订单数）：
+                    # 取数来自 orderAnalyze，本脚本只定义口径，不重复建来源对象。
+                    component_codes = [
+                        str(comp.get("source_object_code"))
+                        for comp in measures.get("components") or []
+                        if comp.get("source_object_code")
+                    ]
+                    metric.formula = spec["rule"]
+                    source_text = (
+                        "数据来源：CRM《订单分析接口文档》 /hs/order/orderAnalyze"
+                        "（按内贸/外贸/零售拆分，status=384，按订单创建月）；"
                     )
                 else:
                     component_codes = [str(code) for code in measures.get("component_metric_codes") or []]
