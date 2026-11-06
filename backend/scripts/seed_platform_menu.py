@@ -1,4 +1,4 @@
-"""初始化「指标中心 → 平台分析」菜单与权限。
+"""初始化「指标中心 → 营销业务指标 → 平台分析」菜单与权限。
 
 页面：``frontend/web/src/views/module_metric/platform/index.vue``
 权限：``module_metric:platform:query``
@@ -19,6 +19,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from _metric_menu_utils import ensure_marketing_group  # noqa: E402
+
 from app.core.base_model import MappedBase  # noqa: E402
 from app.core.database import async_db_session, async_engine  # noqa: E402
 from app.modules.system.menu.model import MenuModel  # noqa: E402
@@ -27,7 +29,7 @@ from app.utils.import_util import ImportUtil  # noqa: E402
 
 ImportUtil.find_models(MappedBase)
 
-PARENT_NAME = "指标中心"
+PARENT_NAME = "营销业务指标"
 MENU_NAME = "平台分析"
 MENU_PERMISSION = "module_metric:platform:query"
 
@@ -50,20 +52,7 @@ async def get_or_create(db, name: str, parent_id: int | None, **kwargs) -> MenuM
 
 async def main() -> None:
     async with async_db_session() as db, db.begin():
-        parent = await get_or_create(
-            db,
-            PARENT_NAME,
-            None,
-            type=1,
-            order=9,
-            icon="ri:bar-chart-box-line",
-            route_name="Metric",
-            route_path="/metric",
-            redirect="/metric/value",
-            status=0,
-            title=PARENT_NAME,
-            scope="web",
-        )
+        parent = await ensure_marketing_group(db)
 
         menu = await get_or_create(
             db,

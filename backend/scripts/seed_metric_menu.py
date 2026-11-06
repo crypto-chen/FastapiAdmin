@@ -1,4 +1,4 @@
-"""初始化「指标中心」菜单（指标结果查看页 + 计算按钮权限）。
+"""初始化「指标中心 → 营销业务指标」菜单（指标结果查看页 + 计算按钮权限）。
 
 用法：
     python scripts/seed_metric_menu.py
@@ -14,10 +14,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from _metric_menu_utils import (  # noqa: E402
+    bind_roles,
+    ensure_marketing_group,
+    move_metric_pages_to_marketing,
+)
+
 from app.core.base_model import MappedBase  # noqa: E402
 from app.core.database import async_db_session, async_engine  # noqa: E402
 from app.modules.system.menu.model import MenuModel  # noqa: E402
-from app.modules.system.role.model import RoleMenusModel, RoleModel  # noqa: E402
 from app.utils.import_util import ImportUtil  # noqa: E402
 
 ImportUtil.find_models(MappedBase)
@@ -40,20 +45,9 @@ async def get_or_create(db, name: str, parent_id: int | None, **kwargs) -> MenuM
 
 async def main() -> None:
     async with async_db_session() as db, db.begin():
-        parent = await get_or_create(
-            db,
-            "指标中心",
-            None,
-            type=1,
-            order=9,
-            icon="ri:bar-chart-box-line",
-            route_name="Metric",
-            route_path="/metric",
-            redirect="/metric/value",
-            status=0,
-            title="指标中心",
-            scope="web",
-        )
+        parent = await ensure_marketing_group(db)
+        # 兼容已有库：把原先直接挂在「指标中心」下的页面迁到营销业务指标。
+        moved = await move_metric_pages_to_marketing(db)
         child = await get_or_create(
             db,
             "指标结果",
@@ -69,7 +63,7 @@ async def main() -> None:
             scope="web",
         )
 
-        menu_ids = [parent.id, child.id]
+        menu_ids = [parent.id, child.id, *moved]
         for name, permission, order in [
             ("指标结果查询", "module_metric:value:query", 1),
             ("指标重算", "module_metric:def:run", 2),
@@ -87,21 +81,9 @@ async def main() -> None:
             )
             menu_ids.append(button.id)
 
-        roles = (await db.execute(select(RoleModel).where(RoleModel.code.in_(["SUPER_ADMIN", "ADMIN"])))).scalars().all()
-        for role in roles:
-            for menu_id in sorted(set(menu_ids)):
-                exists = (
-                    await db.execute(
-                        select(RoleMenusModel).where(
-                            RoleMenusModel.role_id == role.id,
-                            RoleMenusModel.menu_id == menu_id,
-                        )
-                    )
-                ).scalars().first()
-                if exists is None:
-                    db.add(RoleMenusModel(role_id=role.id, menu_id=menu_id))
+        await bind_roles(db, menu_ids)
     await async_engine.dispose()
-    print("指标中心菜单初始化完成")
+    print("指标中心菜单初始化完成：指标中心 → 营销业务指标 → 指标结果")
 
 
 if __name__ == "__main__":

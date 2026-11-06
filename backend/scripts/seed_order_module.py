@@ -5,7 +5,7 @@
 1. 标准实体 ``order_full_chain`` 与全部字段（来自 ``app/modules/order/fields.py``）；
 2. CRM 订单对象的来源字段（新旧字段名都注册，便于对照）与来源映射，
    ``transform_config`` 里带 ``priority``（越小越优先）—— 换来源只改这里；
-3. 菜单「订单全链路」（挂在指标中心 → 指标结果 下面）+ 查询/构建按钮；
+3. 菜单「订单全链路」（挂在指标中心 → 营销业务指标 下面）+ 查询/构建按钮；
 4. 绑定 SUPER_ADMIN / ADMIN 角色。
 
 用法：
@@ -21,6 +21,8 @@ from sqlalchemy import select
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from _metric_menu_utils import ensure_marketing_group  # noqa: E402
 
 from app.core.base_model import MappedBase  # noqa: E402
 from app.core.database import async_db_session, async_engine  # noqa: E402
@@ -56,7 +58,7 @@ ORDER_OBJECTS = [
     "/hs/order/orderAnalyze?type=3",  # 2026-10-21 新增：零售订单范围
 ]
 
-MENU_PARENT_NAME = "指标中心"
+MENU_PARENT_NAME = "营销业务指标"
 MENU_NAME = "订单全链路"
 MENU_ORDER = 2  # 排在「指标结果」后面
 BUTTONS = [
@@ -219,11 +221,7 @@ async def seed_mappings(db, standard_fields: dict[str, StandardFieldModel]) -> t
 
 
 async def seed_menu(db) -> list[int]:
-    parent = (
-        await db.execute(select(MenuModel).where(MenuModel.name == MENU_PARENT_NAME, MenuModel.parent_id.is_(None)))
-    ).scalars().first()
-    if parent is None:
-        raise SystemExit(f"父菜单「{MENU_PARENT_NAME}」不存在，请先执行 scripts/seed_metric_menu.py")
+    parent = await ensure_marketing_group(db)
 
     menu = (
         await db.execute(

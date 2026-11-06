@@ -1,7 +1,7 @@
 """初始化「产品线分析」模块（标准实体 + 字段 + 菜单 + 角色授权）。
 
 字段定义见 ``app/modules/product/fields.py``（PRD-xx，对应财务底稿），
-菜单挂在「指标中心」下，与「指标结果」「订单全链路」「客户分析」同级。
+菜单挂在「指标中心 → 营销业务指标」下，与「指标结果」「订单全链路」「客户分析」同级。
 
 用法：
     python scripts/seed_product_module.py
@@ -17,6 +17,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from _metric_menu_utils import ensure_marketing_group  # noqa: E402
+
 from app.core.base_model import MappedBase  # noqa: E402
 from app.core.database import async_db_session, async_engine  # noqa: E402
 from app.modules.metadata.model import StandardEntityModel, StandardFieldModel  # noqa: E402
@@ -31,7 +33,7 @@ ENTITY_CODE = "product_line_analysis"
 ENTITY_NAME = "产品线分析"
 TABLE_NAME = "dwd_product_line_analysis"
 
-MENU_PARENT_NAME = "指标中心"
+MENU_PARENT_NAME = "营销业务指标"
 MENU_NAME = "产品线分析"
 MENU_ORDER = 4
 BUTTONS = [
@@ -108,13 +110,7 @@ async def seed_standard_fields(db, entity) -> dict[str, StandardFieldModel]:
 
 
 async def seed_menu(db) -> list[int]:
-    parent = (
-        await db.execute(
-            select(MenuModel).where(MenuModel.name == MENU_PARENT_NAME, MenuModel.parent_id.is_(None))
-        )
-    ).scalars().first()
-    if parent is None:
-        raise SystemExit(f"父菜单「{MENU_PARENT_NAME}」不存在，请先执行 scripts/seed_metric_menu.py")
+    parent = await ensure_marketing_group(db)
 
     menu = await get_or_create(
         db,
