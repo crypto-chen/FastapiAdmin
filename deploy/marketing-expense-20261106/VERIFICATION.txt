@@ -1,0 +1,130 @@
+Marketing expense rules verification
+Generated: 2026-11-06 16:34 Asia/Shanghai
+
+Changed branch/field
+  - metric_def marketing_software_expense: new 6601 / 核算维度「软件费用」indicator, status=0,
+    category=营销中心-主表; added to marketing_total_expense components (21 components).
+  - metric_def marketing_platform_expense: detail_name_contains adds「平台固定费」(covers
+    平台固定费（年费/月租）).
+  - metric_def marketing_domestic_express_expense / marketing_after_sales_expense:
+    2026-10 only override. Domestic drops 售后运输费; after-sales adds it.
+    Other periods keep the old mapping via detail_name_contains.
+  - engine: extract_account_balance accepts period and supports
+    detail_name_contains_by_period / detail_name_exclude_by_period.
+  - seed: copies the by-period overrides into metric_def.measures and appends a visible
+    "期间覆盖" note to formula/description.
+
+FOUR PATHS
+  MODIFIED_FILE : D:\永锢\06.核算指标系统\FastapiAdmin\backend\scripts\seed_marketing_metrics.py
+  DIFF_FILE     : D:\永锢\06.核算指标系统\FastapiAdmin\backend\artifacts\marketing_expense_20261106\DIFF.patch
+  VERIFICATION  : D:\永锢\06.核算指标系统\FastapiAdmin\backend\artifacts\marketing_expense_20261106\VERIFICATION.txt
+  ROLLBACK.sh   : D:\永锢\06.核算指标系统\FastapiAdmin\backend\artifacts\marketing_expense_20261106\ROLLBACK.sh
+Other modified files:
+  D:\永锢\06.核算指标系统\FastapiAdmin\backend\app\modules\metric\engine.py
+  D:\永锢\06.核算指标系统\FastapiAdmin\backend\scripts\metric_groups\expense_caliber.txt
+  D:\永锢\06.核算指标系统\FastapiAdmin\backend\tests\test_marketing_expense_rules.py
+  D:\永锢\06.核算指标系统\FastapiAdmin\docs\核算指标系统设计.md
+
+HASHES (SHA256)
+  seed_marketing_metrics.py
+    BASELINE 0FF283A5BEC173CD70FE501AEB1FF3C327A2EBB42FCE30856D3883792361BFCB
+    MODIFIED 467FA8A6A918F5D49DC61199949E55F59DEBF9E4181DE55B49F1BD5A5CA5648F
+  engine.py
+    BASELINE 03040D2A7C8FC4A4F80BF02640C55C621D1A74128548FD6C5D0D7F58CAA04BA6
+    MODIFIED 3BFD11DB7291834754A59CFA68D17730165EA3B571D52264C37505D4FF45AAE6
+  expense_caliber.txt
+    BASELINE 2AC88534EEDB047FA04FC9098819BA114E94D38EB856B8F7705342C10A681EF9
+    MODIFIED EE0509A52940530753FDE7E3E136FFD34F68B0E3CBAF0779266E20682D702937
+  docs/核算指标系统设计.md
+    BASELINE F1C6355B0B4C436A4BD250E7244350EBC41E9FC2FB7659B1B44D645C28B58A56
+    MODIFIED 4D9DAA28AF8CC462DA856EAE31B31A1112FC6B0D86E7557C40A7CEAD127A17ED
+  tests/test_marketing_expense_rules.py
+    BASELINE (absent)
+    MODIFIED 033436F08FD88CFB07A9D259EE0F81969919EEABDE96E00428D9588F8A0EE476
+
+BASELINE TEST (pre-change worktree at HEAD 08ea16a7)
+  command: $env:PYTHONPATH=(Resolve-Path 'artifacts\marketing_expense_20261106_baseline\backend').Path; & backend\.venv\Scripts\python.exe -m pytest artifacts\marketing_expense_20261106_baseline\backend\tests\test_marketing_expense_rules_baseline.py -q
+  input: baseline seed + baseline engine (3 tests: no software metric, no 平台固定费,
+         domestic includes 售后运输费, after-sales excludes it)
+  literal output: "...                                                                     [100%]"
+                  "3 passed in 0.11s"
+  exit status: 0
+
+MODIFIED TEST
+  command: $env:PYTHONPATH=(Resolve-Path 'backend').Path; & backend\.venv\Scripts\python.exe -m pytest backend\tests\test_marketing_expense_rules.py backend\tests\test_marketing_sales_cost.py backend\tests\test_marketing_ap_balance.py backend\tests\test_metric_dependency.py -q
+  input: modified engine/seed + 3 new rule tests + existing account-balance/dependency tests
+  literal output: "...................                                                   [100%]"
+                  "19 passed in 0.11s"
+  exit status: 0
+
+SEED / DEPLOY
+  command: cd backend && & .\.venv\Scripts\python.exe scripts\seed_marketing_metrics.py
+  result: exit 0; new metric id=179 code=marketing_software_expense name=营销中心软件费用
+          other updated ids: 7 domestic, 11 platform, 12 after-sales, 53 total
+  idempotent: rerun exits 0 with the same ids.
+
+RECALC
+  command: cd backend && & .\.venv\Scripts\python.exe scripts\recalc_metrics_batch.py --code marketing_software_expense --code marketing_platform_expense --code marketing_domestic_express_expense --code marketing_after_sales_expense --code marketing_total_expense --with-dependents --period 2026-10 --period 2026-11
+  result: exit 0; 19 metrics x 2 periods = 38 calculations
+  literal key output:
+    2026-10 marketing_domestic_express_expense -> 0.0
+    2026-10 marketing_platform_expense -> 4701.26
+    2026-10 marketing_after_sales_expense -> 867.0
+    2026-10 marketing_software_expense -> 0.0
+    2026-10 marketing_total_expense -> 142161.339
+    === 2026-10 完成 ===
+    === 2026-11 完成 ===
+
+DB VERIFY (latest calc_version)
+  2026-10
+    marketing_software_expense           id=179 cv=2   0.0000
+    marketing_platform_expense           id=11  cv=22  4701.2600
+    marketing_domestic_express_expense   id=7   cv=23  0.0000
+    marketing_after_sales_expense        id=12  cv=23  867.0000
+    marketing_total_expense              id=53  cv=23  142161.3390
+  2026-11
+    marketing_software_expense           id=179 cv=2   0.0000
+    marketing_platform_expense           id=11  cv=14  0.0000
+    marketing_domestic_express_expense   id=7   cv=14  0.0000
+    marketing_after_sales_expense        id=12  cv=14  0.0000
+    marketing_total_expense              id=53  cv=14  12643.2688
+
+VALUE CHECKS
+  6601 核算维度 平台固定费（年费/月租） 2026-10 = 1,886.79
+  marketing_platform_expense 2026-10 = 4,701.26 (all platform keywords), includes 1,886.79
+  6601 核算维度 售后运输费 2026-10 = 667.00
+  marketing_after_sales_expense 2026-10 = 867.00 = 200.00 (售后其它费用) + 667.00
+  marketing_domestic_express_expense 2026-10 = 0.00 (内贸快递 also 0.00)
+  marketing_software_expense 2026-10 = 0.00 (no 6601 软件费用 debit row in the 2026-10 batch)
+  2026-09 unchanged: platform 17,803.75; domestic 138,842.64; after-sales 0.00
+    -> the 售后运输费 reclassification is scoped to 2026-10 only.
+  total check: sum(21 components, latest values) = 142,161.339 = marketing_total_expense,
+    absolute diff = 0.000000.
+
+ROLLBACK TEST (file, on a copy)
+  command: & 'D:\Program Files\Git\bin\bash.exe' -lc "cd 'D:/永锢/06.核算指标系统/FastapiAdmin/backend/artifacts/marketing_expense_20261106' && chmod +x ROLLBACK.sh && ./ROLLBACK.sh 'D:/永锢/06.核算指标系统/FastapiAdmin/backend/artifacts/marketing_expense_20261106/rollback_test_root'"
+  literal output: "ROLLBACK OK: restored 4 files and removed the new test under .../rollback_test_root"
+  restored hashes:
+    0ff283a5bec173cd70fe501aeb1ff3c327a2ebb42fce30856d3883792361bfcb seed_marketing_metrics.py
+    03040d2a7c8fc4a4f80bf02640c55c621d1a74128548fd6c5d0d7f58caa04ba6 engine.py
+    2ac88534eedb047fa04fc9098819ba114e94d38eb856b8f7705342c10a681ef9 expense_caliber.txt
+    f1c6355b0b4c436a4bd250e7244350ebc41e9fc2fb7659b1b44d645c28b58a56 docs/核算指标系统设计.md
+  new test file after rollback: absent (expected)
+  exit status: 0
+  real project files remain MODIFIED (not rolled back).
+
+DB ROLLBACK DRY-RUN
+  command: & backend\.venv\Scripts\python.exe backend\artifacts\marketing_expense_20261106\ROLLBACK_DB.py
+  output: "new metric_value rows after id 4221581: 2291"
+          "metric_def restore: ['marketing_after_sales_expense', 'marketing_domestic_express_expense', 'marketing_platform_expense', 'marketing_total_expense']"
+          "metric_def delete: marketing_software_expense"
+          "DRY-RUN: no changes"
+  exit status: 0
+  --apply deletes post-snapshot metric_value rows and restores DB_BASELINE.json definitions;
+  the real DB was not changed by this dry-run.
+
+STATE
+  New metric visible: marketing_software_expense / 营销中心软件费用 / 营销中心-主表 / status=0.
+  Platform fee includes 平台固定费; 2026-10 platform = 4,701.26.
+  2026-10 domestic express = 0; after-sales = 867; total = 142,161.339.
+  Other periods retain the old 售后运输费 mapping; only 2026-10 is overridden.

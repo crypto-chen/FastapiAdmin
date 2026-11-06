@@ -1,7 +1,9 @@
 # 营销中心费用类指标：核算口径变更后需要重算的指标清单
 # 对应财务「核算对应表」（2026-10-15 对齐）中直接改了核算维度条件的 10 个指标；
+# 2026-11-06 追加：软件费用新增指标、平台费增加平台固定费、2026-10 售后运输费重分类
 # 用法：python scripts/recalc_metrics_batch.py --code-file scripts/metric_groups/expense_caliber.txt \
 #         --period-from 2026-01 --period-to 2026-10 [--with-dependents]
+marketing_software_expense
 marketing_travel_expense
 marketing_vehicle_expense
 marketing_welfare_expense

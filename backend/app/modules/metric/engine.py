@@ -350,15 +350,19 @@ def shift_period(period_type: str, period_value: str, steps: int = -1) -> str:
 # --------------------------------------------------------------------------- #
 # 科目余额表取数执行器
 # --------------------------------------------------------------------------- #
-def extract_account_balance(rows: list, fields: list[str], config: dict) -> dict:
+def extract_account_balance(rows: list, fields: list[str], config: dict, period: str | None = None) -> dict:
     """从科目余额表行中按配置过滤并聚合。
 
     配置项（``measures``）:
     - ``account_field`` / ``account_prefix``：科目编码字段与匹配前缀，如 ``FBALANCEID`` + ``6601``。
     - ``detail_code_field`` / ``detail_name_field``：核算维度编码与名称字段。
     - ``detail_name_contains``：核算维度名称需包含的关键字（任一命中即计入）。
+    - ``detail_name_contains_by_period``：按期间覆盖 ``detail_name_contains`` 的字典，
+      如 ``{"2026-10": ["内贸快递"]}``；仅命中指定期间时替换关键字，其余期间沿用默认口径。
+      用于一次性重分类（如某个月份把「售后运输费」从国内快递费调到售后费用）。
     - ``detail_name_exclude``：核算维度名称命中即**排除**的关键字，用于关键字互为子串的场景
       （如「维修费」会命中「车辆维修费」，需把车辆维修费排除在维修费指标外）。
+    - ``detail_name_exclude_by_period``：按期间覆盖 ``detail_name_exclude``，规则同上。
     - ``amount_field``：金额字段，如 ``FDEBIT``（本期借方发生额）。
     - ``amount_terms``：多字段组合取值，如期末余额 = ``[{"field": "FENDDEBIT", "sign": 1},
       {"field": "FENDCREDIT", "sign": -1}]``（借方减贷方）；配置后优先于 ``amount_field``。
@@ -389,14 +393,18 @@ def extract_account_balance(rows: list, fields: list[str], config: dict) -> dict
     code_exclude = {str(item).strip() for item in code_exclude if str(item).strip()}
     require_detail = bool(config.get("require_detail"))
     is_dept_dim = bool(config.get("detail_is_department", True))
-    keywords = config.get("detail_name_contains") or []
-    if isinstance(keywords, str):
-        keywords = [keywords]
-    keywords = [str(item).strip() for item in keywords if str(item).strip()]
-    exclude = config.get("detail_name_exclude") or []
-    if isinstance(exclude, str):
-        exclude = [exclude]
-    exclude = [str(item).strip() for item in exclude if str(item).strip()]
+    def _period_list(key: str) -> list[str]:
+        """读取关键字列表；命中期间覆盖时整体替换默认列表（允许显式空列表）。"""
+        scoped = config.get(f"{key}_by_period")
+        values = config.get(key) or []
+        if period and isinstance(scoped, dict) and str(period) in scoped:
+            values = scoped[str(period)] or []
+        if isinstance(values, str):
+            values = [values]
+        return [str(item).strip() for item in values if str(item).strip()]
+
+    keywords = _period_list("detail_name_contains")
+    exclude = _period_list("detail_name_exclude")
 
     total = 0.0
     matched_rows = 0
@@ -3180,7 +3188,7 @@ async def _execute_metric_calc_inner(
                 elif kind == INVENTORY_LEDGER_KIND:
                     extracted = extract_inventory_ledger(rows, fields, config)
                 else:
-                    extracted = extract_account_balance(rows, fields, config)
+                    extracted = extract_account_balance(rows, fields, config, period=period)
             org_id = org_id_map.get(org_code)
 
             db.add(

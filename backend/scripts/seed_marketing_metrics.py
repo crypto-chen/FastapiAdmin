@@ -88,7 +88,9 @@ METRIC_DEFS = [
         "code": "marketing_domestic_express_expense",
         "name": "营销中心国内快递费",
         # 核算对应表：内贸快递、售后运输费（快递费归运输费）
+        # 售后运输费只在 2026-10 改归售后费用；其余期间沿用原口径（见 by_period 覆盖）
         "detail_name_contains": ["内贸快递", "售后运输费"],
+        "detail_name_contains_by_period": {"2026-10": ["内贸快递"]},
     },
     {
         "code": "marketing_welfare_expense",
@@ -106,25 +108,35 @@ METRIC_DEFS = [
     {
         "code": "marketing_platform_expense",
         "name": "营销中心平台费",
-        # 核算对应表：平台交易服务费、平台费（非运营平台-公众号）、平台延迟发货赔付费
-        # （平台固定费（年费/月租）对应表归「人员费用」，已移出本指标）
+        # 核算对应表：平台交易服务费、平台费（非运营平台-公众号）、平台延迟发货赔付费、
+        # 平台固定费（年费/月租）
         "detail_name_contains": [
             "专用平台费用",
             "平台交易服务费",
             "平台费（非运营平台-公众号）",
             "平台延迟发货赔付费",
+            "平台固定费",
         ],
+    },
+    {
+        "code": "marketing_software_expense",
+        "name": "营销中心软件费用",
+        # 核算对应表：软件费用
+        "detail_name_contains": ["软件费用"],
     },
     {
         "code": "marketing_after_sales_expense",
         "name": "营销中心售后费用",
-        # 核算对应表：售后返工费（售后运输费归国内快递费）
+        # 核算对应表：售后返工费（售后运输费平时归国内快递费，仅 2026-10 归本指标）
         # 注意「售后组/电话费」这类"部门名含售后"的行不会被计入
         "detail_name_contains": [
             "售后其它费用",
             "售后赔偿费",
             "售后返工费",
         ],
+        "detail_name_contains_by_period": {
+            "2026-10": ["售后其它费用", "售后赔偿费", "售后返工费", "售后运输费"],
+        },
     },
     {
         "code": "marketing_entertainment_expense",
@@ -257,6 +269,7 @@ METRIC_DEFS = [
                 "marketing_intl_express_expense",
                 "marketing_domestic_express_expense",
                 "marketing_platform_expense",
+                "marketing_software_expense",
                 "marketing_consulting_expense",
                 "marketing_after_sales_expense",
                 "marketing_utility_expense",
@@ -270,9 +283,13 @@ METRIC_DEFS = [
                 "marketing_inventory_capital_cost",
             ],
         },
-        "formula": "SUM(组成指标当期值)：办公费+差旅费+车辆费用+低值耗材+电话费+福利费+国际快递费+国内快递费+平台费+咨询服务费+售后费用+水电费+推广费+维修费+业务招待费+运输费+招聘服务费+网商协会费+信息技术服务费+库存资金占用费",
+        "formula": (
+            "SUM(组成指标当期值)：办公费+差旅费+车辆费用+低值耗材+电话费+福利费+国际快递费+"
+            "国内快递费+平台费+软件费用+咨询服务费+售后费用+水电费+推广费+维修费+业务招待费+"
+            "运输费+招聘服务费+网商协会费+信息技术服务费+库存资金占用费"
+        ),
         "description": (
-            "营销中心费用合计：上列 20 个费用/资金占用指标当期值之和（按组织分别合计，"
+            "营销中心费用合计：上列 21 个费用/资金占用指标当期值之和（按组织分别合计，"
             "库存资金占用费为公司级指标、单列为组织为空的一行）；"
             "月指标每日重算当月值；组成指标口径变化后需重算本指标。"
         ),
@@ -318,8 +335,12 @@ async def main() -> None:
                     measures["account_prefix"] = item["account_prefix"]
                 if keywords:
                     measures["detail_name_contains"] = keywords
+                if item.get("detail_name_contains_by_period"):
+                    measures["detail_name_contains_by_period"] = item["detail_name_contains_by_period"]
                 if item.get("detail_name_exclude"):
                     measures["detail_name_exclude"] = item["detail_name_exclude"]
+                if item.get("detail_name_exclude_by_period"):
+                    measures["detail_name_exclude_by_period"] = item["detail_name_exclude_by_period"]
                 measures.update(item.get("measures_extra") or {})
 
             account = str(measures.get("account_prefix") or "")
@@ -335,6 +356,13 @@ async def main() -> None:
                     formula_condition += f" AND 核算维度名称 NOT LIKE '%{word}%'"
                 formula = f"SUM({measures.get('amount_field', 'FDEBIT')}) WHERE 科目={account} AND {formula_condition}"
                 scope_text = "、".join(keywords)
+            period_overrides = item.get("detail_name_contains_by_period") or {}
+            if period_overrides:
+                # 口径字符串也写清期间性覆盖，避免页面上仍显示「全期间同一关键字」的误导描述
+                override_text = "；".join(
+                    f"{period} 改为 {' OR '.join(words)}" for period, words in period_overrides.items()
+                )
+                formula = f"{formula}；期间覆盖：{override_text}"
             metric = (
                 await db.execute(select(MetricDefModel).where(MetricDefModel.code == item["code"]))
             ).scalars().first()
@@ -356,6 +384,8 @@ async def main() -> None:
                     f"营销中心月度报表使用：所有组织、科目 {account} 下核算维度名称含「{scope_text}」的"
                     "本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
                 )
+            if period_overrides:
+                metric.description = f"{str(metric.description).rstrip('。')}；期间覆盖：{override_text}"
             await db.flush()
             print(f"指标定义已就绪: id={metric.id} code={metric.code} name={metric.name}")
 

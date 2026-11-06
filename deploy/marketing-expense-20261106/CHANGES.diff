@@ -1,0 +1,301 @@
+diff --git a/backend/app/modules/metric/engine.py b/backend/app/modules/metric/engine.py
+index 5b0aa59e..5bde5be7 100644
+--- a/backend/app/modules/metric/engine.py
++++ b/backend/app/modules/metric/engine.py
+@@ -350,15 +350,19 @@ def shift_period(period_type: str, period_value: str, steps: int = -1) -> str:
+ # --------------------------------------------------------------------------- #
+ # 科目余额表取数执行器
+ # --------------------------------------------------------------------------- #
+-def extract_account_balance(rows: list, fields: list[str], config: dict) -> dict:
++def extract_account_balance(rows: list, fields: list[str], config: dict, period: str | None = None) -> dict:
+     """从科目余额表行中按配置过滤并聚合。
+ 
+     配置项（``measures``）:
+     - ``account_field`` / ``account_prefix``：科目编码字段与匹配前缀，如 ``FBALANCEID`` + ``6601``。
+     - ``detail_code_field`` / ``detail_name_field``：核算维度编码与名称字段。
+     - ``detail_name_contains``：核算维度名称需包含的关键字（任一命中即计入）。
++    - ``detail_name_contains_by_period``：按期间覆盖 ``detail_name_contains`` 的字典，
++      如 ``{"2026-10": ["内贸快递"]}``；仅命中指定期间时替换关键字，其余期间沿用默认口径。
++      用于一次性重分类（如某个月份把「售后运输费」从国内快递费调到售后费用）。
+     - ``detail_name_exclude``：核算维度名称命中即**排除**的关键字，用于关键字互为子串的场景
+       （如「维修费」会命中「车辆维修费」，需把车辆维修费排除在维修费指标外）。
++    - ``detail_name_exclude_by_period``：按期间覆盖 ``detail_name_exclude``，规则同上。
+     - ``amount_field``：金额字段，如 ``FDEBIT``（本期借方发生额）。
+     - ``amount_terms``：多字段组合取值，如期末余额 = ``[{"field": "FENDDEBIT", "sign": 1},
+       {"field": "FENDCREDIT", "sign": -1}]``（借方减贷方）；配置后优先于 ``amount_field``。
+@@ -389,14 +393,18 @@ def extract_account_balance(rows: list, fields: list[str], config: dict) -> dict
+     code_exclude = {str(item).strip() for item in code_exclude if str(item).strip()}
+     require_detail = bool(config.get("require_detail"))
+     is_dept_dim = bool(config.get("detail_is_department", True))
+-    keywords = config.get("detail_name_contains") or []
+-    if isinstance(keywords, str):
+-        keywords = [keywords]
+-    keywords = [str(item).strip() for item in keywords if str(item).strip()]
+-    exclude = config.get("detail_name_exclude") or []
+-    if isinstance(exclude, str):
+-        exclude = [exclude]
+-    exclude = [str(item).strip() for item in exclude if str(item).strip()]
++    def _period_list(key: str) -> list[str]:
++        """读取关键字列表；命中期间覆盖时整体替换默认列表（允许显式空列表）。"""
++        scoped = config.get(f"{key}_by_period")
++        values = config.get(key) or []
++        if period and isinstance(scoped, dict) and str(period) in scoped:
++            values = scoped[str(period)] or []
++        if isinstance(values, str):
++            values = [values]
++        return [str(item).strip() for item in values if str(item).strip()]
++
++    keywords = _period_list("detail_name_contains")
++    exclude = _period_list("detail_name_exclude")
+ 
+     total = 0.0
+     matched_rows = 0
+@@ -3180,7 +3188,7 @@ async def _execute_metric_calc_inner(
+                 elif kind == INVENTORY_LEDGER_KIND:
+                     extracted = extract_inventory_ledger(rows, fields, config)
+                 else:
+-                    extracted = extract_account_balance(rows, fields, config)
++                    extracted = extract_account_balance(rows, fields, config, period=period)
+             org_id = org_id_map.get(org_code)
+ 
+             db.add(
+diff --git a/backend/scripts/metric_groups/expense_caliber.txt b/backend/scripts/metric_groups/expense_caliber.txt
+index 327ef9b0..57b98d3e 100644
+--- a/backend/scripts/metric_groups/expense_caliber.txt
++++ b/backend/scripts/metric_groups/expense_caliber.txt
+@@ -1,7 +1,9 @@
+ # 营销中心费用类指标：核算口径变更后需要重算的指标清单
+ # 对应财务「核算对应表」（2026-10-15 对齐）中直接改了核算维度条件的 10 个指标；
++# 2026-11-06 追加：软件费用新增指标、平台费增加平台固定费、2026-10 售后运输费重分类
+ # 用法：python scripts/recalc_metrics_batch.py --code-file scripts/metric_groups/expense_caliber.txt \
+ #         --period-from 2026-01 --period-to 2026-10 [--with-dependents]
++marketing_software_expense
+ marketing_travel_expense
+ marketing_vehicle_expense
+ marketing_welfare_expense
+diff --git a/backend/scripts/seed_marketing_metrics.py b/backend/scripts/seed_marketing_metrics.py
+index 63085911..5e1f7808 100644
+--- a/backend/scripts/seed_marketing_metrics.py
++++ b/backend/scripts/seed_marketing_metrics.py
+@@ -88,7 +88,9 @@ METRIC_DEFS = [
+         "code": "marketing_domestic_express_expense",
+         "name": "营销中心国内快递费",
+         # 核算对应表：内贸快递、售后运输费（快递费归运输费）
++        # 售后运输费只在 2026-10 改归售后费用；其余期间沿用原口径（见 by_period 覆盖）
+         "detail_name_contains": ["内贸快递", "售后运输费"],
++        "detail_name_contains_by_period": {"2026-10": ["内贸快递"]},
+     },
+     {
+         "code": "marketing_welfare_expense",
+@@ -106,25 +108,35 @@ METRIC_DEFS = [
+     {
+         "code": "marketing_platform_expense",
+         "name": "营销中心平台费",
+-        # 核算对应表：平台交易服务费、平台费（非运营平台-公众号）、平台延迟发货赔付费
+-        # （平台固定费（年费/月租）对应表归「人员费用」，已移出本指标）
++        # 核算对应表：平台交易服务费、平台费（非运营平台-公众号）、平台延迟发货赔付费、
++        # 平台固定费（年费/月租）
+         "detail_name_contains": [
+             "专用平台费用",
+             "平台交易服务费",
+             "平台费（非运营平台-公众号）",
+             "平台延迟发货赔付费",
++            "平台固定费",
+         ],
+     },
++    {
++        "code": "marketing_software_expense",
++        "name": "营销中心软件费用",
++        # 核算对应表：软件费用
++        "detail_name_contains": ["软件费用"],
++    },
+     {
+         "code": "marketing_after_sales_expense",
+         "name": "营销中心售后费用",
+-        # 核算对应表：售后返工费（售后运输费归国内快递费）
++        # 核算对应表：售后返工费（售后运输费平时归国内快递费，仅 2026-10 归本指标）
+         # 注意「售后组/电话费」这类"部门名含售后"的行不会被计入
+         "detail_name_contains": [
+             "售后其它费用",
+             "售后赔偿费",
+             "售后返工费",
+         ],
++        "detail_name_contains_by_period": {
++            "2026-10": ["售后其它费用", "售后赔偿费", "售后返工费", "售后运输费"],
++        },
+     },
+     {
+         "code": "marketing_entertainment_expense",
+@@ -257,6 +269,7 @@ METRIC_DEFS = [
+                 "marketing_intl_express_expense",
+                 "marketing_domestic_express_expense",
+                 "marketing_platform_expense",
++                "marketing_software_expense",
+                 "marketing_consulting_expense",
+                 "marketing_after_sales_expense",
+                 "marketing_utility_expense",
+@@ -270,9 +283,13 @@ METRIC_DEFS = [
+                 "marketing_inventory_capital_cost",
+             ],
+         },
+-        "formula": "SUM(组成指标当期值)：办公费+差旅费+车辆费用+低值耗材+电话费+福利费+国际快递费+国内快递费+平台费+咨询服务费+售后费用+水电费+推广费+维修费+业务招待费+运输费+招聘服务费+网商协会费+信息技术服务费+库存资金占用费",
++        "formula": (
++            "SUM(组成指标当期值)：办公费+差旅费+车辆费用+低值耗材+电话费+福利费+国际快递费+"
++            "国内快递费+平台费+软件费用+咨询服务费+售后费用+水电费+推广费+维修费+业务招待费+"
++            "运输费+招聘服务费+网商协会费+信息技术服务费+库存资金占用费"
++        ),
+         "description": (
+-            "营销中心费用合计：上列 20 个费用/资金占用指标当期值之和（按组织分别合计，"
++            "营销中心费用合计：上列 21 个费用/资金占用指标当期值之和（按组织分别合计，"
+             "库存资金占用费为公司级指标、单列为组织为空的一行）；"
+             "月指标每日重算当月值；组成指标口径变化后需重算本指标。"
+         ),
+@@ -318,8 +335,12 @@ async def main() -> None:
+                     measures["account_prefix"] = item["account_prefix"]
+                 if keywords:
+                     measures["detail_name_contains"] = keywords
++                if item.get("detail_name_contains_by_period"):
++                    measures["detail_name_contains_by_period"] = item["detail_name_contains_by_period"]
+                 if item.get("detail_name_exclude"):
+                     measures["detail_name_exclude"] = item["detail_name_exclude"]
++                if item.get("detail_name_exclude_by_period"):
++                    measures["detail_name_exclude_by_period"] = item["detail_name_exclude_by_period"]
+                 measures.update(item.get("measures_extra") or {})
+ 
+             account = str(measures.get("account_prefix") or "")
+@@ -335,6 +356,13 @@ async def main() -> None:
+                     formula_condition += f" AND 核算维度名称 NOT LIKE '%{word}%'"
+                 formula = f"SUM({measures.get('amount_field', 'FDEBIT')}) WHERE 科目={account} AND {formula_condition}"
+                 scope_text = "、".join(keywords)
++            period_overrides = item.get("detail_name_contains_by_period") or {}
++            if period_overrides:
++                # 口径字符串也写清期间性覆盖，避免页面上仍显示「全期间同一关键字」的误导描述
++                override_text = "；".join(
++                    f"{period} 改为 {' OR '.join(words)}" for period, words in period_overrides.items()
++                )
++                formula = f"{formula}；期间覆盖：{override_text}"
+             metric = (
+                 await db.execute(select(MetricDefModel).where(MetricDefModel.code == item["code"]))
+             ).scalars().first()
+@@ -356,6 +384,8 @@ async def main() -> None:
+                     f"营销中心月度报表使用：所有组织、科目 {account} 下核算维度名称含「{scope_text}」的"
+                     "本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+                 )
++            if period_overrides:
++                metric.description = f"{str(metric.description).rstrip('。')}；期间覆盖：{override_text}"
+             await db.flush()
+             print(f"指标定义已就绪: id={metric.id} code={metric.code} name={metric.name}")
+ 
+diff --git "a/docs/\346\240\270\347\256\227\346\214\207\346\240\207\347\263\273\347\273\237\350\256\276\350\256\241.md" "b/docs/\346\240\270\347\256\227\346\214\207\346\240\207\347\263\273\347\273\237\350\256\276\350\256\241.md"
+index ac6ce9df..682bb036 100644
+--- "a/docs/\346\240\270\347\256\227\346\214\207\346\240\207\347\263\273\347\273\237\350\256\276\350\256\241.md"
++++ "b/docs/\346\240\270\347\256\227\346\214\207\346\240\207\347\263\273\347\273\237\350\256\276\350\256\241.md"
+@@ -65,24 +65,26 @@
+     导致科目余额表 5xxx/6xxx 科目整段丢失；现按 `StartRow` 翻页取全量
+   - 已新增指标计算引擎 `backend/app/modules/metric/engine.py`（配置化取数，v1 支持科目余额表过滤聚合）
+     与日调度 `backend/app/modules/metric/schedule.py`（每天 02:30 重算）
+-  - 已落地营销中心系列 20 个月指标（口径在 `backend/scripts/seed_marketing_metrics.py` 声明式维护，
++  - 已落地营销中心系列 21 个月指标（口径在 `backend/scripts/seed_marketing_metrics.py` 声明式维护，
+     加指标只需在列表里加一条）。**费用类口径以财务提供的「核算对应表」为准**
+     （费用项目 → 项目类别，2026-10-15 对齐）：车油卡充值 / 过路费 / 停车费 / 车辆年审保养保险 /
+     车辆维修费 / 交通费 → 车辆费用；差旅费 / 交通差旅 → 差旅费；电话费 → 电话费；
+     办公费 → 办公费；低值耗材 / FDH辅/低值耗材 → 低值耗材；其他福利 / 直接人工-其他福利 → 福利费；
+-    外贸快递 / 报关费 → 国际快递费；内贸快递 / 售后运输费 → 国内快递费；平台交易服务费 /
+-    平台费（非运营平台-公众号）/ 平台延迟发货赔付费 → 平台费；咨询服务费 → 咨询服务费；
+-    售后返工费 / 售后其它费用 / 售后赔偿费 → 售后费用；水费 / 电费 → 水电费；推广补单服务费 /
++    外贸快递 / 报关费 → 国际快递费；内贸快递 → 国内快递费（售后运输费仅 2026-10 调整到售后费用，
++    其余期间仍归国内快递费）；平台交易服务费 / 平台费（非运营平台-公众号）/ 平台延迟发货赔付费 /
++    平台固定费（年费/月租）→ 平台费；软件费用 → 软件费用；咨询服务费 → 咨询服务费；
++    售后返工费 / 售后其它费用 / 售后赔偿费 → 售后费用（2026-10 另加售后运输费）；水费 / 电费 → 水电费；推广补单服务费 /
+     推广店铺直通车 / 推广运营费 / 推广SEO工具费用 / 推广外链充值 / 推广物流单号费 / 推广展会费用 /
+     商务费用 → 推广费；参赛活动费 / 网商协会费 → 网商协会费；维修费 / FWX辅/维修（排除车辆维修费）
+     → 维修费；网络服务费 → 信息技术服务费；业务招待费 → 业务招待费；运输费用 / 快递费 → 运输费；
+     招聘费 → 招聘服务费；折旧费用 → 折旧费用；场地租金 / 物业管理费 / 宿舍租金 → 租金及物业管理费
+     ——所有组织、科目 `6601` 销售费用、当期借方发生额（`FDEBIT`）汇总；
+-    对应表中「人员费用」类费用项目（工资 / 社保 / 公积金 / 各类奖金补贴 / 加班费 / 伙食燃气 /
+-    平台固定费（年费/月租）等）暂无独立指标承载，本系列不计入，由 PER-02 系列人员指标另行统计；
++    对应表中「人员费用」类费用项目（工资 / 社保 / 公积金 / 各类奖金补贴 / 加班费 / 伙食燃气等）
++    暂无独立指标承载，本系列不计入，由 PER-02 系列人员指标另行统计；
+     对应表内重复项的最终归属已确认（2026-10-15）：电话费→电话费、平台交易服务费→平台费、
+     推广补单服务费→推广费、维修费→维修费、运输费用→运输费、参赛活动费→网商协会费；
+-    人员费用类确认不纳入费用类指标；
++    人员费用类确认不纳入费用类指标；期间性重分类由指标 `measures.detail_name_contains_by_period`
++    声明（当前仅 `2026-10`：国内快递费剔除售后运输费、售后费用纳入售后运输费）；
+     另有余额类指标「营销中心应收余额」：
+     科目 `1122` 应收账款、剔除编码 100-113 的内部客户，取期末余额（`FENDDEBIT` - `FENDCREDIT`），
+     明细维度为客户；月指标每日重算当月数值，每次计算保留一个 `calc_version`
+diff --git a/backend/tests/test_marketing_expense_rules.py b/backend/tests/test_marketing_expense_rules.py
+new file mode 100644
+index 00000000..9d27dbd0
+--- /dev/null
++++ b/backend/tests/test_marketing_expense_rules.py
+@@ -0,0 +1,69 @@
++"""营销中心费用口径：软件费用、平台固定费、2026-10 售后运输费重分类。"""
++
++from app.modules.metric.engine import extract_account_balance
++from scripts.seed_marketing_metrics import METRIC_DEFS
++
++FIELDS = ["FBALANCEID", "FDETAILNUMBER", "FDETAILNAME", "FDEBIT"]
++BASE_CONFIG = {
++    "account_field": "FBALANCEID",
++    "account_prefix": "6601",
++    "detail_code_field": "FDETAILNUMBER",
++    "detail_name_field": "FDETAILNAME",
++    "amount_field": "FDEBIT",
++}
++
++
++def _rows() -> list[list[str]]:
++    """科目行 + 三条核算维度行：内贸快递 100、售后运输费 200、售后其它费用 50。"""
++    return [
++        ["6601", "", "", ""],
++        ["", "BM000001/CI011", "营销部/内贸快递", "100"],
++        ["", "BM000001/CI012", "营销部/售后运输费", "200"],
++        ["", "BM000001/CI013", "营销部/售后其它费用", "50"],
++    ]
++
++
++DOMESTIC_CONFIG = {
++    **BASE_CONFIG,
++    "detail_name_contains": ["内贸快递", "售后运输费"],
++    "detail_name_contains_by_period": {"2026-10": ["内贸快递"]},
++}
++
++AFTER_SALES_CONFIG = {
++    **BASE_CONFIG,
++    "detail_name_contains": ["售后其它费用", "售后赔偿费", "售后返工费"],
++    "detail_name_contains_by_period": {
++        "2026-10": ["售后其它费用", "售后赔偿费", "售后返工费", "售后运输费"],
++    },
++}
++
++
++def test_domestic_express_excludes_after_sales_transport_only_in_2026_10() -> None:
++    assert extract_account_balance(_rows(), FIELDS, DOMESTIC_CONFIG)["total"] == 300.0
++    assert extract_account_balance(_rows(), FIELDS, DOMESTIC_CONFIG, period="2026-09")["total"] == 300.0
++    assert extract_account_balance(_rows(), FIELDS, DOMESTIC_CONFIG, period="2026-10")["total"] == 100.0
++    assert extract_account_balance(_rows(), FIELDS, DOMESTIC_CONFIG, period="2026-11")["total"] == 300.0
++
++
++def test_after_sales_expense_includes_after_sales_transport_only_in_2026_10() -> None:
++    assert extract_account_balance(_rows(), FIELDS, AFTER_SALES_CONFIG)["total"] == 50.0
++    assert extract_account_balance(_rows(), FIELDS, AFTER_SALES_CONFIG, period="2026-09")["total"] == 50.0
++    assert extract_account_balance(_rows(), FIELDS, AFTER_SALES_CONFIG, period="2026-10")["total"] == 250.0
++    assert extract_account_balance(_rows(), FIELDS, AFTER_SALES_CONFIG, period="2026-11")["total"] == 50.0
++
++
++def test_metric_definitions_cover_new_and_changed_calibers() -> None:
++    by_code = {item["code"]: item for item in METRIC_DEFS}
++
++    assert by_code["marketing_software_expense"]["name"] == "营销中心软件费用"
++    assert by_code["marketing_software_expense"]["detail_name_contains"] == ["软件费用"]
++    assert "平台固定费" in by_code["marketing_platform_expense"]["detail_name_contains"]
++    assert by_code["marketing_domestic_express_expense"]["detail_name_contains_by_period"] == {
++        "2026-10": ["内贸快递"]
++    }
++    assert by_code["marketing_after_sales_expense"]["detail_name_contains_by_period"] == {
++        "2026-10": ["售后其它费用", "售后赔偿费", "售后返工费", "售后运输费"]
++    }
++    components = by_code["marketing_total_expense"]["measures"]["component_metric_codes"]
++    assert "marketing_software_expense" in components
++    assert len(components) == len(set(components))
