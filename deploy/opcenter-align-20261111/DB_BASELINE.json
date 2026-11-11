@@ -1,0 +1,468 @@
+[
+ {
+  "code": "OPC-COST-01",
+  "name": "运营中心办公费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "办公费"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND 核算维度名称 LIKE '%办公费%'",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「办公费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-02",
+  "name": "运营中心差旅费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "差旅费",
+    "交通差旅"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%差旅费%' OR 核算维度名称 LIKE '%交通差旅%')",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「差旅费、交通差旅」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-03",
+  "name": "运营中心车辆费用",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "过路费",
+    "车辆维修费",
+    "车辆年审保养保险",
+    "车油卡充值",
+    "停车费",
+    "交通费"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%过路费%' OR 核算维度名称 LIKE '%车辆维修费%' OR 核算维度名称 LIKE '%车辆年审保养保险%' OR 核算维度名称 LIKE '%车油卡充值%' OR 核算维度名称 LIKE '%停车费%' OR 核算维度名称 LIKE '%交通费%')",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「过路费、车辆维修费、车辆年审保养保险、车油卡充值、停车费、交通费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-04",
+  "name": "运营中心低值耗材",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "低值耗材"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND 核算维度名称 LIKE '%低值耗材%'",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「低值耗材」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-05",
+  "name": "运营中心电话费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "电话费"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND 核算维度名称 LIKE '%电话费%'",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「电话费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-06",
+  "name": "运营中心福利费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "其他福利",
+    "直接人工-其他福利"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%其他福利%' OR 核算维度名称 LIKE '%直接人工-其他福利%')",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「其他福利、直接人工-其他福利」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-07",
+  "name": "运营中心国际快递费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "外贸快递",
+    "报关费"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%外贸快递%' OR 核算维度名称 LIKE '%报关费%')",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「外贸快递、报关费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-08",
+  "name": "运营中心国内快递费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "内贸快递",
+    "售后运输费"
+   ],
+   "detail_name_contains_by_period": {
+    "2026-10": [
+     "内贸快递"
+    ]
+   }
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%内贸快递%' OR 核算维度名称 LIKE '%售后运输费%')；期间覆盖：2026-10 改为 内贸快递",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「内贸快递、售后运输费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本；期间覆盖：2026-10 改为 内贸快递。"
+ },
+ {
+  "code": "OPC-COST-09",
+  "name": "运营中心平台费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "专用平台费用",
+    "平台交易服务费",
+    "平台费（非运营平台-公众号）",
+    "平台延迟发货赔付费",
+    "平台固定费"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%专用平台费用%' OR 核算维度名称 LIKE '%平台交易服务费%' OR 核算维度名称 LIKE '%平台费（非运营平台-公众号）%' OR 核算维度名称 LIKE '%平台延迟发货赔付费%' OR 核算维度名称 LIKE '%平台固定费%')",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「专用平台费用、平台交易服务费、平台费（非运营平台-公众号）、平台延迟发货赔付费、平台固定费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-10",
+  "name": "运营中心售后费用",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "售后其它费用",
+    "售后赔偿费",
+    "售后返工费"
+   ],
+   "detail_name_contains_by_period": {
+    "2026-10": [
+     "售后其它费用",
+     "售后赔偿费",
+     "售后返工费",
+     "售后运输费"
+    ]
+   }
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%售后其它费用%' OR 核算维度名称 LIKE '%售后赔偿费%' OR 核算维度名称 LIKE '%售后返工费%')；期间覆盖：2026-10 改为 售后其它费用 OR 售后赔偿费 OR 售后返工费 OR 售后运输费",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「售后其它费用、售后赔偿费、售后返工费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本；期间覆盖：2026-10 改为 售后其它费用 OR 售后赔偿费 OR 售后返工费 OR 售后运输费。"
+ },
+ {
+  "code": "OPC-COST-11",
+  "name": "运营中心水电费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "水费",
+    "电费"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%水费%' OR 核算维度名称 LIKE '%电费%')",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「水费、电费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-12",
+  "name": "运营中心推广费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "推广补单服务费",
+    "推广外链充值",
+    "推广展会费用",
+    "推广运营费",
+    "推广店铺直通车",
+    "推广SEO工具费用",
+    "推广物流单号费",
+    "商务费用"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%推广补单服务费%' OR 核算维度名称 LIKE '%推广外链充值%' OR 核算维度名称 LIKE '%推广展会费用%' OR 核算维度名称 LIKE '%推广运营费%' OR 核算维度名称 LIKE '%推广店铺直通车%' OR 核算维度名称 LIKE '%推广SEO工具费用%' OR 核算维度名称 LIKE '%推广物流单号费%' OR 核算维度名称 LIKE '%商务费用%')",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「推广补单服务费、推广外链充值、推广展会费用、推广运营费、推广店铺直通车、推广SEO工具费用、推广物流单号费、商务费用」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-13",
+  "name": "运营中心维修费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_exclude": [
+    "车辆维修费"
+   ],
+   "detail_name_contains": [
+    "维修费",
+    "FWX辅/维修"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%维修费%' OR 核算维度名称 LIKE '%FWX辅/维修%') AND 核算维度名称 NOT LIKE '%车辆维修费%'",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「维修费、FWX辅/维修」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-14",
+  "name": "运营中心业务招待费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "业务招待费"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND 核算维度名称 LIKE '%业务招待费%'",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「业务招待费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-15",
+  "name": "运营中心运输费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "运输费用",
+    "快递费"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND (核算维度名称 LIKE '%运输费用%' OR 核算维度名称 LIKE '%快递费%')",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「运输费用、快递费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-16",
+  "name": "运营中心招聘服务费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "招聘费"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND 核算维度名称 LIKE '%招聘费%'",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「招聘费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ },
+ {
+  "code": "OPC-COST-17",
+  "name": "运营中心咨询服务费",
+  "category": "运营中心-主表指标",
+  "measures": {
+   "kind": "account_balance_filter",
+   "amount_field": "FDEBITLOCAL",
+   "account_field": "FBALANCEID",
+   "account_prefix": "6601",
+   "department_names": [
+    "在线营销部",
+    "社媒组",
+    "电商组",
+    "官网"
+   ],
+   "detail_code_field": "FDETAILNUMBER",
+   "detail_name_field": "FDETAILNAME",
+   "source_object_code": "GL_RPT_AccountBalance",
+   "detail_name_contains": [
+    "咨询服务费"
+   ]
+  },
+  "formula": "SUM(FDEBITLOCAL) WHERE 科目=6601 AND 部门 IN ('在线营销部'、'社媒组'、'电商组'、'官网') AND 核算维度名称 LIKE '%咨询服务费%'",
+  "description": "运营中心月度报表使用：所有组织、科目 6601 下核算维度部门属于「在线营销部、社媒组、电商组、官网」且名称含「咨询服务费」的本期借方发生额汇总；月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
+ }
+]

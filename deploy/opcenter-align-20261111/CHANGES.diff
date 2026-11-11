@@ -1,0 +1,721 @@
+diff --git a/backend/app/modules/metric/engine.py b/backend/app/modules/metric/engine.py
+index 5bde5be7..b68256fb 100644
+--- a/backend/app/modules/metric/engine.py
++++ b/backend/app/modules/metric/engine.py
+@@ -363,6 +363,12 @@ def extract_account_balance(rows: list, fields: list[str], config: dict, period:
+     - ``detail_name_exclude``：核算维度名称命中即**排除**的关键字，用于关键字互为子串的场景
+       （如「维修费」会命中「车辆维修费」，需把车辆维修费排除在维修费指标外）。
+     - ``detail_name_exclude_by_period``：按期间覆盖 ``detail_name_exclude``，规则同上。
++    - ``department_names``：核算维度名称首段（部门名）需精确命中的部门列表，
++      如 ``["在线营销部", "社媒组", "电商组", "官网"]``；未配置时不做部门过滤。
++      仅对 ``detail_is_department=True`` 的指标生效，无部门前缀的汇总行会被排除。
++    - ``department_codes``：核算维度编码首段（部门编码）需精确命中的列表，
++      如 ``["BM000008", "BM000021", "BM000023"]``；与 ``department_names`` 同时配置时
++      两个条件都要满足。部门名称会调整，长期口径优先用编码。
+     - ``amount_field``：金额字段，如 ``FDEBIT``（本期借方发生额）。
+     - ``amount_terms``：多字段组合取值，如期末余额 = ``[{"field": "FENDDEBIT", "sign": 1},
+       {"field": "FENDCREDIT", "sign": -1}]``（借方减贷方）；配置后优先于 ``amount_field``。
+@@ -393,6 +399,14 @@ def extract_account_balance(rows: list, fields: list[str], config: dict, period:
+     code_exclude = {str(item).strip() for item in code_exclude if str(item).strip()}
+     require_detail = bool(config.get("require_detail"))
+     is_dept_dim = bool(config.get("detail_is_department", True))
++    dept_names = config.get("department_names") or []
++    if isinstance(dept_names, str):
++        dept_names = [dept_names]
++    dept_names = {str(item).strip() for item in dept_names if str(item).strip()}
++    dept_codes = config.get("department_codes") or []
++    if isinstance(dept_codes, str):
++        dept_codes = [dept_codes]
++    dept_codes = {str(item).strip() for item in dept_codes if str(item).strip()}
+     def _period_list(key: str) -> list[str]:
+         """读取关键字列表；命中期间覆盖时整体替换默认列表（允许显式空列表）。"""
+         scoped = config.get(f"{key}_by_period")
+@@ -422,6 +436,13 @@ def extract_account_balance(rows: list, fields: list[str], config: dict, period:
+         if require_detail and not detail_code_raw and not detail_name:
+             continue
+         parts = [part.strip() for part in detail_code_raw.split("/") if part.strip()]
++        dept_name = detail_name.split("/")[0].strip() if "/" in detail_name else ""
++        if is_dept_dim and dept_codes and (not parts or parts[0] not in dept_codes):
++            # 部门口径按编码：部门改名不影响取数
++            continue
++        if is_dept_dim and dept_names and dept_name not in dept_names:
++            # 部门口径：核算维度名称形如「部门/费用项目」，首段必须精确命中
++            continue
+         if code_exclude and parts and parts[0] in code_exclude:
+             continue
+         if keywords and not any(keyword in detail_name for keyword in keywords):
+@@ -435,11 +456,11 @@ def extract_account_balance(rows: list, fields: list[str], config: dict, period:
+             # 核算维度可能是「部门/费用项目」或只有「费用项目」（如 GY.88 快递费）：
+             # 后者没有部门归属，单独归到「未指定部门」，不要把费用项目名当部门名。
+             dept_code = parts[0] if parts else detail_name
+-            dept_name = detail_name.split("/")[0].strip() if "/" in detail_name else "未指定部门"
++            bucket_name = dept_name or "未指定部门"
+         else:
+             dept_code = detail_code_raw or detail_name
+-            dept_name = detail_name or detail_code_raw
+-        bucket = departments.setdefault(dept_code, {"name": dept_name, "value": 0.0, "rows": 0})
++            bucket_name = detail_name or detail_code_raw
++        bucket = departments.setdefault(dept_code, {"name": bucket_name, "value": 0.0, "rows": 0})
+         bucket["value"] = round(float(bucket["value"]) + amount, 4)
+         bucket["rows"] = int(bucket["rows"]) + 1
+     return {"total": round(total, 4), "departments": departments, "matched_rows": matched_rows}
+diff --git a/backend/scripts/metric_groups/opcenter_cost.txt b/backend/scripts/metric_groups/opcenter_cost.txt
+new file mode 100644
+index 00000000..58f2f894
+--- /dev/null
++++ b/backend/scripts/metric_groups/opcenter_cost.txt
+@@ -0,0 +1,18 @@
++# 运营中心主表指标 OPC-COST-01 ~ 17（部门按编码 BM000008/BM000021/BM000023）
++OPC-COST-01
++OPC-COST-02
++OPC-COST-03
++OPC-COST-04
++OPC-COST-05
++OPC-COST-06
++OPC-COST-07
++OPC-COST-08
++OPC-COST-09
++OPC-COST-10
++OPC-COST-11
++OPC-COST-12
++OPC-COST-13
++OPC-COST-14
++OPC-COST-15
++OPC-COST-16
++OPC-COST-17
+diff --git a/backend/scripts/seed_opcenter_menu.py b/backend/scripts/seed_opcenter_menu.py
+new file mode 100644
+index 00000000..e69f7010
+--- /dev/null
++++ b/backend/scripts/seed_opcenter_menu.py
+@@ -0,0 +1,94 @@
++"""初始化「指标中心 → 运营中心指标 → 运营中心主表指标」菜单与权限。
++
++菜单层级：
++
++    指标中心
++      ├─ 营销业务指标
++      │    └─ 指标结果
++      └─ 运营中心指标
++           └─ 运营中心主表指标
++
++「运营中心主表指标」复用指标结果页组件，通过 category 只显示运营中心口径的指标。
++
++用法：
++    python scripts/seed_opcenter_menu.py
++"""
++
++import asyncio
++import sys
++from pathlib import Path
++
++PROJECT_ROOT = Path(__file__).resolve().parents[1]
++if str(PROJECT_ROOT) not in sys.path:
++    sys.path.insert(0, str(PROJECT_ROOT))
++
++from _metric_menu_utils import bind_roles, ensure_metric_root, get_or_create  # noqa: E402
++
++from app.core.base_model import MappedBase  # noqa: E402
++from app.core.database import async_db_session, async_engine  # noqa: E402
++from app.utils.import_util import ImportUtil  # noqa: E402
++
++ImportUtil.find_models(MappedBase)
++
++GROUP_NAME = "运营中心指标"
++PAGE_NAME = "运营中心主表指标"
++PAGE_PATH = "/metric/opcenter/value"
++
++
++async def main() -> None:
++    async with async_db_session() as db, db.begin():
++        root = await ensure_metric_root(db)
++        group = await get_or_create(
++            db,
++            GROUP_NAME,
++            root.id,
++            type=1,
++            order=2,
++            icon="ri:pie-chart-line",
++            route_name="MetricOpCenter",
++            route_path="opcenter",
++            redirect=PAGE_PATH,
++            status=0,
++            title=GROUP_NAME,
++            scope="web",
++        )
++        page = await get_or_create(
++            db,
++            PAGE_NAME,
++            group.id,
++            type=2,
++            order=1,
++            permission="module_metric:value:query",
++            route_name="MetricOpCenterValue",
++            route_path="value",
++            component_path="module_metric/opcenter/index",
++            status=0,
++            title=PAGE_NAME,
++            scope="web",
++        )
++
++        menu_ids = [root.id, group.id, page.id]
++        for name, permission, order in [
++            ("运营中心指标查询", "module_metric:value:query", 1),
++            ("运营中心指标重算", "module_metric:def:run", 2),
++            ("运营中心指标定义查询", "module_metric:def:query", 3),
++        ]:
++            button = await get_or_create(
++                db,
++                name,
++                page.id,
++                type=3,
++                order=order,
++                permission=permission,
++                status=0,
++                scope="web",
++            )
++            menu_ids.append(button.id)
++
++        await bind_roles(db, menu_ids)
++    await async_engine.dispose()
++    print("运营中心菜单初始化完成：指标中心 → 运营中心指标 → 运营中心主表指标")
++
++
++if __name__ == "__main__":
++    asyncio.run(main())
+diff --git a/backend/scripts/seed_opcenter_metrics.py b/backend/scripts/seed_opcenter_metrics.py
+new file mode 100644
+index 00000000..ffc2c74c
+--- /dev/null
++++ b/backend/scripts/seed_opcenter_metrics.py
+@@ -0,0 +1,213 @@
++"""初始化运营中心主表指标（科目 6601 销售费用 + 部门过滤）。
++
++口径：所有组织、科目 6601（销售费用）、核算维度「部门/费用项目」中
++部门编码属于 ``BM000008 / BM000021 / BM000023``、且费用项目名称含指定关键字的
++本期借方发生额（FDEBITLOCAL）汇总。月指标，每日重算当月累计值。
++
++部门按**编码**过滤而不是名称：ERP 里部门可能改名，编码不变。
++费用项目分类按运营中心最新口径表（2026-11-11）维护。
++
++与营销中心主表指标同源同关键字，仅多一层部门过滤；营销中心不限制部门，
++因此同一费用项目在两套指标下会得到不同小计，属预期差异。
++
++用法：
++    python scripts/seed_opcenter_metrics.py
++"""
++
++import asyncio
++import sys
++from pathlib import Path
++
++from sqlalchemy import select
++
++PROJECT_ROOT = Path(__file__).resolve().parents[1]
++if str(PROJECT_ROOT) not in sys.path:
++    sys.path.insert(0, str(PROJECT_ROOT))
++
++from app.core.base_model import MappedBase  # noqa: E402
++from app.core.database import async_db_session, async_engine  # noqa: E402
++from app.modules.metadata.model import StandardEntityModel  # noqa: E402
++from app.modules.metric.model import MetricDefModel  # noqa: E402
++from app.utils.import_util import ImportUtil  # noqa: E402
++
++ImportUtil.find_models(MappedBase)
++
++CATEGORY = "运营中心-主表指标"
++DEPARTMENT_CODES = ["BM000008", "BM000021", "BM000023"]
++
++# 取数规则：由指标计算引擎解释，改口径只改这里。
++BASE_MEASURES = {
++    "kind": "account_balance_filter",
++    "source_object_code": "GL_RPT_AccountBalance",
++    "account_field": "FBALANCEID",
++    "account_prefix": "6601",
++    "detail_code_field": "FDETAILNUMBER",
++    "detail_name_field": "FDETAILNAME",
++    # 科目余额表按「综合本位币」(FCURRENCY=0) 取数：原币列为空，金额取本位币列
++    "amount_field": "FDEBITLOCAL",
++    # 核算维度为「部门/费用项目」，只保留指定部门（按编码，名称变更不影响）
++    "department_codes": DEPARTMENT_CODES,
++}
++DIMENSIONS = {"org": True, "dept": True}
++
++METRIC_DEFS = [
++    {
++        "code": "OPC-COST-01",
++        "name": "运营中心办公费",
++        "detail_name_contains": ["办公费", "FLB辅/劳保"],
++    },
++    {
++        "code": "OPC-COST-02",
++        "name": "运营中心差旅费",
++        "detail_name_contains": ["差旅费", "交通差旅"],
++    },
++    {
++        "code": "OPC-COST-03",
++        "name": "运营中心车辆费用",
++        "detail_name_contains": [
++            "过路费",
++            "车辆维修费",
++            "车辆年审保养保险",
++            "车油卡充值",
++            "停车费",
++            "交通费",
++        ],
++    },
++    {"code": "OPC-COST-04", "name": "运营中心低值耗材", "detail_name_contains": ["低值耗材"]},
++    {"code": "OPC-COST-05", "name": "运营中心电话费", "detail_name_contains": ["电话费"]},
++    {
++        "code": "OPC-COST-06",
++        "name": "运营中心福利费",
++        "detail_name_contains": ["其他福利", "直接人工-其他福利"],
++    },
++    {
++        "code": "OPC-COST-07",
++        "name": "运营中心国际快递费",
++        "detail_name_contains": ["外贸快递", "报关费"],
++    },
++    {
++        "code": "OPC-COST-08",
++        "name": "运营中心国内快递费",
++        "detail_name_contains": ["内贸快递"],
++    },
++    {
++        "code": "OPC-COST-09",
++        "name": "运营中心平台费",
++        "detail_name_contains": [
++            "平台交易服务费",
++            "平台费（非运营平台-公众号）",
++            "平台延迟发货赔付费",
++            "平台固定费",
++        ],
++    },
++    {
++        "code": "OPC-COST-10",
++        "name": "运营中心售后费用",
++        # 新口径：售后运输费固定归售后费用，不再随期间切到国内快递费
++        "detail_name_contains": ["售后返工费", "售后运输费"],
++    },
++    {"code": "OPC-COST-11", "name": "运营中心水电费", "detail_name_contains": ["电费"]},
++    {
++        "code": "OPC-COST-12",
++        "name": "运营中心推广费",
++        "detail_name_contains": [
++            "推广补单服务费",
++            "推广外链充值",
++            "推广展会费用",
++            "推广运营费",
++            "推广店铺直通车",
++            "推广SEO工具费用",
++            "推广物流单号费",
++            "商务费用",
++        ],
++    },
++    {
++        "code": "OPC-COST-13",
++        "name": "运营中心维修费",
++        "detail_name_contains": ["维修费"],
++        # 「维修费」是「车辆维修费」的子串，车辆维修费只算车辆费用
++        "detail_name_exclude": ["车辆维修费"],
++    },
++    {
++        "code": "OPC-COST-14",
++        "name": "运营中心业务招待费",
++        "detail_name_contains": ["业务招待费"],
++    },
++    {
++        "code": "OPC-COST-15",
++        "name": "运营中心运输费",
++        "detail_name_contains": ["运输费用", "快递费"],
++    },
++    {"code": "OPC-COST-16", "name": "运营中心招聘服务费", "detail_name_contains": ["招聘费"]},
++    {
++        "code": "OPC-COST-17",
++        "name": "运营中心咨询服务费",
++        "detail_name_contains": ["咨询服务费"],
++    },
++]
++
++
++async def main() -> None:
++    async with async_db_session() as db, db.begin():
++        entity = (
++            await db.execute(select(StandardEntityModel).where(StandardEntityModel.code == "account_balance"))
++        ).scalars().first()
++        if entity is None:
++            raise SystemExit("未找到标准实体 account_balance，请先执行 scripts/seed_account_balance_metadata.py")
++
++        for item in METRIC_DEFS:
++            keywords = item["detail_name_contains"]
++            measures = {**BASE_MEASURES}
++            measures["detail_name_contains"] = keywords
++            if item.get("detail_name_contains_by_period"):
++                measures["detail_name_contains_by_period"] = item["detail_name_contains_by_period"]
++            if item.get("detail_name_exclude"):
++                measures["detail_name_exclude"] = item["detail_name_exclude"]
++
++            formula_condition = " OR ".join(f"核算维度名称 LIKE '%{word}%'" for word in keywords)
++            if len(keywords) > 1:
++                formula_condition = f"({formula_condition})"
++            for word in item.get("detail_name_exclude") or []:
++                formula_condition += f" AND 核算维度名称 NOT LIKE '%{word}%'"
++            dept_condition = "、".join(f"'{code}'" for code in DEPARTMENT_CODES)
++            formula = (
++                f"SUM({measures['amount_field']}) WHERE 科目=6601 "
++                f"AND 部门编码 IN ({dept_condition}) AND {formula_condition}"
++            )
++            period_overrides = item.get("detail_name_contains_by_period") or {}
++            if period_overrides:
++                override_text = "；".join(
++                    f"{period} 改为 {' OR '.join(words)}" for period, words in period_overrides.items()
++                )
++                formula = f"{formula}；期间覆盖：{override_text}"
++
++            metric = (
++                await db.execute(select(MetricDefModel).where(MetricDefModel.code == item["code"]))
++            ).scalars().first()
++            if metric is None:
++                metric = MetricDefModel(code=item["code"])
++                db.add(metric)
++            metric.name = item["name"]
++            metric.category = CATEGORY
++            metric.period_type = "month"
++            metric.sensitivity = 0
++            metric.formula = formula
++            metric.dimensions = DIMENSIONS
++            metric.measures = measures
++            metric.source_entity_id = entity.id
++            metric.status = 0
++            metric.description = (
++                f"运营中心月度报表使用：所有组织、科目 6601 下核算维度部门编码属于"
++                f"「{'、'.join(DEPARTMENT_CODES)}」且名称含「{'、'.join(keywords)}」的本期借方发生额汇总；"
++                "月指标，每日重算当月累计值，每次计算保留 calc_version 版本。"
++            )
++            if period_overrides:
++                metric.description = f"{metric.description.rstrip('。')}；期间覆盖：{override_text}。"
++            await db.flush()
++            print(f"指标定义已就绪: id={metric.id} code={metric.code} name={metric.name}")
++
++    await async_engine.dispose()
++
++
++if __name__ == "__main__":
++    asyncio.run(main())
+diff --git a/backend/tests/test_opcenter_dept_filter.py b/backend/tests/test_opcenter_dept_filter.py
+new file mode 100644
+index 00000000..543d6b6b
+--- /dev/null
++++ b/backend/tests/test_opcenter_dept_filter.py
+@@ -0,0 +1,79 @@
++"""运营中心主表指标：6601 部门编码过滤 + 17 项指标定义。"""
++
++from app.modules.metric.engine import extract_account_balance
++from scripts.seed_opcenter_metrics import (
++    BASE_MEASURES,
++    CATEGORY,
++    DEPARTMENT_CODES,
++    METRIC_DEFS,
++)
++
++FIELDS = ["FBALANCEID", "FDETAILNUMBER", "FDETAILNAME", "FDEBIT"]
++BASE_CONFIG = {
++    "account_field": "FBALANCEID",
++    "account_prefix": "6601",
++    "detail_code_field": "FDETAILNUMBER",
++    "detail_name_field": "FDETAILNAME",
++    "amount_field": "FDEBIT",
++}
++
++
++def _rows() -> list[list[str]]:
++    return [
++        ["6601", "", "", ""],
++        ["", "BM000008/CI01", "在线营销部（改名后）/办公费", "100"],
++        ["", "BM000021/CI01", "电商组/办公费", "200"],
++        ["", "BM000023/CI01", "社媒组/办公费", "300"],
++        ["", "BM000107/CI01", "官网/办公费", "400"],
++        ["", "BM000999/CI01", "国内销售部/办公费", "999"],
++        # 无部门前缀的汇总/明细行：配置部门过滤后必须排除
++        ["", "GY.88", "内贸快递", "888"],
++    ]
++
++
++def test_department_filter_by_code_keeps_three_departments() -> None:
++    config = {**BASE_CONFIG, "detail_name_contains": ["办公费"], "department_codes": DEPARTMENT_CODES}
++    result = extract_account_balance(_rows(), FIELDS, config)
++
++    assert result["total"] == 600.0
++    assert result["matched_rows"] == 3
++    assert set(result["departments"]) == {"BM000008", "BM000021", "BM000023"}
++
++
++def test_department_filter_ignores_renamed_department() -> None:
++    """名称改成新名字，编码不变时仍然计入。"""
++    config = {**BASE_CONFIG, "detail_name_contains": ["办公费"], "department_codes": DEPARTMENT_CODES}
++    rows = [
++        ["6601", "", "", ""],
++        ["", "BM000008/CI01", "运营中心一部/办公费", "123"],
++    ]
++    assert extract_account_balance(rows, FIELDS, config)["total"] == 123.0
++
++
++def test_without_department_filter_keeps_previous_behavior() -> None:
++    config = {**BASE_CONFIG, "detail_name_contains": ["办公费"]}
++    assert extract_account_balance(_rows(), FIELDS, config)["total"] == 1999.0
++
++
++def test_department_filter_excludes_rows_without_department_prefix() -> None:
++    config = {**BASE_CONFIG, "detail_name_contains": ["快递"], "department_codes": DEPARTMENT_CODES}
++    assert extract_account_balance(_rows(), FIELDS, config)["total"] == 0.0
++
++
++def test_metric_definitions_cover_all_costs() -> None:
++    codes = [item["code"] for item in METRIC_DEFS]
++    assert codes == [f"OPC-COST-{index:02d}" for index in range(1, 18)]
++    assert len(codes) == len(set(codes))
++
++    by_code = {item["code"]: item for item in METRIC_DEFS}
++    assert by_code["OPC-COST-01"]["detail_name_contains"] == ["办公费", "FLB辅/劳保"]
++    assert by_code["OPC-COST-08"]["detail_name_contains"] == ["内贸快递"]
++    assert "专用平台费用" not in by_code["OPC-COST-09"]["detail_name_contains"]
++    assert by_code["OPC-COST-10"]["detail_name_contains"] == ["售后返工费", "售后运输费"]
++    assert by_code["OPC-COST-11"]["detail_name_contains"] == ["电费"]
++    assert by_code["OPC-COST-13"]["detail_name_contains"] == ["维修费"]
++    assert all("detail_name_contains_by_period" not in item for item in METRIC_DEFS)
++    assert all(item["detail_name_contains"] for item in METRIC_DEFS)
++    assert BASE_MEASURES["department_codes"] == DEPARTMENT_CODES
++    assert CATEGORY == "运营中心-主表指标"
++    assert DEPARTMENT_CODES == ["BM000008", "BM000021", "BM000023"]
+diff --git a/deploy/opcenter-align-20261111/update.py b/deploy/opcenter-align-20261111/update.py
+new file mode 100644
+index 00000000..b1a62ee0
+--- /dev/null
++++ b/deploy/opcenter-align-20261111/update.py
+@@ -0,0 +1,183 @@
++"""运营中心主表指标上线（conda Python，不使用 Docker）。
++
++改动：
++- 指标中心新增「运营中心指标 → 运营中心主表指标」菜单；
++- 新增 17 个指标 OPC-COST-01 ~ 17；
++- 取数：科目余额表 6601，核算维度部门按编码 BM000008 / BM000021 / BM000023 过滤；
++- 费用项目关键字按 2026-11-11 新口径表。
++
++服务器项目根目录执行：
++
++    python deploy/opcenter-align-20261111/update.py --apply --env dev
++
++只预演（默认，不执行任何命令）：
++
++    python deploy/opcenter-align-20261111/update.py
++
++可重复执行：指标定义/菜单均为幂等 upsert，重算按最新版本覆盖。
++重算默认覆盖库里已有同步批次的全部期间；也可用 --period-from/--period-to 限定。
++"""
++
++from __future__ import annotations
++
++import argparse
++import os
++import shutil
++import subprocess
++import sys
++from datetime import datetime
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++BACKEND = ROOT / "backend"
++LOG_PATH = Path(__file__).resolve().parent / "update_run.log"
++CODE_FILE = "scripts/metric_groups/opcenter_cost.txt"
++
++
++def python_bin() -> str:
++    """优先用项目自带 venv（本机），否则用当前解释器（服务器 conda）。"""
++    for candidate in (
++        BACKEND / ".venv" / "Scripts" / "python.exe",
++        BACKEND / ".venv" / "bin" / "python",
++    ):
++        if candidate.exists():
++            return str(candidate)
++    return sys.executable
++
++
++def log(message: str) -> None:
++    line = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}"
++    try:
++        print(line)
++    except UnicodeEncodeError:
++        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
++        print(line.encode(encoding, "replace").decode(encoding, "replace"))
++    with LOG_PATH.open("a", encoding="utf-8") as fh:
++        fh.write(line + "\n")
++
++
++def run(
++    cmd: list[str],
++    cwd: Path,
++    apply: bool,
++    env_extra: dict[str, str] | None = None,
++    required: bool = True,
++    title: str | None = None,
++) -> None:
++    if title:
++        log(f"== {title} ==")
++    log("$ " + " ".join(str(item) for item in cmd))
++    if not apply:
++        return
++    env = os.environ.copy()
++    if env_extra:
++        env.update(env_extra)
++    result = subprocess.run(
++        cmd,
++        cwd=cwd,
++        text=True,
++        capture_output=True,
++        encoding="utf-8",
++        errors="replace",
++        env=env,
++    )
++    if result.stdout.strip():
++        log(result.stdout.strip())
++    if result.stderr.strip():
++        log(result.stderr.strip())
++    if result.returncode != 0:
++        message = f"命令失败（退出码 {result.returncode}）：{' '.join(cmd)}"
++        if required:
++            raise SystemExit(message)
++        log("WARN " + message)
++
++
++def env_works(env_name: str) -> bool:
++    """探测某个 ENVIRONMENT 能否加载到数据库密码（服务器可能只有 .env.dev）。"""
++    code = (
++        "from app.config.setting import settings;"
++        "print('OK' if settings.DATABASE_PASSWORD else 'EMPTY')"
++    )
++    env = os.environ.copy()
++    env["ENVIRONMENT"] = env_name
++    result = subprocess.run(
++        [python_bin(), "-c", code],
++        cwd=BACKEND,
++        text=True,
++        capture_output=True,
++        encoding="utf-8",
++        errors="replace",
++        env=env,
++    )
++    lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
++    return result.returncode == 0 and bool(lines) and lines[-1] == "OK"
++
++
++def sync_code(apply: bool) -> None:
++    """fetch + 快进；分叉时直接报错，不覆盖服务器本地提交。"""
++    run(["git", "fetch", "origin", "master"], ROOT, apply, title="拉取代码")
++    run(["git", "merge", "--ff-only", "origin/master"], ROOT, apply, title="快进到 origin/master")
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="运营中心主表指标上线")
++    parser.add_argument("--apply", action="store_true", help="执行；缺省只预演")
++    parser.add_argument("--skip-pull", action="store_true", help="跳过 git pull")
++    parser.add_argument("--skip-recalc", action="store_true", help="跳过指标重算")
++    parser.add_argument("--env", default="dev", help="后端环境 dev/prod，默认 dev")
++    parser.add_argument("--service", default=None, help="systemd 服务名，如 fastapiadmin")
++    parser.add_argument("--period-from", default=None, help="重算起始期间，如 2026-01")
++    parser.add_argument("--period-to", default=None, help="重算结束期间，如 2026-11")
++    args = parser.parse_args()
++
++    log(f"项目根目录：{ROOT}")
++    log(f"模式：{'执行' if args.apply else '预演'}")
++
++    if not args.skip_pull:
++        sync_code(args.apply)
++
++    # 优先用户指定的环境；探测不到时不强制 ENVIRONMENT，子进程沿用当前环境变量。
++    candidates = list(dict.fromkeys([args.env, "dev", "prod"]))
++    chosen_env = next((name for name in candidates if env_works(name)), None)
++    if chosen_env:
++        log(f"数据库环境：{chosen_env}")
++        backend_env = {"ENVIRONMENT": chosen_env}
++    else:
++        log("未探测到可用的 ENVIRONMENT 配置，子进程沿用当前环境变量")
++        backend_env = {}
++
++    run(
++        [python_bin(), "scripts/seed_opcenter_metrics.py"],
++        BACKEND,
++        args.apply,
++        backend_env,
++        title="写入 17 个指标定义（按部门编码）",
++    )
++    run(
++        [python_bin(), "scripts/seed_opcenter_menu.py"],
++        BACKEND,
++        args.apply,
++        backend_env,
++        title="写入指标中心菜单与权限",
++    )
++
++    if not args.skip_recalc:
++        cmd = [python_bin(), "scripts/recalc_metrics_batch.py", "--code-file", CODE_FILE]
++        if args.period_from:
++            cmd.extend(["--period-from", args.period_from])
++        if args.period_to:
++            cmd.extend(["--period-to", args.period_to])
++        run(cmd, BACKEND, args.apply, backend_env, title="重算运营中心指标")
++
++    if args.service and shutil.which("systemctl"):
++        run(["systemctl", "restart", args.service], ROOT, args.apply, title="重启服务")
++    elif args.service:
++        log("未找到 systemctl（Windows 环境），跳过自动重启；请手动重启后端进程")
++    else:
++        log("未指定 --service，跳过重启；服务器请按现有方式重启后端进程")
++
++    log("完成")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/frontend/web/src/views/module_metric/opcenter/index.vue b/frontend/web/src/views/module_metric/opcenter/index.vue
+new file mode 100644
+index 00000000..b6c0a780
+--- /dev/null
++++ b/frontend/web/src/views/module_metric/opcenter/index.vue
+@@ -0,0 +1,9 @@
++<template>
++  <MetricValuePage category="运营中心-主表指标" />
++</template>
++
++<script setup lang="ts">
++import MetricValuePage from "../value/index.vue";
++
++defineOptions({ name: "MetricOpCenterValue" });
++</script>
+diff --git a/frontend/web/src/views/module_metric/value/index.vue b/frontend/web/src/views/module_metric/value/index.vue
+index a740d441..9d17bd1a 100644
+--- a/frontend/web/src/views/module_metric/value/index.vue
++++ b/frontend/web/src/views/module_metric/value/index.vue
+@@ -211,6 +211,9 @@ const MetricNameTip = defineComponent({
+   },
+ });
+ 
++/** 指标分类过滤：运营中心等独立页面传入分类，只列出该类指标；为空时展示全部启用指标。 */
++const props = withDefaults(defineProps<{ category?: string }>(), { category: "" });
++
+ const loading = ref(false);
+ const running = ref(false);
+ const metrics = ref<MetricDefItem[]>([]);
+@@ -320,7 +323,12 @@ async function loadMetrics() {
+   // 指标定义接口单页上限 100，启用指标可能超过一页，这里翻页取全（最多 500 个）
+   const all: MetricDefItem[] = [];
+   for (let pageNo = 1; pageNo <= 5; pageNo++) {
+-    const res = await MetricAPI.defPage({ page_no: pageNo, page_size: 100, status: 0 });
++    const res = await MetricAPI.defPage({
++      page_no: pageNo,
++      page_size: 100,
++      status: 0,
++      category: props.category || undefined,
++    });
+     const items = res.data?.data?.items ?? [];
+     all.push(...items);
+     if (items.length < 100) break;

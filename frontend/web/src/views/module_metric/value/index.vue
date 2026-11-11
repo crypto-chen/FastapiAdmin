@@ -211,6 +211,9 @@ const MetricNameTip = defineComponent({
   },
 });
 
+/** 指标分类过滤：运营中心等独立页面传入分类，只列出该类指标；为空时展示全部启用指标。 */
+const props = withDefaults(defineProps<{ category?: string }>(), { category: "" });
+
 const loading = ref(false);
 const running = ref(false);
 const metrics = ref<MetricDefItem[]>([]);
@@ -320,7 +323,12 @@ async function loadMetrics() {
   // 指标定义接口单页上限 100，启用指标可能超过一页，这里翻页取全（最多 500 个）
   const all: MetricDefItem[] = [];
   for (let pageNo = 1; pageNo <= 5; pageNo++) {
-    const res = await MetricAPI.defPage({ page_no: pageNo, page_size: 100, status: 0 });
+    const res = await MetricAPI.defPage({
+      page_no: pageNo,
+      page_size: 100,
+      status: 0,
+      category: props.category || undefined,
+    });
     const items = res.data?.data?.items ?? [];
     all.push(...items);
     if (items.length < 100) break;

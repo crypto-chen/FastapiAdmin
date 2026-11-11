@@ -363,6 +363,12 @@ def extract_account_balance(rows: list, fields: list[str], config: dict, period:
     - ``detail_name_exclude``：核算维度名称命中即**排除**的关键字，用于关键字互为子串的场景
       （如「维修费」会命中「车辆维修费」，需把车辆维修费排除在维修费指标外）。
     - ``detail_name_exclude_by_period``：按期间覆盖 ``detail_name_exclude``，规则同上。
+    - ``department_names``：核算维度名称首段（部门名）需精确命中的部门列表，
+      如 ``["在线营销部", "社媒组", "电商组", "官网"]``；未配置时不做部门过滤。
+      仅对 ``detail_is_department=True`` 的指标生效，无部门前缀的汇总行会被排除。
+    - ``department_codes``：核算维度编码首段（部门编码）需精确命中的列表，
+      如 ``["BM000008", "BM000021", "BM000023"]``；与 ``department_names`` 同时配置时
+      两个条件都要满足。部门名称会调整，长期口径优先用编码。
     - ``amount_field``：金额字段，如 ``FDEBIT``（本期借方发生额）。
     - ``amount_terms``：多字段组合取值，如期末余额 = ``[{"field": "FENDDEBIT", "sign": 1},
       {"field": "FENDCREDIT", "sign": -1}]``（借方减贷方）；配置后优先于 ``amount_field``。
@@ -393,6 +399,14 @@ def extract_account_balance(rows: list, fields: list[str], config: dict, period:
     code_exclude = {str(item).strip() for item in code_exclude if str(item).strip()}
     require_detail = bool(config.get("require_detail"))
     is_dept_dim = bool(config.get("detail_is_department", True))
+    dept_names = config.get("department_names") or []
+    if isinstance(dept_names, str):
+        dept_names = [dept_names]
+    dept_names = {str(item).strip() for item in dept_names if str(item).strip()}
+    dept_codes = config.get("department_codes") or []
+    if isinstance(dept_codes, str):
+        dept_codes = [dept_codes]
+    dept_codes = {str(item).strip() for item in dept_codes if str(item).strip()}
     def _period_list(key: str) -> list[str]:
         """读取关键字列表；命中期间覆盖时整体替换默认列表（允许显式空列表）。"""
         scoped = config.get(f"{key}_by_period")
@@ -422,6 +436,13 @@ def extract_account_balance(rows: list, fields: list[str], config: dict, period:
         if require_detail and not detail_code_raw and not detail_name:
             continue
         parts = [part.strip() for part in detail_code_raw.split("/") if part.strip()]
+        dept_name = detail_name.split("/")[0].strip() if "/" in detail_name else ""
+        if is_dept_dim and dept_codes and (not parts or parts[0] not in dept_codes):
+            # 部门口径按编码：部门改名不影响取数
+            continue
+        if is_dept_dim and dept_names and dept_name not in dept_names:
+            # 部门口径：核算维度名称形如「部门/费用项目」，首段必须精确命中
+            continue
         if code_exclude and parts and parts[0] in code_exclude:
             continue
         if keywords and not any(keyword in detail_name for keyword in keywords):
@@ -435,11 +456,11 @@ def extract_account_balance(rows: list, fields: list[str], config: dict, period:
             # 核算维度可能是「部门/费用项目」或只有「费用项目」（如 GY.88 快递费）：
             # 后者没有部门归属，单独归到「未指定部门」，不要把费用项目名当部门名。
             dept_code = parts[0] if parts else detail_name
-            dept_name = detail_name.split("/")[0].strip() if "/" in detail_name else "未指定部门"
+            bucket_name = dept_name or "未指定部门"
         else:
             dept_code = detail_code_raw or detail_name
-            dept_name = detail_name or detail_code_raw
-        bucket = departments.setdefault(dept_code, {"name": dept_name, "value": 0.0, "rows": 0})
+            bucket_name = detail_name or detail_code_raw
+        bucket = departments.setdefault(dept_code, {"name": bucket_name, "value": 0.0, "rows": 0})
         bucket["value"] = round(float(bucket["value"]) + amount, 4)
         bucket["rows"] = int(bucket["rows"]) + 1
     return {"total": round(total, 4), "departments": departments, "matched_rows": matched_rows}
