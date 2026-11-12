@@ -30,7 +30,10 @@ os.environ.setdefault("ENVIRONMENT", "dev")
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 VERSIONS = BACKEND / "app" / "alembic" / "versions"
-BACKUP = BACKEND / "app" / "alembic" / f"versions_server_autogen_backup_{datetime.now():%Y%m%d_%H%M%S}"
+BACKUP = (
+    BACKEND / "app" / "alembic"
+    / f"versions_server_autogen_backup_{datetime.now():%Y%m%d_%H%M%S}"
+)
 KEEP_REV = "wecomtoken01"
 
 if str(BACKEND) not in sys.path:
@@ -39,7 +42,15 @@ if str(BACKEND) not in sys.path:
 
 def git_untracked_versions() -> list[Path]:
     result = subprocess.run(
-        ["git", "-C", str(ROOT), "status", "--porcelain", "--", "backend/app/alembic/versions"],
+        [
+            "git",
+            "-C",
+            str(ROOT),
+            "status",
+            "--porcelain",
+            "--",
+            "backend/app/alembic/versions",
+        ],
         text=True,
         capture_output=True,
         encoding="utf-8",
@@ -76,7 +87,7 @@ def heads(output: str) -> set[str]:
 
 
 def db_versions() -> list[str]:
-    import pymysql
+    import pymysql  # noqa: I001
 
     from app.config.setting import settings
 
@@ -101,7 +112,7 @@ def db_versions() -> list[str]:
 
 
 def delete_extra_versions(keep: str) -> None:
-    import pymysql
+    import pymysql  # noqa: I001
 
     from app.config.setting import settings
 
@@ -121,7 +132,10 @@ def delete_extra_versions(keep: str) -> None:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM alembic_version WHERE version_num <> %s", (keep,))
             if cur.rowcount == 0:
-                cur.execute("INSERT INTO alembic_version (version_num) VALUES (%s)", (keep,))
+                cur.execute(
+                    "INSERT INTO alembic_version (version_num) VALUES (%s)",
+                    (keep,),
+                )
     finally:
         conn.close()
 
@@ -155,7 +169,9 @@ def main() -> None:
         for path in files:
             destination = BACKUP / path.name
             if destination.exists():
-                destination = BACKUP / f"{path.stem}_{datetime.now():%H%M%S}{path.suffix}"
+                destination = (
+                    BACKUP / f"{path.stem}_{datetime.now():%H%M%S}{path.suffix}"
+                )
             shutil.move(str(path), str(destination))
             moved.append((path, destination))
 
@@ -163,7 +179,8 @@ def main() -> None:
         remaining = heads(head_output)
         if code != 0 or remaining != {KEEP_REV}:
             raise RuntimeError(
-                f"移动后 heads 不是单一 {KEEP_REV}：exit={code} heads={sorted(remaining)}"
+                f"移动后 heads 不是单一 {KEEP_REV}："
+                f"exit={code} heads={sorted(remaining)}"
             )
 
         delete_extra_versions(KEEP_REV)
