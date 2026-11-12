@@ -4,7 +4,7 @@
       <ElAlert type="info" show-icon :closable="false" class="api-tip">
         <template #title>
           外部系统对接：先 <b>POST /open/v1/auth/token</b> 用应用密钥换令牌，再 <b>POST /open/v1/metrics/query</b> 批量取数。
-          默认只返回「组织合计」，需要部门/客户明细请在下方应用上单独开启。
+          默认只返回「组织合计」；新建应用默认按分类勾选指标，老应用未配置时仍可读全部启用指标。
         </template>
       </ElAlert>
 
@@ -47,6 +47,11 @@
         <ElTableColumn label="组织范围" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
             {{ row.org_scope?.length ? row.org_scope.join("、") : "全部组织" }}
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="指标授权" width="110" align="center">
+          <template #default="{ row }">
+            {{ row.metric_scope?.length ? `${row.metric_scope.length} 个` : "全部" }}
           </template>
         </ElTableColumn>
         <ElTableColumn label="核算维度" width="110" align="center">
@@ -167,6 +172,27 @@
             <ElOption v-for="item in orgOptions" :key="item.value" :label="item.label" :value="item.value" />
           </ElSelect>
         </ElFormItem>
+        <ElFormItem label="指标授权">
+          <div class="metric-scope">
+            <ElRadioGroup v-model="metricScopeMode">
+              <ElRadio value="all">全部启用指标</ElRadio>
+              <ElRadio value="custom">按分类选择</ElRadio>
+            </ElRadioGroup>
+            <div v-if="metricScopeMode === 'custom'" class="metric-tree-box">
+              <ElTree
+                ref="metricTreeRef"
+                :data="metricTree"
+                show-checkbox
+                node-key="key"
+                :default-expanded-keys="expandedMetricCenters"
+                :props="{ label: 'label', children: 'children' }"
+                @check="syncMetricScope"
+              />
+              <div class="metric-scope-summary">已选 {{ form.metric_scope.length }} 个指标</div>
+            </div>
+            <div v-else class="form-tip">不限制指标范围（兼容旧应用）</div>
+          </div>
+        </ElFormItem>
         <ElFormItem label="核算维度明细">
           <ElSwitch v-model="form.allow_dept_detail" />
           <span class="form-tip">关闭时只返回组织合计；开启后对方可查部门/客户明细</span>
@@ -254,10 +280,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from "element-plus";
 import {
   OpenApiClientAPI,
+  type MetricOptionGroup,
   type OpenClientItem,
   type OptionItem,
 } from "@/api/module_openapi";
@@ -268,12 +295,18 @@ const loading = ref(false);
 const submitting = ref(false);
 const rows = ref<OpenClientItem[]>([]);
 const orgOptions = ref<OptionItem[]>([]);
+const metricOptions = ref<MetricOptionGroup[]>([]);
 const page = reactive({ page_no: 1, page_size: 20, total: 0 });
 const search = reactive<{ app_id?: string; name?: string; status?: number }>({});
 
 const formVisible = ref(false);
 const isEdit = ref(false);
 const formRef = ref<FormInstance>();
+const metricTreeRef = ref<{
+  getCheckedKeys: (leafOnly?: boolean) => Array<string | number>;
+  setCheckedKeys: (keys: Array<string | number>) => void;
+}>();
+const metricScopeMode = ref<"all" | "custom">("custom");
 const currentId = ref<number | undefined>(undefined);
 const form = reactive({
   app_id: "",
@@ -282,6 +315,7 @@ const form = reactive({
   rate_limit: 600,
   token_ttl_seconds: 7200,
   org_scope: [] as string[],
+  metric_scope: [] as string[],
   allow_dept_detail: false,
   allow_person_detail: false,
   allow_run_calc: false,
@@ -303,6 +337,37 @@ const rules: FormRules = {
 };
 
 const formTitle = computed(() => (isEdit.value ? "编辑接入应用" : "新增接入应用"));
+
+interface MetricTreeNode {
+  key: string;
+  label: string;
+  children?: MetricTreeNode[];
+}
+
+/** 指标授权树：中心（营销/运营）→ 分类（主表/业务员）→ 指标。 */
+const metricTree = computed<MetricTreeNode[]>(() => {
+  const centers = new Map<string, MetricOptionGroup[]>();
+  for (const group of metricOptions.value) {
+    const center = group.category.split("-")[0] || group.category;
+    const bucket = centers.get(center) ?? [];
+    bucket.push(group);
+    centers.set(center, bucket);
+  }
+  return [...centers.entries()].map(([center, groups]) => ({
+    key: `center:${center}`,
+    label: center,
+    children: groups.map((group) => ({
+      key: `cat:${group.category}`,
+      label: `${group.category.split("-").slice(1).join("-") || group.category}（${group.count}）`,
+      children: group.metrics.map((metric) => ({
+        key: metric.code,
+        label: `${metric.name}（${metric.code}）`,
+      })),
+    })),
+  }));
+});
+
+const expandedMetricCenters = computed(() => metricTree.value.map((node) => node.key));
 
 const secretVisible = ref(false);
 const secretInfo = reactive({ app_id: "", app_secret: "" });
@@ -335,6 +400,27 @@ async function loadOrgOptions() {
   orgOptions.value = res.data?.data ?? [];
 }
 
+async function loadMetricOptions() {
+  const res = await OpenApiClientAPI.metricOptions();
+  metricOptions.value = res.data?.data ?? [];
+}
+
+function syncMetricScope() {
+  nextTick(() => {
+    const checked = metricTreeRef.value?.getCheckedKeys(true) ?? [];
+    const metricCodes = new Set(
+      metricOptions.value.flatMap((group) => group.metrics.map((metric) => metric.code)),
+    );
+    form.metric_scope = checked.map((key) => String(key)).filter((key) => metricCodes.has(key));
+  });
+}
+
+watch(metricScopeMode, async (mode) => {
+  if (mode !== "custom") return;
+  await nextTick();
+  metricTreeRef.value?.setCheckedKeys(form.metric_scope);
+});
+
 function handleQuery() {
   page.page_no = 1;
   loadData();
@@ -360,6 +446,7 @@ function resetForm() {
     rate_limit: 600,
     token_ttl_seconds: 7200,
     org_scope: [],
+    metric_scope: [],
     allow_dept_detail: false,
     allow_person_detail: false,
     allow_run_calc: false,
@@ -374,6 +461,8 @@ function resetForm() {
     contact: "",
     description: "",
   });
+  // 新建应用默认要求勾选指标，避免忘记限制而默认放开全部指标
+  metricScopeMode.value = "custom";
 }
 
 function openCreate() {
@@ -383,9 +472,13 @@ function openCreate() {
   formVisible.value = true;
 }
 
-function openEdit(row: OpenClientItem) {
+async function openEdit(row: OpenClientItem) {
   isEdit.value = true;
   currentId.value = row.id;
+  const availableCodes = new Set(
+    metricOptions.value.flatMap((group) => group.metrics.map((metric) => metric.code)),
+  );
+  const scope = row.metric_scope ?? [];
   Object.assign(form, {
     app_id: row.app_id,
     name: row.name,
@@ -393,6 +486,7 @@ function openEdit(row: OpenClientItem) {
     rate_limit: row.rate_limit,
     token_ttl_seconds: row.token_ttl_seconds,
     org_scope: row.org_scope ?? [],
+    metric_scope: availableCodes.size ? scope.filter((code) => availableCodes.has(code)) : scope,
     allow_dept_detail: row.allow_dept_detail,
     allow_person_detail: row.allow_person_detail,
     allow_run_calc: row.allow_run_calc,
@@ -407,7 +501,12 @@ function openEdit(row: OpenClientItem) {
     contact: row.contact ?? "",
     description: row.description ?? "",
   });
+  metricScopeMode.value = row.metric_scope?.length ? "custom" : "all";
   formVisible.value = true;
+  await nextTick();
+  if (metricScopeMode.value === "custom") {
+    metricTreeRef.value?.setCheckedKeys(form.metric_scope);
+  }
 }
 
 function buildPayload() {
@@ -417,6 +516,7 @@ function buildPayload() {
     rate_limit: form.rate_limit,
     token_ttl_seconds: form.token_ttl_seconds,
     org_scope: form.org_scope.length ? [...form.org_scope] : null,
+    metric_scope: metricScopeMode.value === "custom" && form.metric_scope.length ? [...form.metric_scope] : null,
     allow_dept_detail: form.allow_dept_detail,
     allow_person_detail: form.allow_person_detail,
     allow_run_calc: form.allow_run_calc,
@@ -436,6 +536,10 @@ function buildPayload() {
 async function submitForm() {
   const valid = await formRef.value?.validate().catch(() => false);
   if (!valid) return;
+  if (metricScopeMode.value === "custom" && !form.metric_scope.length) {
+    ElMessage.warning("已开启指标授权，请至少勾选一个指标");
+    return;
+  }
   submitting.value = true;
   try {
     if (isEdit.value && currentId.value) {
@@ -491,7 +595,7 @@ async function copySecret() {
 }
 
 onMounted(async () => {
-  await loadOrgOptions();
+  await Promise.all([loadOrgOptions(), loadMetricOptions()]);
   await loadData();
 });
 </script>
@@ -513,6 +617,27 @@ onMounted(async () => {
 }
 .form-tip {
   margin-left: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.metric-scope {
+  width: 100%;
+}
+.metric-scope-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.metric-tree-box {
+  margin-top: 8px;
+  padding: 8px;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+}
+.metric-scope-summary {
+  margin-top: 6px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }

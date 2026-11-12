@@ -103,6 +103,15 @@ async def open_client_org_options(
     return SuccessResponse(data=result, msg="查询组织选项成功")
 
 
+@OpenClientRouter.get("/metric-options", response_model=ResponseSchema[list[dict]])
+async def open_client_metric_options(
+    auth: Annotated[AuthSchema, Security(AuthPermission(["module_openapi:client:query"]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+) -> JSONResponse:
+    result = await OpenClientService(auth, db).metric_options()
+    return SuccessResponse(data=result, msg="查询指标授权选项成功")
+
+
 @OpenApiLogRouter.get("/page", response_model=ResponseSchema[PageResultSchema[OpenApiLogOutSchema]])
 async def page_open_api_log(
     auth: Annotated[AuthSchema, Security(AuthPermission(["module_openapi:log:query"]))],

@@ -25,6 +25,11 @@ class OpenClientCreateSchema(BaseModel):
     allow_product_line_detail: bool = Field(default=False, description="是否允许查询产品线分析明细")
     allow_platform_analysis: bool = Field(default=False, description="是否允许读取平台渠道分析指标")
     order_scope: dict | None = Field(default=None, description='订单范围，如 {"trade_type": "domestic"}，空=不限')
+    metric_scope: list[str] | None = Field(
+        default=None,
+        max_length=500,
+        description="允许读取的指标编码列表，空=全部启用指标（兼容旧应用）",
+    )
     expire_time: datetime | None = Field(default=None, description="凭证到期时间，空=长期有效")
     contact: str | None = Field(default=None, max_length=128, description="联系人")
     description: str | None = Field(default=None, max_length=500, description="用途备注")
@@ -56,6 +61,11 @@ class OpenClientUpdateSchema(BaseModel):
     allow_platform_analysis: bool | None = Field(default=None, description="是否允许读取平台渠道分析指标")
     org_scope: list[str] | None = Field(default=None, description="允许的组织编码，空=全部启用组织")
     order_scope: dict | None = Field(default=None, description='订单范围，如 {"trade_type": "domestic"}，空=不限')
+    metric_scope: list[str] | None = Field(
+        default=None,
+        max_length=500,
+        description="允许读取的指标编码列表，空=全部启用指标（兼容旧应用）",
+    )
     expire_time: datetime | None = Field(default=None, description="凭证到期时间，空=长期有效")
     contact: str | None = Field(default=None, max_length=128, description="联系人")
     description: str | None = Field(default=None, max_length=500, description="用途备注")
@@ -80,6 +90,7 @@ class OpenClientOutSchema(BaseSchema, UserBySchema):
     allow_product_line_detail: bool = Field(default=False, description="是否允许查询产品线分析明细")
     allow_platform_analysis: bool = Field(default=False, description="是否允许读取平台渠道分析指标")
     order_scope: dict | None = Field(default=None, description="订单范围")
+    metric_scope: list[str] | None = Field(default=None, description="允许读取的指标编码列表，空=全部启用指标")
     expire_time: datetime | None = Field(default=None, description="凭证到期时间")
     contact: str | None = Field(default=None, description="联系人")
     description: str | None = Field(default=None, description="用途备注")

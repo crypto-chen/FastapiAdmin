@@ -67,6 +67,12 @@ class OpenClientModel(ModelMixin, UserMixin):
     org_scope: Mapped[list | None] = mapped_column(
         JSON, default=None, nullable=True, comment="允许的组织编码列表，空=全部启用组织"
     )
+    metric_scope: Mapped[list | None] = mapped_column(
+        JSON,
+        default=None,
+        nullable=True,
+        comment="允许读取的指标编码列表，空=全部启用指标（兼容旧应用）",
+    )
     expire_time: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None, nullable=True, comment="凭证到期时间，空=长期有效"
     )

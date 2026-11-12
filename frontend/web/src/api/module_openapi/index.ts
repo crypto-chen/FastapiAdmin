@@ -32,6 +32,7 @@ export interface OpenClientItem {
   allow_platform_analysis: boolean;
   order_scope?: Record<string, unknown> | null;
   org_scope?: string[] | null;
+  metric_scope?: string[] | null;
   expire_time?: string | null;
   contact?: string | null;
   description?: string | null;
@@ -61,6 +62,12 @@ export interface OpenApiLogItem {
 export interface OptionItem {
   value: string;
   label: string;
+}
+
+export interface MetricOptionGroup {
+  category: string;
+  count: number;
+  metrics: { code: string; name: string }[];
 }
 
 export const OpenApiClientAPI = {
@@ -96,6 +103,12 @@ export const OpenApiClientAPI = {
   },
   orgOptions() {
     return request<ApiResponse<OptionItem[]>>({ url: "/openapi/client/org-options", method: "get" });
+  },
+  metricOptions() {
+    return request<ApiResponse<MetricOptionGroup[]>>({
+      url: "/openapi/client/metric-options",
+      method: "get",
+    });
   },
 };
 

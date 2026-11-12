@@ -133,7 +133,15 @@ class OpenClientService:
         if await crud.get(app_id=data.app_id):
             raise CustomException(msg="创建失败，应用标识已存在")
         secret = generate_app_secret()
-        obj = await crud.create(data={"app_id": data.app_id, "secret_hash": await hash_app_secret(secret), **data.model_dump(exclude={"app_id"})})
+        payload = data.model_dump(exclude={"app_id"})
+        payload["metric_scope"] = await self._normalize_metric_scope(data.metric_scope)
+        obj = await crud.create(
+            data={
+                "app_id": data.app_id,
+                "secret_hash": await hash_app_secret(secret),
+                **payload,
+            }
+        )
         return _to_create_result(obj, secret)
 
     async def update(self, id: int, data: OpenClientUpdateSchema, redis: Redis) -> OpenClientOutSchema:
@@ -141,6 +149,8 @@ class OpenClientService:
         obj = await crud.get_or_404(id=id, msg="更新失败，该应用不存在")
         # exclude_unset（而非 exclude_none）：前端清空 IP 白名单 / 到期时间时要能真正置空
         payload = data.model_dump(exclude_unset=True)
+        if "metric_scope" in payload:
+            payload["metric_scope"] = await self._normalize_metric_scope(payload["metric_scope"])
         for key in ("ip_whitelist", "contact", "description"):
             value = payload.get(key)
             if isinstance(value, str) and not value.strip():
@@ -184,6 +194,55 @@ class OpenClientService:
         )
         return [{"value": row.code, "label": f"{row.code} - {row.name}"} for row in rows]
 
+    async def metric_options(self) -> list[dict[str, Any]]:
+        """指标授权选项：按指标分类分组，供前端勾选 ``metric_scope``。"""
+        rows = (
+            await self.db.execute(
+                select(MetricDefModel.code, MetricDefModel.name, MetricDefModel.category)
+                .where(
+                    MetricDefModel.status == 0,
+                    MetricDefModel.is_deleted == False,  # noqa: E712
+                )
+                .order_by(MetricDefModel.category.asc(), MetricDefModel.code.asc())
+            )
+        ).all()
+        groups: dict[str, list[dict[str, str]]] = {}
+        for code, name, category in rows:
+            groups.setdefault(str(category or "未分类"), []).append({"code": code, "name": name})
+        return [
+            {"category": category, "count": len(items), "metrics": items}
+            for category, items in groups.items()
+        ]
+
+    async def _normalize_metric_scope(self, codes: list[str] | None) -> list[str] | None:
+        """去空去重并校验指标是否存在/启用；空列表按「全部指标」处理。"""
+        if codes is None:
+            return None
+        cleaned = list(dict.fromkeys(str(code).strip() for code in codes if str(code).strip()))
+        if not cleaned:
+            return None
+        existing = set(
+            (
+                await self.db.execute(
+                    select(MetricDefModel.code).where(
+                        MetricDefModel.code.in_(cleaned),
+                        MetricDefModel.status == 0,
+                        MetricDefModel.is_deleted == False,  # noqa: E712
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        missing = [code for code in cleaned if code not in existing]
+        if missing:
+            raise CustomException(
+                msg="指标不存在或已停用：" + "、".join(missing),
+                code=CODE_PARAM_INVALID,
+                status_code=400,
+            )
+        return cleaned
+
 
 class OpenApiLogService:
     """管理端：开放接口调用日志查询。"""
@@ -212,9 +271,12 @@ class OpenApiService:
 
     # ── 指标目录 ────────────────────────────────────────────────────
     async def page_metrics(
-        self, keyword: str | None, page_no: int, page_size: int
+        self, client: OpenClientModel, keyword: str | None, page_no: int, page_size: int
     ) -> dict[str, Any]:
         conditions = [MetricDefModel.status == 0, MetricDefModel.is_deleted == False]  # noqa: E712
+        scope = self._metric_scope(client)
+        if scope:
+            conditions.append(MetricDefModel.code.in_(sorted(scope)))
         if keyword:
             like = f"%{keyword.strip()}%"
             conditions.append(MetricDefModel.code.like(like) | MetricDefModel.name.like(like))
@@ -258,7 +320,18 @@ class OpenApiService:
             description=metric.description,
         ).model_dump()
 
-    async def _load_metrics(self, codes: list[str]) -> tuple[list[MetricDefModel], list[dict]]:
+    @staticmethod
+    def _metric_scope(client: OpenClientModel) -> set[str]:
+        return {str(code).strip() for code in (client.metric_scope or []) if str(code).strip()}
+
+    @classmethod
+    def _metric_allowed(cls, client: OpenClientModel, code: str) -> bool:
+        scope = cls._metric_scope(client)
+        return not scope or code in scope
+
+    async def _load_metrics(
+        self, codes: list[str], client: OpenClientModel
+    ) -> tuple[list[MetricDefModel], list[dict]]:
         """按标识加载启用指标。
 
         入参既可传系统指标编码（``marketing_office_expense``），也可传 Excel 科目编码
@@ -291,6 +364,8 @@ class OpenApiService:
                 errors.append(OpenMetricErrorSchema(metric_code=token, reason="指标不存在").model_dump())
             elif int(metric.status or 0) != 0:
                 errors.append(OpenMetricErrorSchema(metric_code=token, reason="指标已停用").model_dump())
+            elif not self._metric_allowed(client, metric.code):
+                errors.append(OpenMetricErrorSchema(metric_code=token, reason="指标未授权").model_dump())
             else:
                 seen.add(metric.id)
                 metrics.append(metric)
@@ -357,7 +432,7 @@ class OpenApiService:
                 status_code=403,
             )
 
-        metrics, errors = await self._load_metrics(payload.metrics)
+        metrics, errors = await self._load_metrics(payload.metrics, client)
         if not metrics:
             raise CustomException(
                 msg="请求的指标均不可读：" + "；".join(f"{e['metric_code']}({e['reason']})" for e in errors),
@@ -671,6 +746,12 @@ class OpenApiService:
         ).scalars().first()
         if metric is None:
             raise CustomException(msg=f"指标不存在或已停用：{code}", code=CODE_PARAM_INVALID, status_code=400)
+        if not self._metric_allowed(client, metric.code):
+            raise CustomException(
+                msg=f"该指标未授权：{metric.code}",
+                code=CODE_METRIC_FORBIDDEN,
+                status_code=403,
+            )
         try:
             summary = await execute_metric_calc(metric_id=metric.id, period_value=period_value)
         except ValueError as e:

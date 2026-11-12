@@ -90,7 +90,7 @@ async def page_open_metrics(
     page_no: Annotated[int, Query(ge=1, description="页码")] = 1,
     page_size: Annotated[int, Query(ge=1, le=200, description="每页数量")] = 50,
 ) -> JSONResponse:
-    result = await OpenApiService(db).page_metrics(keyword, page_no, page_size)
+    result = await OpenApiService(db).page_metrics(client, keyword, page_no, page_size)
     return SuccessResponse(data=result, msg="查询指标目录成功")
 
 
