@@ -256,6 +256,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = ""
     OPENAI_BASE_URL: str = ""  # API Base URL，如 https://api.minimax.chat/v1
+    # 企微打卡/通讯录的 Token 服务地址（PHP 兼容模式，URL 内含 key；只放服务器 .env.dev，勿提交）
+    WECOM_TOKEN_URL: str = ""
 
     # ================================================= #
     # ******************* 动态配置 ******************* #

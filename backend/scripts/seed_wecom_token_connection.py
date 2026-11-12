@@ -26,15 +26,13 @@ for stream in (sys.stdout, sys.stderr):
 
 from sqlalchemy import select  # noqa: E402
 
+from app.config.setting import settings  # noqa: E402
 from app.core.base_model import MappedBase  # noqa: E402
 from app.core.database import async_db_session, async_engine  # noqa: E402
 from app.modules.erp.wecom.model import WeComConnectionModel  # noqa: E402
 from app.utils.import_util import ImportUtil  # noqa: E402
 
 ImportUtil.find_models(MappedBase)
-
-DEFAULT_TOKEN_URL = os.getenv("WECOM_TOKEN_URL", "")
-
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="写入 PHP 兼容模式的企业微信连接")
@@ -46,7 +44,9 @@ async def main() -> None:
     )
     parser.add_argument("--corp-id", default="token-mode", help="企业ID；Token 模式可留默认值")
     args = parser.parse_args()
-    token_url = (args.token_url or DEFAULT_TOKEN_URL).strip()
+    token_url = (
+        args.token_url or os.getenv("WECOM_TOKEN_URL") or settings.WECOM_TOKEN_URL or ""
+    ).strip()
     if not token_url:
         parser.error("请通过 --token-url 或环境变量 WECOM_TOKEN_URL 提供 Token 服务 URL")
 

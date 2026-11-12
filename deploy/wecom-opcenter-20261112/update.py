@@ -34,6 +34,11 @@ BACKEND = ROOT / "backend"
 LOG_PATH = Path(__file__).resolve().parent / "update_run.log"
 DEFAULT_PERIODS = ["2026-09", "2026-10", "2026-11"]
 
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
+
+from app.config.setting import settings  # noqa: E402
+
 
 def python_bin() -> str:
     """优先项目自带 venv；服务器 conda 环境则使用当前解释器。"""
@@ -146,7 +151,12 @@ def main() -> None:
         title="应用数据库迁移",
     )
 
-    token_url = (args.token_url or os.environ.get("WECOM_TOKEN_URL") or "").strip()
+    token_url = (
+        args.token_url
+        or os.environ.get("WECOM_TOKEN_URL")
+        or settings.WECOM_TOKEN_URL
+        or ""
+    ).strip()
     if args.skip_token:
         log("跳过企微连接写入（--skip-token）")
     elif token_url:
