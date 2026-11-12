@@ -27,12 +27,19 @@ def upgrade() -> None:
     indexes = {
         str(item.get("name")): item for item in inspector.get_indexes("platform_metric_def")
     }
+    columns = {
+        str(item.get("name")): item for item in inspector.get_columns("platform_metric_def")
+    }
+    readiness = columns.get("readiness")
+    # 已经是「无 server_default」时不再发 ALTER，避免无意义的元数据锁等待
+    need_alter_readiness = readiness is not None and readiness.get("default") not in (None, "")
     with op.batch_alter_table('platform_metric_def', schema=None) as batch_op:
-        batch_op.alter_column('readiness',
-               existing_type=mysql.VARCHAR(collation='utf8mb4_general_ci', length=16),
-               server_default=None,
-               existing_comment='可出性：ready 现用可出 / pending 待确认 / todo 待做 / missing 缺数据源',
-               existing_nullable=False)
+        if need_alter_readiness:
+            batch_op.alter_column('readiness',
+                   existing_type=mysql.VARCHAR(collation='utf8mb4_general_ci', length=16),
+                   server_default=None,
+                   existing_comment='可出性：ready 现用可出 / pending 待确认 / todo 待做 / missing 缺数据源',
+                   existing_nullable=False)
         if "uq_platform_metric_def_code" in indexes:
             batch_op.drop_index(batch_op.f('uq_platform_metric_def_code'))
         ix = indexes.get("ix_platform_metric_def_code")
