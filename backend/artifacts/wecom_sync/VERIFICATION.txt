@@ -1,0 +1,180 @@
+企业微信通讯录/打卡同步（Python 版）验证记录
+============================================================
+目标：在 FastapiAdmin 中新增企微通讯录、每日打卡同步与工时统计，
+      口径对齐旧 PHP QwApi::getWorkTime。
+
+变更文件
+--------
+新增：
+  backend/app/modules/erp/wecom/__init__.py
+  backend/app/modules/erp/wecom/calc.py
+  backend/app/modules/erp/wecom/client.py
+  backend/app/modules/erp/wecom/model.py
+  backend/app/modules/erp/wecom/schema.py
+  backend/app/modules/erp/wecom/crud.py
+  backend/app/modules/erp/wecom/service.py
+  backend/app/modules/erp/wecom/controller.py
+  backend/app/modules/erp/wecom/schedule.py
+backend/scripts/wecom_backfill.py
+backend/scripts/seed_wecom_token_connection.py
+backend/tests/test_wecom.py
+backend/app/alembic/versions/2026_11_12_1200_wecomsync01.py
+backend/app/alembic/versions/2026_11_12_1430_wecomtoken01.py
+
+修改：
+  backend/app/api/v1/routers.py（注册 WeComRouter 到 /erp）
+  backend/app/__init__.py（启动时注册企微同步任务）
+
+基线（变更前）
+--------------
+命令：Test-Path backend/app/modules/erp/wecom
+结果：False（模块不存在）
+
+单元测试
+--------
+命令（backend 目录）：
+  .venv\Scripts\python.exe -m pytest tests\test_wecom.py -q
+结果：
+  13 passed
+覆盖：
+  - 正常工时按天扣 1.5h 午休
+  - 加班扣 30min 吃饭；18:20 下班不算加班
+  - 跨夜 25:00 下班 = 6.5h 加班 + crossDay
+  - 同一人同一天重复数据不重复累计
+  - 人数不足 30% 告警
+  - 客户按 100 人/批切片
+  - 打卡同步重跑幂等（第二次 created=0/updated=2）
+  - Token 服务模式（PHP 兼容）取 token，不依赖 Secret
+  - 部门工时按部门树汇总、排除 by 备用账号
+
+静态检查
+--------
+命令：
+  .venv\Scripts\python.exe -m ruff check app\modules\erp\wecom scripts\wecom_backfill.py tests\test_wecom.py app\alembic\versions\2026_11_12_1200_wecomsync01.py
+结果：All checks passed!
+
+数据库迁移
+----------
+命令：
+  alembic heads
+结果：wecomtoken01 (head)
+
+在临时 SQLite 库上执行（不触碰业务库）：
+  alembic stamp 599052b1a95a
+  alembic upgrade wecomsync01
+  alembic upgrade wecomtoken01
+结果：成功创建
+  erp_wecom_connection
+  wecom_checkin_day
+  wecom_sync_run
+  以及对应索引/唯一约束
+
+接口注册
+--------
+命令：app.openapi()
+结果：/erp/wecom 下 13 个接口：
+  connection/page|list|detail/{id}|create|update/{id}|delete|test/{id}
+  employees
+  checkins
+  worktime
+  sync/roster
+  sync/checkin
+  sync/runs
+
+本地数据烟雾测试（临时 SQLite）
+--------------------------------
+输入：3 人（2 个营销 YG20、1 个车间 YG10），1 天打卡 09:00~19:00
+输出：
+  worktime 7.5 0.5 2 1
+  checkins 1 09:00:00 19:00:00 0.5
+结论：营销过滤、正常工时、加班、明细查询均符合预期。
+
+Token 服务实测
+--------------
+方式：按旧 PHP QwApi::getAccessToken 的逻辑，GET
+  http://crm.yonggubox.com/qywechat/yg_technology_app/getAccessTokens/key/***
+结果：
+  - Token 服务 HTTP 200，返回 token（长度 214）
+  - 白名单加入 120.197.208.122 后，department/list 成功返回 52 个部门
+  - user/list 成功返回 590 人
+结论：token 获取与抓取链路已通，无需填写 Secret。
+
+开发库执行
+----------
+  python main.py upgrade --env=dev
+  python scripts/seed_wecom_token_connection.py
+结果：迁移已应用；连接已写入
+  connection_id=1 name=企微默认（token_url 模式，无需 Secret）
+
+真实同步结果（2026-10-13 ~ 2026-11-11）
+---------------------------------------
+通讯录：
+  部门 52，人员 590；其中在职 335，YG20 营销 160
+打卡：
+  expected_users=335，actual_users=305，errors=[]
+  created=8222，updated=608（共 8830 行）
+工时（默认 person_source=crm，对齐 PHP yg_admin）：
+  regularWorkHours=15597.0
+  overtimeHours=2078.48
+  expectedUserCount=101，userCount=90
+PHP 同区间实测：
+  regularWorkHours=15597.0
+  overtimeHours=2078.48
+结论：正常工时、加班与 PHP 完全一致（差异 0）。
+
+全企微口径（person_source=wecom）：
+  regularWorkHours=18836.0
+  overtimeHours=2548.41
+  expectedUserCount=160，userCount=153
+
+历史 9~10 月补数
+----------------
+同步区间：2026-09-01 ~ 2026-10-31
+  expected_users=335，actual_users=296，errors=[]
+  created=10788，updated=5509
+
+2026-09：
+  打卡行数 7459
+  正常工时 14038.5，加班 1776.36
+  应统计 101，实际 84
+  PHP 同区间：14038.5 / 1776.36（101 / 84）
+
+2026-10：
+  打卡行数 8838
+  正常工时 13649.0，加班 1672.06
+  应统计 101，实际 90
+  PHP 同区间：13649.0 / 1672.06（101 / 90）
+
+结论：9 月、10 月历史数据均可查询，且与 PHP 完全一致。
+
+运营中心主表 TM-01 / TM-02
+--------------------------
+外部文档：docs/运营中心主表指标外部对接说明.md v1.1
+  已补充 TM-01/TM-02 目录、单位、部门编码、示例与验收项。
+
+部门：品类与流量部（企微部门编码 14，含下级 107 品类组 / 34 社媒组 / 35 电商组）
+人员：在职、主部门在部门树内；排除 by 结尾备用账号后 10 人
+
+指标定义：
+  TM-01 正常工作时间（小时），kind=wecom_dept_worktime，value_field=regular
+  TM-02 加班时间（小时），kind=wecom_dept_worktime，value_field=overtime
+
+计算结果：
+  2026-09：TM-01=1078.0，TM-02=19.2
+  2026-10：TM-01=1225.5，TM-02=12.59
+
+指标结果行：
+  level=org：org_code=101，dept_code=null
+  level=dept：org_code=101，dept_code=14，dept_name=品类与流量部
+
+说明：
+  - 包含下级部门；by 备用账号默认排除，避免同一人重复计算。
+  - 指标分类=运营中心-主表指标，月指标，每日 00/07/12/18 点随指标批次重算。
+
+生产库未执行 alembic upgrade：上线时由用户执行。
+
+回滚
+----
+执行 backend/artifacts/wecom_sync/ROLLBACK.ps1
+或手动删除上述新增文件，并还原两个修改文件
+（existing_files.diff 保存了这两个文件的变更）。

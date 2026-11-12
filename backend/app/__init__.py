@@ -61,6 +61,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[Any, Any]:
     await reconcile_retail_order_sync_jobs()
     logger.info("✅ 聚水潭零售订单同步任务 初始化完成")
 
+    from app.modules.erp.wecom.schedule import reconcile_wecom_sync_jobs
+
+    await reconcile_wecom_sync_jobs()
+    logger.info("✅ 企业微信打卡同步任务 初始化完成")
+
     from app.modules.platform.schedule import register_platform_metric_jobs
 
     register_platform_metric_jobs()

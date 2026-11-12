@@ -59,7 +59,15 @@ from app.modules.erp.jushuitan.aggregate import summarize as summarize_outbound_
 from app.modules.erp.kingdee.client import KingdeeBillQueryRequest
 from app.modules.erp.kingdee.model import KingdeeConnectionModel
 from app.modules.erp.kingdee.service import KingdeeService
-from app.modules.masterdata.model import MasterDeptModel, MasterOrgModel, MasterPersonModel, SourcePersonModel
+from app.modules.erp.wecom.calc import aggregate_worktime
+from app.modules.erp.wecom.model import WeComCheckinDayModel
+from app.modules.masterdata.model import (
+    MasterDeptModel,
+    MasterOrgModel,
+    MasterPersonModel,
+    SourceOrgModel,
+    SourcePersonModel,
+)
 from app.modules.metadata.model import (
     MetaSyncJobModel,
     MetaSyncRunModel,
@@ -98,6 +106,8 @@ METRIC_ALLOC_PERSON_KIND = "metric_alloc_person"
 METRIC_DIFF_PERSON_KIND = "metric_diff_person"
 # 业务员工时：CRM 企微打卡日报（/hs/getWorkTime）按员工汇总总劳动时间 = 正常工时 + 加班工时
 CRM_WORKTIME_PERSON_KIND = "crm_worktime_person"
+# 部门工时：直接读本地企微打卡表，按企微部门（含下级）汇总正常工时 / 加班工时
+WECOM_DEPT_WORKTIME_KIND = "wecom_dept_worktime"
 # 指标期初期末平均：自身不取数，值为「上期组成指标合计 × begin_weight + 当期组成指标合计 × end_weight」
 # （如平均库存 =（期初 + 期末）÷ 2；期初取上一期该指标的结果，上期无结果按 0 计入）
 METRIC_BALANCE_AVG_KIND = "metric_balance_avg"
@@ -152,9 +162,10 @@ SUPPORTED_KINDS = {
     CRM_ORDER_PUSH_PERSON_KIND,
     CRM_QUOTE_PERSON_KIND,
     CRM_WORKTIME_PERSON_KIND,
+    WECOM_DEPT_WORKTIME_KIND,
 }
 # 计算时实时取数、不依赖同步批次的取数类型
-LIVE_KINDS = {AR_AGING_KIND}
+LIVE_KINDS = {AR_AGING_KIND, WECOM_DEPT_WORKTIME_KIND}
 # 账龄计提默认区间：账龄天数 ≤ max_days 的档位比例（max_days 为 None 表示兜底档）
 DEFAULT_AGING_BUCKETS = [
     {"max_days": 30, "rate": 0.0},
@@ -1458,6 +1469,115 @@ async def _resolve_dept_id(db, org_id: int | None, dept_code: str) -> int | None
     ).scalars().first()
 
 
+async def _compute_wecom_dept_worktime(
+    db,
+    config: dict,
+    period_type: str,
+    period: str,
+) -> tuple[float, int, str, str, int]:
+    """按企微部门（含下级）汇总本地打卡工时。
+
+    返回 ``(指标值, 打卡行数, 部门编码, 部门名称, 参与人数)``。
+    ``value_field=regular`` 取正常工时，``overtime`` 取加班工时。
+    """
+    department_code = str(config.get("department_code") or "").strip()
+    department_name = str(config.get("department_name") or "").strip()
+    include_children = bool(config.get("include_children", True))
+    suffixes = tuple(
+        str(item).strip().lower()
+        for item in (config.get("exclude_userid_suffixes") or [])
+        if str(item).strip()
+    )
+    value_field = str(config.get("value_field") or "regular").strip().lower()
+
+    orgs = (
+        await db.execute(select(SourceOrgModel).where(SourceOrgModel.source_type == "wecom"))
+    ).scalars().all()
+    by_code = {str(item.source_code): item for item in orgs}
+    root = by_code.get(department_code) if department_code else None
+    if root is None and department_name:
+        matches = [item for item in orgs if str(item.source_name or "").strip() == department_name]
+        if not matches:
+            matches = [item for item in orgs if department_name in str(item.source_name or "")]
+        root = matches[0] if matches else None
+    if root is None:
+        raise ValueError(f"企微部门不存在: {department_code or department_name}")
+
+    subtree = {str(root.source_code)}
+    if include_children:
+        children: dict[str, set[str]] = {}
+        for item in orgs:
+            parent = str(item.source_parent_code or "")
+            if parent:
+                children.setdefault(parent, set()).add(str(item.source_code))
+        stack = list(children.get(str(root.source_code), set()))
+        while stack:
+            code = stack.pop()
+            if code in subtree:
+                continue
+            subtree.add(code)
+            stack.extend(children.get(code, set()))
+
+    people = (
+        await db.execute(
+            select(SourcePersonModel).where(
+                SourcePersonModel.source_type == "wecom",
+                SourcePersonModel.status == 0,
+                SourcePersonModel.is_deleted.is_(False),
+                SourcePersonModel.source_org_code.in_(sorted(subtree)),
+            )
+        )
+    ).scalars().all()
+    users: dict[str, str] = {}
+    for person in people:
+        userid = str(person.source_code or "").strip()
+        if not userid:
+            continue
+        if suffixes and any(userid.lower().endswith(suffix) for suffix in suffixes):
+            continue
+        users[userid] = str(person.source_name or userid)
+
+    start_date = resolve_period_datetime(period).date()
+    end_date = period_end_date(period_type, period)
+    rows = []
+    if users:
+        rows = (
+            await db.execute(
+                select(WeComCheckinDayModel).where(
+                    WeComCheckinDayModel.work_date >= start_date,
+                    WeComCheckinDayModel.work_date <= end_date,
+                    WeComCheckinDayModel.userid.in_(sorted(users)),
+                )
+            )
+        ).scalars().all()
+    parsed = [
+        {
+            "userid": row.userid,
+            "name": row.name,
+            "work_date": row.work_date,
+            "earliest_sec": row.earliest_sec,
+            "latest_sec": row.latest_sec,
+            "regular_work_sec": row.regular_work_sec,
+            "off_work_sec": row.off_work_sec,
+            "cross_day": row.cross_day,
+        }
+        for row in rows
+    ]
+    summary = aggregate_worktime(parsed, users)
+    total = (
+        summary["overtime"]["hours"]
+        if value_field == "overtime"
+        else summary["regular"]["hours"]
+    )
+    return (
+        float(total),
+        len(parsed),
+        str(root.source_code),
+        str(root.source_name or ""),
+        len(users),
+    )
+
+
 # 进程内缓存：同一批次的行数据在多个指标计算间复用（单批次几 MB，反复解析是主要耗时）
 _RUN_PAYLOAD_CACHE: dict[int, dict] = {}
 _RUN_PAYLOAD_CACHE_LIMIT = 24
@@ -1620,6 +1740,9 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
         connection_id: int | None = None
         source_variables: list = []
         if not kind:
+            pass
+        elif kind == WECOM_DEPT_WORKTIME_KIND:
+            # 本地企微打卡表计算：没有外部来源对象/同步任务
             pass
         elif kind in (
             METRIC_SUM_KIND,
@@ -3118,6 +3241,44 @@ async def _execute_metric_calc_inner(
                 "matched_rows": matched_rows,
                 "departments": 0,
                 "components": component_details,
+            }
+        elif kind == WECOM_DEPT_WORKTIME_KIND:
+            total, matched_rows, dept_code, dept_name, members = await _compute_wecom_dept_worktime(
+                db, config, period_type, period
+            )
+            org_code = str(config.get("org_code") or "101")
+            org_id = await _resolve_org_id(db, org_code)
+            base_values = {
+                "metric_id": metric_id,
+                "run_id": run.id,
+                "period_type": period_type,
+                "period_value": period,
+                "org_id": org_id,
+                "value": total,
+                "version": context["metric_version"],
+                "calc_version": calc_version,
+                "batch_id": batch_id,
+                "filter_signature": signature,
+                "calc_time": datetime.now(UTC),
+            }
+            # 组织合计行（level=org）
+            db.add(MetricValueModel(**base_values))
+            # 部门明细行（level=dept），dept_code 写企微部门编码
+            db.add(
+                MetricValueModel(
+                    **base_values,
+                    dept_code=dept_code,
+                    dept_name=dept_name,
+                )
+            )
+            results[""] = {
+                "org_id": org_id,
+                "total": total,
+                "matched_rows": matched_rows,
+                "departments": 1,
+                "members": members,
+                "dept_code": dept_code,
+                "dept_name": dept_name,
             }
         if kind in CRM_PERSON_KINDS:
             # 业务员明细：写「公司合计行（dept_code 为空）+ 每业务员一行（dept_code = 业务员编码）」；

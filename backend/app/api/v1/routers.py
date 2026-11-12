@@ -7,6 +7,7 @@ from app.modules.common.file.controller import FileRouter
 from app.modules.customer.controller import CustomerRouter
 from app.modules.erp.jushuitan.controller import JushuitanRouter
 from app.modules.erp.kingdee.controller import KingdeeRouter
+from app.modules.erp.wecom.controller import WeComRouter
 from app.modules.generator.gencode.controller import GenRouter
 from app.modules.mapping.controller import SystemMappingRouter
 from app.modules.masterdata.controller import MasterMappingRouter, MasterOrgRouter, MasterPersonRouter, MasterSourceRouter
@@ -80,7 +81,7 @@ DOMAIN_CONTROLLERS: dict[str, list[APIRouter]] = {
     ],
     "/ai": [ChatRouter],
     "/generator": [GenRouter],
-    "/erp": [KingdeeRouter, JushuitanRouter],
+    "/erp": [KingdeeRouter, JushuitanRouter, WeComRouter],
     "/masterdata": [
         MasterOrgRouter,
         MasterPersonRouter,
