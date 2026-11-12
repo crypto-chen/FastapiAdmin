@@ -87,7 +87,7 @@ class InitializeData:
             logger.info("✅ 数据库迁移已应用（alembic upgrade heads）")
 
         # dev 环境：模型有变更时自动生成迁移文件（无变更时 env.py 的 process_revision_directives 会拦截，不产出文件）
-        if settings.ENVIRONMENT == EnvironmentEnum.DEV:
+        if settings.ENVIRONMENT == EnvironmentEnum.DEV and settings.AUTO_MIGRATION_ENABLED:
             autogen = await asyncio.to_thread(InitializeData.__autogen_migration, alembic_cfg)
             if autogen:
                 # 生成了新的迁移文件，应用之
@@ -96,6 +96,8 @@ class InitializeData:
             elif autogen is False:
                 # 仅"无模型变更"才打此日志；失败/拦截（None）已由 warning/error 说明，不再输出易误导的 info
                 logger.info("✅ dev 环境自动迁移检查完成（模型无变更）")
+        elif settings.ENVIRONMENT == EnvironmentEnum.DEV:
+            logger.info("⏭️ dev 自动迁移已关闭（AUTO_MIGRATION_ENABLED=False）")
 
     @staticmethod
     def __merge_heads_if_needed(alembic_cfg) -> None:

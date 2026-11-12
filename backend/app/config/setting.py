@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # ******************* 项目环境 ****************** #
     # ================================================= #
     ENVIRONMENT: EnvironmentEnum = EnvironmentEnum.DEV
+    # dev 启动时是否自动对比模型并生成/应用迁移；服务器 dev 建议 False，
+    # 避免每次启动 reflection + autogenerate 很慢，也避免生成服务器本地迁移分支
+    AUTO_MIGRATION_ENABLED: bool = True
 
     # ================================================= #
     # ******************* 服务器配置 ****************** #
