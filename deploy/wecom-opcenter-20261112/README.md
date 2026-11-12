@@ -29,9 +29,11 @@ python deploy/wecom-opcenter-20261112/update.py --apply --env dev --service fast
 1. `git fetch origin master` + `git merge --ff-only origin/master`
 2. `python main.py upgrade --env=dev`（应用 `wecomsync01`、`wecomtoken01`）
 3. 写入/更新企微连接（仅当提供 `WECOM_TOKEN_URL` 或 `--token-url`）
-4. `python scripts/seed_opcenter_worktime_metrics.py`
-5. `python scripts/recalc_metrics_batch.py --period 2026-09/10/11`
-6. `systemctl restart fastapiadmin`（指定 `--service` 时）
+4. `python scripts/wecom_backfill.py --skip-checkin`（同步通讯录）
+5. `python scripts/wecom_backfill.py --skip-roster --start 2026-09-01 --end <昨天>`（同步打卡）
+6. `python scripts/seed_opcenter_worktime_metrics.py`
+7. `python scripts/recalc_metrics_batch.py --period 2026-09/10/11`
+8. 重启服务（指定 `--service` 时）
 
 ## 企微连接
 
@@ -46,6 +48,15 @@ python deploy/wecom-opcenter-20261112/update.py --apply --env dev --skip-token -
 ```bash
 export WECOM_TOKEN_URL='http://crm.yonggubox.com/qywechat/yg_technology_app/getAccessTokens/key/...'
 python deploy/wecom-opcenter-20261112/update.py --apply --env dev --service fastapiadmin
+```
+
+注意：第 4 步会真实拉取企微通讯录和打卡；如果数据库里没有企微连接且没有设置
+`WECOM_TOKEN_URL`，脚本会在通讯录同步处失败，并提示 `没有启用的企业微信连接`。
+
+只重新计算、不重新同步时：
+
+```bash
+python deploy/wecom-opcenter-20261112/update.py --apply --env dev --skip-sync --skip-token
 ```
 
 ## 校验

@@ -163,6 +163,7 @@ async def main() -> None:
             log_handle.write(line + "\n")
             log_handle.flush()
 
+    failed = 0
     for period in periods:
         for metric_id, code in plan:
             started = time.time()
@@ -174,12 +175,15 @@ async def main() -> None:
                 summary = await execute_metric_calc(metric_id=metric_id, period_value=period)
                 emit(f"{period} {code} -> {summary['total']} ({time.time() - started:.1f}s)")
             except Exception as e:  # noqa: BLE001
+                failed += 1
                 emit(f"{period} {code} -> ERROR {type(e).__name__}: {e}")
         emit(f"=== {period} 完成 ===")
 
     if log_handle:
         log_handle.close()
     await async_engine.dispose()
+    if failed:
+        raise SystemExit(f"{failed} 个指标计算失败")
 
 
 if __name__ == "__main__":

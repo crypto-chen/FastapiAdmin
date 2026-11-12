@@ -26,7 +26,7 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -106,6 +106,7 @@ def main() -> None:
     parser.add_argument("--env", default="dev", help="后端环境，默认 dev")
     parser.add_argument("--skip-pull", action="store_true", help="跳过 git fetch/merge")
     parser.add_argument("--skip-token", action="store_true", help="跳过企微连接写入")
+    parser.add_argument("--skip-sync", action="store_true", help="跳过企微通讯录/打卡同步")
     parser.add_argument("--skip-recalc", action="store_true", help="跳过指标重算")
     parser.add_argument(
         "--token-url",
@@ -128,6 +129,7 @@ def main() -> None:
     log(f"项目根目录：{ROOT}")
     log(f"模式：{'执行' if args.apply else '预演'}，环境：{args.env}")
     backend_env = {"ENVIRONMENT": args.env}
+    periods = args.period or DEFAULT_PERIODS
 
     if not args.skip_pull:
         sync_code(args.apply)
@@ -158,6 +160,34 @@ def main() -> None:
             "将沿用数据库中已有的企微连接"
         )
 
+    if args.skip_sync:
+        log("跳过企微通讯录/打卡同步（--skip-sync）")
+    else:
+        run(
+            [python_bin(), "scripts/wecom_backfill.py", "--skip-checkin"],
+            BACKEND,
+            args.apply,
+            backend_env,
+            title="同步企微通讯录（部门 + 人员）",
+        )
+        start_date = f"{min(periods)}-01"
+        end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        run(
+            [
+                python_bin(),
+                "scripts/wecom_backfill.py",
+                "--skip-roster",
+                "--start",
+                start_date,
+                "--end",
+                end_date,
+            ],
+            BACKEND,
+            args.apply,
+            backend_env,
+            title=f"同步企微打卡（{start_date} ~ {end_date}）",
+        )
+
     run(
         [python_bin(), "scripts/seed_opcenter_worktime_metrics.py"],
         BACKEND,
@@ -167,7 +197,6 @@ def main() -> None:
     )
 
     if not args.skip_recalc:
-        periods = args.period or DEFAULT_PERIODS
         cmd = [
             python_bin(),
             "scripts/recalc_metrics_batch.py",
