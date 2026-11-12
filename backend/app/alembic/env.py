@@ -60,6 +60,9 @@ def run_migrations_online() -> None:
     def do_run_migrations(connection: Connection) -> None:
         if connection.dialect.name == "mysql":
             connection.execute(text("SET FOREIGN_KEY_CHECKS=0"))
+            # DDL 等元数据锁默认可能等一年（lock_wait_timeout=31536000）。
+            # 迁移场景改为 60 秒失败，避免更新脚本无限卡住。
+            connection.execute(text("SET SESSION lock_wait_timeout=60"))
 
         def process_revision_directives(
             context: MigrationContext,
