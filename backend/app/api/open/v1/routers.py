@@ -6,6 +6,7 @@
 from fastapi import APIRouter
 
 from app.modules.customer.open_controller import OpenCustomerRouter
+from app.modules.erp.wecom.open_controller import OpenWorktimeRouter
 from app.modules.mes.open_controller import OpenMesOrderRouter
 from app.modules.openapi.open_controller import OpenAuthRouter, OpenMetricRouter, OpenOrgRouter
 from app.modules.order.open_controller import OpenOrderRouter
@@ -18,6 +19,7 @@ for controller in (
     OpenAuthRouter,
     OpenMetricRouter,
     OpenOrgRouter,
+    OpenWorktimeRouter,
     OpenOrderRouter,
     OpenMesOrderRouter,
     OpenCustomerRouter,

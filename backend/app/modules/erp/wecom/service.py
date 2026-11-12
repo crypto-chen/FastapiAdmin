@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import json
 from collections.abc import Iterable
 from datetime import UTC, date, datetime
@@ -666,6 +667,171 @@ async def calc_worktime(
         "personSource": actual_source,
     }
     return WeComWorktimeResultSchema(**result)
+
+
+def recent_month_periods(count: int = 12) -> list[str]:
+    """最近 N 个月（含当前月），升序返回 YYYY-MM。"""
+    today = date.today()
+    year, month = today.year, today.month
+    periods: list[str] = []
+    for _ in range(max(1, count)):
+        periods.append(f"{year:04d}-{month:02d}")
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+    return sorted(periods)
+
+
+def _month_bounds(period: str) -> tuple[date, date]:
+    try:
+        first = datetime.strptime(period, "%Y-%m")
+    except ValueError as exc:
+        raise CustomException(msg=f"月份格式应为 YYYY-MM: {period}") from exc
+    start = first.date().replace(day=1)
+    end = date(first.year, first.month, calendar.monthrange(first.year, first.month)[1])
+    return start, end
+
+
+async def query_monthly_worktime(
+    db: AsyncSession,
+    periods: list[str],
+    userids: list[str] | None = None,
+    include_zero: bool = False,
+    exclude_backup_accounts: bool = True,
+) -> dict[str, Any]:
+    """按「员工工号 × 月份」返回正常工时与加班工时。
+
+    - ``userids=None``：取企微在职且工号以 YG 开头的全部人员；
+    - ``userids`` 显式传入：按传入工号查询（可含非 YG 工号）；
+    - 默认排除 ``by`` 结尾的备用账号，避免同一人重复计算；
+    - ``include_zero=True`` 时，无打卡记录的员工/月份补 0 行。
+    """
+    normalized_periods = sorted({str(item).strip() for item in periods if str(item).strip()})
+    if not normalized_periods:
+        raise CustomException(msg="请至少传入一个月份 YYYY-MM")
+    if len(normalized_periods) > 36:
+        raise CustomException(msg="单次最多查询 36 个月")
+
+    explicit = userids is not None
+    ids = sorted({str(item).strip() for item in (userids or []) if str(item).strip()})
+    if exclude_backup_accounts:
+        ids = [item for item in ids if not item.lower().endswith("by")]
+
+    users: dict[str, str] = {}
+    if explicit:
+        if not ids:
+            return {
+                "periods": normalized_periods,
+                "items": [],
+                "summary": {
+                    "periodCount": len(normalized_periods),
+                    "userCount": 0,
+                    "rowCount": 0,
+                    "totalRegularHours": 0.0,
+                    "totalOvertimeHours": 0.0,
+                },
+                "warning": {"code": "NO_USER", "message": "没有有效的工号"},
+            }
+        users = {uid: uid for uid in ids}
+        roster_rows = (
+            await db.execute(
+                select(SourcePersonModel.source_code, SourcePersonModel.source_name).where(
+                    SourcePersonModel.source_type == WECOM_SOURCE_TYPE,
+                    SourcePersonModel.source_code.in_(ids),
+                )
+            )
+        ).all()
+        users.update(
+            {
+                str(userid): str(name or userid)
+                for userid, name in roster_rows
+                if str(userid).strip()
+            }
+        )
+    else:
+        stmt = select(SourcePersonModel.source_code, SourcePersonModel.source_name).where(
+            SourcePersonModel.source_type == WECOM_SOURCE_TYPE,
+            SourcePersonModel.status == 0,
+            SourcePersonModel.is_deleted.is_(False),
+            SourcePersonModel.source_code.like("YG%"),
+        )
+        if exclude_backup_accounts:
+            stmt = stmt.where(SourcePersonModel.source_code.notlike("%by"))
+        users = {
+            str(userid): str(name or userid)
+            for userid, name in (await db.execute(stmt)).all()
+            if str(userid).strip()
+        }
+
+    warning: dict[str, Any] | None = None
+    if not users:
+        warning = {
+            "code": "ROSTER_EMPTY",
+            "message": "企微通讯录未同步，或没有在职 YG 工号人员",
+        }
+
+    items: list[dict[str, Any]] = []
+    if users:
+        userid_list = sorted(users)
+        for period in normalized_periods:
+            start_date, end_date = _month_bounds(period)
+            rows = (
+                await db.execute(
+                    select(WeComCheckinDayModel).where(
+                        WeComCheckinDayModel.work_date >= start_date,
+                        WeComCheckinDayModel.work_date <= end_date,
+                        WeComCheckinDayModel.userid.in_(userid_list),
+                    )
+                )
+            ).scalars().all()
+            parsed = [
+                {
+                    "userid": row.userid,
+                    "name": row.name,
+                    "work_date": row.work_date,
+                    "earliest_sec": row.earliest_sec,
+                    "latest_sec": row.latest_sec,
+                    "regular_work_sec": row.regular_work_sec,
+                    "off_work_sec": row.off_work_sec,
+                    "cross_day": row.cross_day,
+                }
+                for row in rows
+            ]
+            summary = aggregate_worktime(parsed, users)
+            by_user = {str(item["userid"]): item for item in summary["byUser"]}
+            for userid in userid_list:
+                bucket = by_user.get(userid)
+                if bucket is None and not include_zero:
+                    continue
+                items.append(
+                    {
+                        "period": period,
+                        "userid": userid,
+                        "name": users.get(userid) or (bucket or {}).get("name") or userid,
+                        "workDays": int((bucket or {}).get("workDays") or 0),
+                        "regularHours": float((bucket or {}).get("regularHours") or 0),
+                        "overtimeHours": float((bucket or {}).get("overtimeHours") or 0),
+                        "regularSec": int((bucket or {}).get("regularSec") or 0),
+                        "overtimeSec": int((bucket or {}).get("overtimeSec") or 0),
+                        "crossDays": int((bucket or {}).get("crossDays") or 0),
+                    }
+                )
+
+    total_regular = round(sum(item["regularHours"] for item in items), 2)
+    total_overtime = round(sum(item["overtimeHours"] for item in items), 2)
+    return {
+        "periods": normalized_periods,
+        "items": items,
+        "summary": {
+            "periodCount": len(normalized_periods),
+            "userCount": len(users),
+            "rowCount": len(items),
+            "totalRegularHours": total_regular,
+            "totalOvertimeHours": total_overtime,
+        },
+        "warning": warning,
+    }
 
 
 async def query_employees(

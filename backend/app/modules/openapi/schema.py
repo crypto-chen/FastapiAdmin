@@ -185,6 +185,76 @@ class OpenMetricQuerySchema(BaseModel):
     include_meta: bool = Field(default=True, description="是否返回指标口径信息")
 
 
+class OpenWorktimeQueryBase(BaseModel):
+    """企微人员月度工时查询公共参数。"""
+
+    periods: list[str] | None = Field(
+        default=None,
+        max_length=36,
+        description="月份列表 YYYY-MM，最多 36 个",
+    )
+    userids: list[str] | None = Field(
+        default=None,
+        max_length=500,
+        description="企微工号（YG 开头）列表，最多 500 个",
+    )
+    include_zero: bool = Field(default=False, description="无打卡记录的员工/月份是否补 0 行")
+    exclude_backup_accounts: bool = Field(
+        default=True,
+        description="是否排除 by 结尾的备用账号（默认 true）",
+    )
+
+    @field_validator("periods")
+    @classmethod
+    def validate_periods(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned: list[str] = []
+        for item in value:
+            text = str(item).strip()
+            if len(text) != 7 or text[4] != "-":
+                raise ValueError(f"月份格式应为 YYYY-MM: {text}")
+            try:
+                datetime.strptime(text, "%Y-%m")
+            except ValueError as exc:
+                raise ValueError(f"月份格式应为 YYYY-MM: {text}") from exc
+            if text not in cleaned:
+                cleaned.append(text)
+        if not cleaned:
+            raise ValueError("至少传入一个月份")
+        return sorted(cleaned)
+
+    @field_validator("userids")
+    @classmethod
+    def validate_userids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned: list[str] = []
+        for item in value:
+            text = str(item).strip()
+            if not text:
+                continue
+            if len(text) > 64:
+                raise ValueError(f"工号长度不能超过 64: {text}")
+            if text not in cleaned:
+                cleaned.append(text)
+        if not cleaned:
+            raise ValueError("至少传入一个工号")
+        return cleaned
+
+
+class OpenWorktimeByPeriodSchema(OpenWorktimeQueryBase):
+    """按年月查：periods 必填，userids 可选（不传=全部在职 YG 人员）。"""
+
+    periods: list[str] = Field(..., min_length=1, max_length=36, description="月份列表 YYYY-MM")
+
+
+class OpenWorktimeByUserSchema(OpenWorktimeQueryBase):
+    """按工号查：userids 必填，periods 可选（不传=最近 12 个月）。"""
+
+    userids: list[str] = Field(..., min_length=1, max_length=500, description="企微工号列表")
+
+
 class OpenMetricValueItemSchema(BaseModel):
     metric_code: str = Field(..., description="指标编码")
     metric_name: str | None = Field(default=None, description="指标名称")

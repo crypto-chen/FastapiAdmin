@@ -410,3 +410,103 @@ async def test_wecom_dept_worktime_excludes_by_accounts_and_includes_children(tm
 
     await engine.dispose()
 
+
+@pytest.mark.asyncio
+async def test_query_monthly_worktime_by_period_and_user(tmp_path):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.core.base_model import MappedBase
+    from app.modules.erp.wecom.model import WeComCheckinDayModel
+    from app.modules.erp.wecom.service import query_monthly_worktime
+    from app.modules.masterdata.model import SourceOrgModel, SourcePersonModel
+    from app.modules.system.dept.model import DeptModel
+    from app.modules.system.user.model import UserModel
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'monthly.db'}")
+    tables = [
+        DeptModel.__table__,
+        UserModel.__table__,
+        SourceOrgModel.__table__,
+        SourcePersonModel.__table__,
+        WeComCheckinDayModel.__table__,
+    ]
+    async with engine.begin() as conn:
+        await conn.run_sync(MappedBase.metadata.create_all, tables=tables)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with factory() as db:
+        db.add_all(
+            [
+                SourcePersonModel(source_type="wecom", source_code="YG20001", source_name="甲", status=0),
+                SourcePersonModel(source_type="wecom", source_code="YG20002", source_name="乙", status=0),
+                SourcePersonModel(source_type="wecom", source_code="YG20002by", source_name="乙BY", status=0),
+                WeComCheckinDayModel(
+                    userid="YG20001",
+                    name="甲",
+                    work_date=date(2026, 9, 1),
+                    earliest_sec=32400,
+                    latest_sec=68400,
+                    regular_work_sec=32400,
+                    off_work_sec=64800,
+                    cross_day=False,
+                ),
+                WeComCheckinDayModel(
+                    userid="YG20002",
+                    name="乙",
+                    work_date=date(2026, 9, 1),
+                    earliest_sec=32400,
+                    latest_sec=64800,
+                    regular_work_sec=32400,
+                    off_work_sec=64800,
+                    cross_day=False,
+                ),
+                WeComCheckinDayModel(
+                    userid="YG20002by",
+                    name="乙BY",
+                    work_date=date(2026, 9, 1),
+                    earliest_sec=32400,
+                    latest_sec=68400,
+                    regular_work_sec=32400,
+                    off_work_sec=64800,
+                    cross_day=False,
+                ),
+            ]
+        )
+        await db.commit()
+
+        result = await query_monthly_worktime(
+            db,
+            periods=["2026-09", "2026-10"],
+            include_zero=True,
+            exclude_backup_accounts=True,
+        )
+        assert result["summary"]["userCount"] == 2  # by 账号被排除
+        assert result["summary"]["rowCount"] == 4  # 2 人 × 2 个月
+        sep = {item["userid"]: item for item in result["items"] if item["period"] == "2026-09"}
+        oct_ = {item["userid"]: item for item in result["items"] if item["period"] == "2026-10"}
+        assert sep["YG20001"]["regularHours"] == 7.5
+        assert sep["YG20001"]["overtimeHours"] == 0.5
+        assert sep["YG20002"]["overtimeHours"] == 0.0
+        assert oct_["YG20001"]["regularHours"] == 0.0
+
+        explicit = await query_monthly_worktime(
+            db,
+            periods=["2026-09"],
+            userids=["YG20002by"],
+            exclude_backup_accounts=False,
+        )
+        assert explicit["summary"]["rowCount"] == 1
+        assert explicit["items"][0]["userid"] == "YG20002by"
+        assert explicit["items"][0]["overtimeHours"] == 0.5
+
+        zero = await query_monthly_worktime(
+            db,
+            periods=["2026-10"],
+            userids=["NO_SUCH_USER"],
+            include_zero=True,
+        )
+        assert zero["items"][0]["regularHours"] == 0.0
+        assert zero["items"][0]["overtimeHours"] == 0.0
+
+    await engine.dispose()
+
