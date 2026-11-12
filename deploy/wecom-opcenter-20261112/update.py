@@ -106,7 +106,11 @@ def main() -> None:
     parser.add_argument("--env", default="dev", help="后端环境，默认 dev")
     parser.add_argument("--skip-pull", action="store_true", help="跳过 git fetch/merge")
     parser.add_argument("--skip-token", action="store_true", help="跳过企微连接写入")
-    parser.add_argument("--skip-sync", action="store_true", help="跳过企微通讯录/打卡同步")
+    parser.add_argument(
+        "--skip-sync",
+        action="store_true",
+        help="跳过企微通讯录/打卡同步",
+    )
     parser.add_argument("--skip-recalc", action="store_true", help="跳过指标重算")
     parser.add_argument(
         "--token-url",
