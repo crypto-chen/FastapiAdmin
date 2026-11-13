@@ -62,7 +62,8 @@ def test_department_filter_excludes_rows_without_department_prefix() -> None:
 
 def test_metric_definitions_cover_all_costs() -> None:
     codes = [item["code"] for item in METRIC_DEFS]
-    assert codes == [f"OPC-COST-{index:02d}" for index in range(1, 18)]
+    expected = [f"OPC-COST-{index:02d}" for index in range(1, 18)] + ["OPC-FIX-03", "OPC-FIX-04"]
+    assert codes == expected
     assert len(codes) == len(set(codes))
 
     by_code = {item["code"]: item for item in METRIC_DEFS}
@@ -72,6 +73,8 @@ def test_metric_definitions_cover_all_costs() -> None:
     assert by_code["OPC-COST-10"]["detail_name_contains"] == ["售后返工费", "售后运输费"]
     assert by_code["OPC-COST-11"]["detail_name_contains"] == ["电费"]
     assert by_code["OPC-COST-13"]["detail_name_contains"] == ["维修费"]
+    assert by_code["OPC-FIX-03"]["detail_name_contains"] == ["场地租金", "物业管理费", "宿舍租金"]
+    assert by_code["OPC-FIX-04"]["detail_name_contains"] == ["折旧费用"]
     assert all("detail_name_contains_by_period" not in item for item in METRIC_DEFS)
     assert all(item["detail_name_contains"] for item in METRIC_DEFS)
     assert BASE_MEASURES["department_codes"] == DEPARTMENT_CODES

@@ -144,6 +144,16 @@ METRIC_DEFS = [
         "name": "运营中心咨询服务费",
         "detail_name_contains": ["咨询服务费"],
     },
+    {
+        "code": "OPC-FIX-03",
+        "name": "运营中心租金及物业管理费",
+        "detail_name_contains": ["场地租金", "物业管理费", "宿舍租金"],
+    },
+    {
+        "code": "OPC-FIX-04",
+        "name": "运营中心设备折旧费用",
+        "detail_name_contains": ["折旧费用"],
+    },
 ]
 
 

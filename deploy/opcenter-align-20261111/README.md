@@ -4,7 +4,7 @@
 
 1. 部门过滤由名称改为编码：`BM000008 / BM000021 / BM000023`
    （ERP 中 BM000008 现名为「品类与流量部」，历史名「在线营销部」；按名称过滤会漏计）。
-2. 17 项指标按最新口径表调整关键字：
+2. 19 项费用指标（OPC-COST-01~17 + OPC-FIX-03~04）按最新口径表调整关键字：
    - 办公费：+ `FLB辅/劳保`
    - 国内快递费：只留 `内贸快递`（去掉售后运输费）
    - 售后费用：`售后返工费 + 售后运输费`（去掉售后其它费用/赔偿费，售后运输费不再按期间切换）
@@ -18,7 +18,7 @@
 | --- | --- |
 | `backend/app/modules/metric/engine.py` | `extract_account_balance` 新增 `department_codes`（维度编码首段精确匹配） |
 | `backend/scripts/seed_opcenter_metrics.py` | 部门编码 + 新口径关键字 |
-| `backend/tests/test_opcenter_dept_filter.py` | 编码过滤、改名不影响、17 项定义断言 |
+| `backend/tests/test_opcenter_dept_filter.py` | 编码过滤、改名不影响、19 项费用指标定义断言 |
 
 ## 服务器 dev 一键更新（推荐）
 
@@ -56,7 +56,7 @@ python scripts/recalc_metrics_batch.py --code-file scripts/metric_groups/opcente
 重算（指标页「重算」或接口批量重算）：
 
 ```bash
-python -c "import asyncio; from app.modules.metric.batch import run_metric_batch; asyncio.run(run_metric_batch(period_value='2026-10', codes=[f'OPC-COST-{i:02d}' for i in range(1,18)]))"
+python scripts/recalc_metrics_batch.py --code-file scripts/metric_groups/opcenter_cost.txt --period 2026-10
 ```
 
 ## 校验

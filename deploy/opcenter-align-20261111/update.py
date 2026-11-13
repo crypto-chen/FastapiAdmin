@@ -2,7 +2,7 @@
 
 改动：
 - 指标中心新增「运营中心指标 → 运营中心主表指标」菜单；
-- 新增 17 个指标 OPC-COST-01 ~ 17；
+- 新增 19 个费用指标 OPC-COST-01 ~ 17 + OPC-FIX-03 ~ 04；
 - 取数：科目余额表 6601，核算维度部门按编码 BM000008 / BM000021 / BM000023 过滤；
 - 费用项目关键字按 2026-11-11 新口径表。
 
@@ -151,7 +151,7 @@ def main() -> None:
         BACKEND,
         args.apply,
         backend_env,
-        title="写入 17 个指标定义（按部门编码）",
+        title="写入 19 个费用指标定义（按部门编码）",
     )
     run(
         [python_bin(), "scripts/seed_opcenter_menu.py"],
