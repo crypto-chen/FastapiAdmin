@@ -31,7 +31,16 @@ CODE_B = "pytest_matrix_b"
 CODE_LONG_DESC = "pytest_matrix_long_desc"
 PERIOD = "2026-08"
 
-_TABLES = ("master_org", "master_dept", "metric_def", "metric_run", "metric_value", "sys_user")
+_TABLES = (
+    "master_org",
+    "master_dept",
+    "metric_def",
+    "metric_def_version",
+    "metric_period_version",
+    "metric_run",
+    "metric_value",
+    "sys_user",
+)
 
 
 @pytest.fixture(scope="module", autouse=True)

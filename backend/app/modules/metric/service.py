@@ -1,4 +1,5 @@
 import re
+from datetime import date, timedelta
 
 from sqlalchemy import and_, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,8 +11,8 @@ from app.utils.common_util import search_to_dict
 
 from .batch import run_metric_batch
 from .crud import MetricDefCRUD, MetricValueCRUD
-from .engine import execute_metric_calc
-from .model import MetricDefModel, MetricValueModel
+from .engine import current_period_value, execute_metric_calc
+from .model import MetricDefModel, MetricDefVersionModel, MetricValueModel
 from .schema import (
     MetricBatchResultSchema,
     MetricBatchRunRequestSchema,
@@ -27,6 +28,11 @@ from .schema import (
     MetricMatrixRowSchema,
     MetricValueOutSchema,
     MetricValueQueryParam,
+)
+from .versions import (
+    active_def_versions,
+    next_period_start_date,
+    snapshot_from_metric,
 )
 
 
@@ -67,14 +73,93 @@ class MetricService:
             if await self.db.get(StandardEntityModel, data.source_entity_id) is None:
                 raise CustomException(msg="来源标准实体不存在")
         obj = await MetricDefCRUD(self.auth, self.db).create(data=data)
+        snapshot = snapshot_from_metric(obj)
+        snapshot.pop("metric_id", None)
+        snapshot.pop("version", None)
+        self.db.add(
+            MetricDefVersionModel(
+                metric_id=obj.id,
+                version=1,
+                effective_from=date(1970, 1, 1),
+                **snapshot,
+            )
+        )
+        await self.db.flush()
         return await self.detail(obj.id)
 
     async def update(self, id: int, data: MetricDefUpdateSchema) -> MetricDefOutSchema:
-        await MetricDefCRUD(self.auth, self.db).get_or_404(id=id, msg="更新失败，该指标不存在")
+        obj = await MetricDefCRUD(self.auth, self.db).get_or_404(id=id, msg="更新失败，该指标不存在")
         exist = await MetricDefCRUD(self.auth, self.db).get(code=data.code)
         if exist and exist.id != id:
             raise CustomException(msg="更新失败，指标编码已存在")
-        await MetricDefCRUD(self.auth, self.db).update(id=id, data=data)
+
+        payload = data.model_dump(exclude_unset=True, exclude_none=True, exclude={"effective_from"})
+        rule_fields = {"formula", "dimensions", "measures", "period_type", "source_entity_id"}
+        rule_changed = any(field in payload and payload[field] != getattr(obj, field) for field in rule_fields)
+        if not rule_changed:
+            # 只改名称/备注/分类等展示字段：不产生新口径版本
+            await MetricDefCRUD(self.auth, self.db).update(id=id, data=payload)
+            return await self.detail(id)
+
+        # 口径变更：先把存量指标的当前值补成 v1 快照，再发布新版本
+        existing_max = (
+            await self.db.execute(
+                select(func.max(MetricDefVersionModel.version)).where(
+                    MetricDefVersionModel.metric_id == id
+                )
+            )
+        ).scalars().first()
+        if existing_max is None:
+            legacy = snapshot_from_metric(obj)
+            legacy.pop("metric_id", None)
+            legacy.pop("version", None)
+            self.db.add(
+                MetricDefVersionModel(
+                    metric_id=id,
+                    version=int(obj.version or 1),
+                    effective_from=date(1970, 1, 1),
+                    **legacy,
+                )
+            )
+            existing_max = int(obj.version or 1)
+
+        new_version = max(int(existing_max), int(obj.version or 1)) + 1
+        effective_from = data.effective_from or next_period_start_date(
+            obj.period_type or "month", current_period_value(obj.period_type or "month")
+        )
+
+        previous = (
+            await self.db.execute(
+                select(MetricDefVersionModel)
+                .where(
+                    MetricDefVersionModel.metric_id == id,
+                    MetricDefVersionModel.version < new_version,
+                )
+                .order_by(MetricDefVersionModel.version.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+        if previous is not None:
+            previous.effective_to = effective_from - timedelta(days=1)
+
+        merged = snapshot_from_metric(obj)
+        merged.pop("metric_id", None)
+        merged.pop("version", None)
+        for key, value in payload.items():
+            if key in merged:
+                merged[key] = value
+        self.db.add(
+            MetricDefVersionModel(
+                metric_id=id,
+                version=new_version,
+                effective_from=effective_from,
+                effective_to=None,
+                **merged,
+            )
+        )
+        await MetricDefCRUD(self.auth, self.db).update(
+            id=id, data={**payload, "version": new_version}
+        )
         return await self.detail(id)
 
     async def delete(self, ids: list[int]) -> None:
@@ -96,25 +181,49 @@ class MetricService:
                 conditions.append(MetricValueModel.period_type == search.period_type)
             if search.period_value:
                 conditions.append(MetricValueModel.period_value == search.period_value)
-            versions = (
-                await self.db.execute(
-                    select(MetricValueModel.period_value, func.max(MetricValueModel.calc_version))
-                    .where(*conditions)
-                    .group_by(MetricValueModel.period_value)
-                )
-            ).all()
+            period_values = [search.period_value] if search.period_value else list(
+                (
+                    await self.db.execute(
+                        select(MetricValueModel.period_value).where(*conditions).distinct()
+                    )
+                ).scalars().all()
+            )
+            versions: list[tuple[str, int, int]] = []
+            for period_value in period_values:
+                active = (
+                    await active_def_versions(
+                        self.db,
+                        [search.metric_id],
+                        period_value,
+                        search.period_type or "month",
+                    )
+                ).get(search.metric_id, 1)
+                latest = (
+                    await self.db.execute(
+                        select(func.max(MetricValueModel.calc_version)).where(
+                            *conditions,
+                            MetricValueModel.period_value == period_value,
+                            MetricValueModel.version == active,
+                        )
+                    )
+                ).scalars().first()
+                if latest is not None:
+                    versions.append((period_value, active, int(latest)))
             if versions:
                 extra_conditions.append(
                     or_(
                         *[
                             and_(
                                 MetricValueModel.period_value == period_value,
+                                MetricValueModel.version == version,
                                 MetricValueModel.calc_version == int(calc_version),
                             )
-                            for period_value, calc_version in versions
+                            for period_value, version, calc_version in versions
                         ]
                     )
                 )
+            else:
+                extra_conditions.append(false())
 
         search_dict = search_to_dict(search) or {}
         # level 由服务层翻译成「核算维度编码」的 IS NULL / IS NOT NULL 条件：
@@ -169,7 +278,9 @@ class MetricService:
             # 业务员行的 dept_id 指向 master_person，不能拿 master_dept 的名称覆盖
             if getattr(item, "person_code", None):
                 continue
-            if item.dept_id in dept_names:
+            # 历史结果保留计算当时的部门名称，不用当前主数据覆盖（部门改名/合并后
+            # 旧月份仍应显示原名称）；仅当结果行没存名称时才补当前名称。
+            if not item.dept_name and item.dept_id in dept_names:
                 item.dept_name = dept_names[item.dept_id]
 
     async def matrix(self, search: MetricMatrixQueryParam) -> MetricMatrixResultSchema:
@@ -226,8 +337,20 @@ class MetricService:
         period_type_map = {
             column.metric_id: str(search.period_type or column.period_type) for column in columns
         }
-        # 每个「指标 × 期间」各自取最新计算版本
-        version_conditions = [MetricValueModel.metric_id.in_([column.metric_id for column in columns])]
+        # 每个「指标 × 期间」先按 active_def_version 锁定口径，再取该口径下的最新计算版本。
+        # 只取全局 max(calc_version) 会把追溯重算的新口径结果顶到旧期间上。
+        metric_id_list = [column.metric_id for column in columns]
+        active_versions = (
+            await active_def_versions(
+                self.db,
+                metric_id_list,
+                period_value,
+                search.period_type or "month",
+            )
+            if period_value
+            else {}
+        )
+        version_conditions = [MetricValueModel.metric_id.in_(metric_id_list)]
         if period_value:
             version_conditions.append(MetricValueModel.period_value == period_value)
         version_rows = (
@@ -236,6 +359,7 @@ class MetricService:
                     MetricValueModel.metric_id,
                     MetricValueModel.period_type,
                     MetricValueModel.period_value,
+                    MetricValueModel.version,
                     func.max(MetricValueModel.calc_version).label("calc_version"),
                 )
                 .where(*version_conditions)
@@ -243,15 +367,30 @@ class MetricService:
                     MetricValueModel.metric_id,
                     MetricValueModel.period_type,
                     MetricValueModel.period_value,
+                    MetricValueModel.version,
                 )
             )
         ).all()
-        # 同一指标若存在多种期间类型的行，优先采用指标定义声明的 period_type
-        version_map: dict[tuple[int, str], int] = {}
-        for metric_id, period_type, value_period, calc_version in version_rows:
+        # 同一指标若存在多种期间类型的行，优先采用指标定义声明的 period_type。
+        version_map: dict[tuple[int, str], tuple[str, int, int]] = {}
+        fallback_map: dict[tuple[int, str], tuple[str, int, int]] = {}
+        for metric_id, period_type, value_period, version, calc_version in version_rows:
             key = (int(metric_id), str(value_period))
-            if key not in version_map or str(period_type) == period_type_map.get(int(metric_id)):
-                version_map[key] = int(calc_version)
+            candidate = (str(period_type), int(version), int(calc_version))
+            declared_type = period_type_map.get(int(metric_id))
+            previous = fallback_map.get(key)
+            if previous is None or candidate[2] > previous[2] or (
+                candidate[2] == previous[2] and candidate[0] == declared_type
+            ):
+                fallback_map[key] = candidate
+            if active_versions.get(int(metric_id)) == int(version):
+                previous = version_map.get(key)
+                if previous is None or candidate[2] > previous[2] or (
+                    candidate[2] == previous[2] and candidate[0] == declared_type
+                ):
+                    version_map[key] = candidate
+        for key, candidate in fallback_map.items():
+            version_map.setdefault(key, candidate)
 
         page_no = max(int(search.page_no or 1), 1)
         page_size = max(int(search.page_size or 500), 1)
@@ -267,9 +406,10 @@ class MetricService:
                         MetricValueModel.metric_id == metric_id,
                         MetricValueModel.period_type == period_type_map.get(metric_id, "month"),
                         MetricValueModel.period_value == value_period,
+                        MetricValueModel.version == version,
                         MetricValueModel.calc_version == calc_version,
                     )
-                    for (metric_id, value_period), calc_version in version_map.items()
+                    for (metric_id, value_period), (_period_type, version, calc_version) in version_map.items()
                 ]
             )
         ]
@@ -352,6 +492,7 @@ class MetricService:
                 codes=codes or None,
                 refresh=bool(data.refresh),
                 label="手动重算",
+                rule_mode=data.rule_mode,
             )
         except ValueError as e:
             raise CustomException(msg=str(e)) from e
@@ -363,7 +504,10 @@ class MetricService:
         payload = data or MetricCalcRequestSchema()
         try:
             summary = await execute_metric_calc(
-                metric_id=id, period_value=payload.period_value, org_codes=payload.org_codes
+                metric_id=id,
+                period_value=payload.period_value,
+                org_codes=payload.org_codes,
+                rule_mode=payload.rule_mode,
             )
         except ValueError as e:
             raise CustomException(msg=str(e)) from e

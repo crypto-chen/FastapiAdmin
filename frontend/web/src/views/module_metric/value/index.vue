@@ -147,6 +147,10 @@
           value-format="YYYY-MM"
           style="width: 150px"
         />
+        <ElSelect v-model="recalcRuleMode" style="width: 160px" title="重算使用的指标口径">
+          <ElOption label="历史规则（默认）" value="historical" />
+          <ElOption label="当前规则" value="current" />
+        </ElSelect>
         <ElCheckbox v-model="recalcRefresh" title="ERP 在期间结束后才补录凭证时勾选">
           先重拉取数批次再算（月结补算）
         </ElCheckbox>
@@ -160,6 +164,7 @@
       </ElScrollbar>
       <ElAlert :closable="false" type="info" show-icon class="recalc-tip">
         重算按依赖分层执行（组成指标先算），派生指标会自动带上其依赖指标；历史期间首次重算需按期间回补取数，可能耗时数分钟。
+        默认按该月钉住的历史口径重算；选择「当前规则」会把该期间切换到最新口径。
         若该期间的数据在金蝶/ERP 里是月底或次月才补录的（如月末凭证、快递费等），
         必须勾选「先重拉取数批次再算」，否则会沿用库里不含月末数据的旧批次、重算结果仍为 0。
       </ElAlert>
@@ -231,6 +236,7 @@ const page = reactive({ page_no: 1, page_size: 200, total: 0 });
 const recalcVisible = ref(false);
 const recalcIds = ref<number[]>([]);
 const recalcPeriod = ref<string>(periodValue.value);
+const recalcRuleMode = ref<"historical" | "current">("historical");
 const recalcRefresh = ref(false);
 
 const recalcAll = computed({
@@ -378,12 +384,13 @@ function handleSizeChange() {
 
 function openRecalc() {
   recalcPeriod.value = periodValue.value;
+  recalcRuleMode.value = "historical";
   recalcIds.value = metricIds.value.length ? [...metricIds.value] : metrics.value.map((item) => item.id);
   recalcVisible.value = true;
 }
 
 async function handleRunAll() {
-  await runBatch(undefined, recalcPeriod.value, recalcRefresh.value);
+  await runBatch(undefined, recalcPeriod.value, recalcRefresh.value, recalcRuleMode.value);
 }
 
 async function handleRunSelected() {
@@ -391,10 +398,15 @@ async function handleRunSelected() {
     ElMessage.warning("请先勾选要重算的指标");
     return;
   }
-  await runBatch([...recalcIds.value], recalcPeriod.value, recalcRefresh.value);
+  await runBatch([...recalcIds.value], recalcPeriod.value, recalcRefresh.value, recalcRuleMode.value);
 }
 
-async function runBatch(ids: number[] | undefined, period: string, refresh: boolean) {
+async function runBatch(
+  ids: number[] | undefined,
+  period: string,
+  refresh: boolean,
+  ruleMode: "historical" | "current",
+) {
   running.value = true;
   ElMessage.info(
     refresh
@@ -408,6 +420,7 @@ async function runBatch(ids: number[] | undefined, period: string, refresh: bool
       metric_ids: ids,
       period_value: period || undefined,
       refresh,
+      rule_mode: ruleMode,
     });
     const data = res.data?.data;
     const failed = data?.failed ?? [];

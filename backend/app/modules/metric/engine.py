@@ -83,6 +83,15 @@ from app.modules.metadata.sync import (
 )
 
 from .model import MetricDefModel, MetricRunModel, MetricValueModel
+from .versions import (
+    CURRENT,
+    HISTORICAL,
+    load_def_snapshot,
+    normalize_rule_mode,
+    pin_period_version,
+    resolve_def_version,
+    resolve_def_versions,
+)
 
 ACCOUNT_BALANCE_KIND = "account_balance_filter"
 # 指标汇总：自身不取数，值为若干既有指标当期值之和
@@ -1708,20 +1717,34 @@ async def _latest_success_run(db, job_id: int, period_value: str | None = None) 
 # --------------------------------------------------------------------------- #
 # 计算入口
 # --------------------------------------------------------------------------- #
-async def _load_metric_context(metric_id: int, period_value: str | None, org_codes: list[str] | None) -> dict:
-    """读取指标配置、来源对象与待算任务清单（只读，返回纯数据避免会话关闭后失效）。"""
+async def _load_metric_context(
+    metric_id: int,
+    period_value: str | None,
+    org_codes: list[str] | None,
+    rule_mode: str = HISTORICAL,
+) -> dict:
+    """读取指标配置、来源对象与待算任务清单（只读，返回纯数据避免会话关闭后失效）。
+
+    ``rule_mode=historical`` 读取该期间钉住的旧口径快照；``current`` 读取指标当前
+    已发布版本（忽略生效期），用于口径纠正后的追溯重算。
+    """
+    rule_mode = normalize_rule_mode(rule_mode)
     async with async_db_session() as db:
         metric = await db.get(MetricDefModel, metric_id)
         if metric is None:
             raise ValueError(f"指标定义不存在: {metric_id}")
-        config = dict(metric.measures or {})
+        period_type = metric.period_type or "month"
+        period = period_value or current_period_value(period_type)
+        resolve_period_datetime(period)  # 格式校验：YYYY / YYYY-MM / YYYY-MM-DD
+
+        def_version = await resolve_def_version(db, metric_id, period_type, period, rule_mode)
+        snapshot = await load_def_snapshot(db, metric_id, def_version, metric)
+        config = dict(snapshot["measures"] or {})
         kind = str(config.get("kind") or "")
         # 空 kind = 未配置取数规则（如口径待重新定义的指标）：允许存在，由调用方跳过计算
         if kind and kind not in SUPPORTED_KINDS:
             raise ValueError(f"暂不支持的指标取数类型: {kind}")
-        period_type = metric.period_type or "month"
-        period = period_value or current_period_value(period_type)
-        resolve_period_datetime(period)  # 格式校验：YYYY / YYYY-MM / YYYY-MM-DD
+        metric_code = str(snapshot["code"])
 
         # 汇总/折算/比率指标没有自己的来源对象/同步任务，组成指标在配置里声明
         component_metrics: list[tuple[int, str]] = []
@@ -1768,7 +1791,7 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
                 )
                 if not numerator_codes or not denominator_codes:
                     raise ValueError(
-                        f"比率指标缺少 numerator_metric_codes / denominator_metric_codes 配置: {metric.code}"
+                        f"比率指标缺少 numerator_metric_codes / denominator_metric_codes 配置: {metric_code}"
                     )
                 codes = metric_dependency_codes(config)
             elif kind in (METRIC_DIFF_KIND, METRIC_DIFF_PERSON_KIND):
@@ -1777,7 +1800,7 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
                 subtrahend_codes = _normalize_metric_codes(config.get("subtrahend_metric_codes"))
                 if not addend_codes and not subtrahend_codes:
                     raise ValueError(
-                        f"差额指标缺少 addend_metric_codes / subtrahend_metric_codes 配置: {metric.code}"
+                        f"差额指标缺少 addend_metric_codes / subtrahend_metric_codes 配置: {metric_code}"
                     )
                 codes = metric_dependency_codes(config)
             elif kind == METRIC_ALLOC_PERSON_KIND:
@@ -1785,18 +1808,18 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
                 # + 待分摊费用池（公司口径）
                 share_codes = _normalize_metric_codes(config.get("share_metric_codes"))
                 if not share_codes:
-                    raise ValueError(f"业务员分摊指标缺少 share_metric_codes 配置: {metric.code}")
+                    raise ValueError(f"业务员分摊指标缺少 share_metric_codes 配置: {metric_code}")
                 base_codes = _normalize_metric_codes(config.get("base_metric_codes"))
                 pool_codes = _normalize_metric_codes(config.get("pool_metric_codes"))
                 codes = metric_dependency_codes(config)
             elif kind in (METRIC_SUM_KIND, METRIC_SCALE_KIND):
                 codes = metric_dependency_codes(config)
                 if not codes:
-                    raise ValueError(f"汇总/折算指标缺少 component_metric_codes 配置: {metric.code}")
+                    raise ValueError(f"汇总/折算指标缺少 component_metric_codes 配置: {metric_code}")
             else:
                 codes = metric_dependency_codes(config)
                 if not codes:
-                    raise ValueError(f"业务员汇总指标缺少 component_metric_codes 配置: {metric.code}")
+                    raise ValueError(f"业务员汇总指标缺少 component_metric_codes 配置: {metric_code}")
             rows = (
                 await db.execute(
                     select(MetricDefModel.id, MetricDefModel.code).where(MetricDefModel.code.in_(codes))
@@ -1806,7 +1829,7 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
             for code in codes:
                 if code not in id_by_code:
                     raise ValueError(f"组成指标不存在: {code}")
-                if id_by_code[code] == metric.id:
+                if id_by_code[code] == metric_id:
                     raise ValueError(f"汇总指标不能把自己列为组成指标: {code}")
                 component_metrics.append((id_by_code[code], code))
             if kind in (METRIC_RATIO_KIND, METRIC_RATIO_PERSON_KIND):
@@ -1830,11 +1853,11 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
             # 计算时分别取数、按各自口径过滤后合计成一个值（如采购入库单 + 收料通知单）。
             raw_components = config.get("components")
             if not isinstance(raw_components, list) or not raw_components:
-                raise ValueError(f"单据金额指标缺少 components 配置: {metric.code}")
+                    raise ValueError(f"单据金额指标缺少 components 配置: {metric_code}")
             has_component = False
             for comp in raw_components:
                 if not isinstance(comp, dict):
-                    raise ValueError(f"单据金额指标 components 配置项必须是对象: {metric.code}")
+                    raise ValueError(f"单据金额指标 components 配置项必须是对象: {metric_code}")
                 comp_code = str(comp.get("source_object_code") or "").strip()
                 comp_object = (
                     await db.execute(
@@ -1869,17 +1892,17 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
                     {"config": dict(comp), "source_object_code": comp_code, "jobs": comp_jobs}
                 )
             if not has_component:
-                logger.warning(f"单据金额指标 {metric.code} 的组成来源都没有启用的同步任务")
+                logger.warning(f"单据金额指标 {metric_code} 的组成来源都没有启用的同步任务")
         elif kind in CRM_PERSON_KINDS:
             # 业务员明细指标：``components`` 每项一个口径分支（内贸 / 外贸），
             # 分支里以 ``*_source_object_code`` 声明来源对象（订单明细、发货明细），
             # 计算时按各自来源的同步任务取该期间的原始明细，再按业务员分组。
             raw_components = config.get("components")
             if not isinstance(raw_components, list) or not raw_components:
-                raise ValueError(f"业务员明细指标缺少 components 配置: {metric.code}")
+                    raise ValueError(f"业务员明细指标缺少 components 配置: {metric_code}")
             for comp in raw_components:
                 if not isinstance(comp, dict):
-                    raise ValueError(f"业务员明细指标 components 配置项必须是对象: {metric.code}")
+                    raise ValueError(f"业务员明细指标 components 配置项必须是对象: {metric_code}")
                 jobs_by_key: dict[str, list] = {}
                 for key, value in comp.items():
                     # 兼容 ``source_object_code`` 与 ``order_source_object_code`` 这类带前缀的键
@@ -1918,7 +1941,7 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
                 # 分支同名键优先；这样取数执行器既能读分支口径，也能读到指标级开关
                 component_jobs.append({"config": {**config, **comp}, "jobs_by_key": jobs_by_key})
             if not any(comp["jobs_by_key"].values() for comp in component_jobs):
-                logger.warning(f"业务员明细指标 {metric.code} 的组成来源都没有启用的同步任务")
+                logger.warning(f"业务员明细指标 {metric_code} 的组成来源都没有启用的同步任务")
         else:
             source_object_code = str(config.get("source_object_code") or "")
             source_object = (
@@ -1975,27 +1998,39 @@ async def _load_metric_context(metric_id: int, period_value: str | None, org_cod
         previous_version = (
             await db.execute(
                 select(func.max(MetricValueModel.calc_version)).where(
-                    MetricValueModel.metric_id == metric.id,
+                    MetricValueModel.metric_id == metric_id,
                     MetricValueModel.period_type == period_type,
                     MetricValueModel.period_value == period,
                 )
             )
         ).scalars().first()
+        component_versions = await resolve_def_versions(
+            db,
+            [component_id for component_id, _code in component_metrics],
+            period_type,
+            period,
+            rule_mode,
+        )
 
     return {
-        "metric_id": metric.id,
-        "metric_code": metric.code,
-        "metric_version": metric.version,
+        "metric_id": metric_id,
+        "metric_code": metric_code,
+        "metric_version": int(snapshot["version"]),
+        "def_version": int(def_version),
+        "rule_mode": rule_mode,
         "config": config,
         "period_type": period_type,
         "period": period,
-        "signature": _config_signature({"kind": kind, "measures": metric.measures, "dimensions": metric.dimensions}),
+        "signature": _config_signature(
+            {"kind": kind, "measures": snapshot["measures"], "dimensions": snapshot["dimensions"]}
+        ),
         "jobs": [
             (int(row[0]), str(row[1] or ""), dict(row[2] or {}), list(row[3] or [])) for row in job_rows
         ],
         "source_object_code": str(config.get("source_object_code") or ""),
         "source_variables": list(source_variables or []),
         "component_metrics": component_metrics,
+        "component_versions": component_versions,
         "component_jobs": component_jobs,
         "numerator_metrics": numerator_metrics,
         "denominator_metrics": denominator_metrics,
@@ -2068,7 +2103,11 @@ async def _ensure_period_batches(context: dict) -> list[str]:
 
 
 async def _ensure_component_values(
-    context: dict, period: str | None = None, *, require_fresh: bool = False
+    context: dict,
+    period: str | None = None,
+    *,
+    require_fresh: bool = False,
+    rule_mode: str | None = None,
 ) -> list[str]:
     """汇总指标：确保组成指标在指定期间已有计算结果，缺失或过期的先算一次。
 
@@ -2084,9 +2123,16 @@ async def _ensure_component_values(
     """
     period = period or context["period"]
     period_type = context["period_type"]
+    rule_mode = normalize_rule_mode(rule_mode or context.get("rule_mode"))
     cutoff = local_day_start() if require_fresh else None
     stale: list[tuple[int, str, str]] = []
     async with async_db_session() as db:
+        component_ids = [component_id for component_id, _code in context["component_metrics"]]
+        component_versions = (
+            context.get("component_versions") or {}
+            if period == context["period"]
+            else await resolve_def_versions(db, component_ids, period_type, period, rule_mode)
+        )
         for component_id, code in context["component_metrics"]:
             latest_row = (
                 await db.execute(
@@ -2095,6 +2141,7 @@ async def _ensure_component_values(
                         MetricValueModel.metric_id == component_id,
                         MetricValueModel.period_type == period_type,
                         MetricValueModel.period_value == period,
+                        MetricValueModel.version == int(component_versions.get(component_id, 1)),
                     )
                     .order_by(MetricValueModel.calc_version.desc(), MetricValueModel.id.desc())
                     .limit(1)
@@ -2108,12 +2155,16 @@ async def _ensure_component_values(
         logger.info(
             f"汇总指标 {context['metric_code']} 期间 {period} 的组成指标 {code} {reason}，先计算该指标"
         )
-        await execute_metric_calc(metric_id=component_id, period_value=period)
+        await execute_metric_calc(metric_id=component_id, period_value=period, rule_mode=rule_mode)
     return [code for _, code, _ in stale]
 
 
 async def _sum_component_values(
-    db, component_metrics: list[tuple[int, str]], period_type: str, period: str
+    db,
+    component_metrics: list[tuple[int, str]],
+    period_type: str,
+    period: str,
+    versions: dict[int, int] | None = None,
 ) -> tuple[float, int]:
     """把组成指标该期间「最新版本的组织合计行」相加（``dept_code IS NULL`` 即合计层）。
 
@@ -2123,13 +2174,17 @@ async def _sum_component_values(
     total = 0.0
     row_count = 0
     for component_id, code in component_metrics:
+        version = (versions or {}).get(component_id)
+        conditions = [
+            MetricValueModel.metric_id == component_id,
+            MetricValueModel.period_type == period_type,
+            MetricValueModel.period_value == period,
+        ]
+        if version is not None:
+            conditions.append(MetricValueModel.version == int(version))
         latest = (
             await db.execute(
-                select(func.max(MetricValueModel.calc_version)).where(
-                    MetricValueModel.metric_id == component_id,
-                    MetricValueModel.period_type == period_type,
-                    MetricValueModel.period_value == period,
-                )
+                select(func.max(MetricValueModel.calc_version)).where(*conditions)
             )
         ).scalars().first()
         if latest is None:
@@ -2143,6 +2198,7 @@ async def _sum_component_values(
                     MetricValueModel.period_value == period,
                     MetricValueModel.calc_version == int(latest),
                     MetricValueModel.dept_code.is_(None),
+                    *([MetricValueModel.version == int(version)] if version is not None else []),
                 )
             )
         ).scalars().all()
@@ -2153,7 +2209,11 @@ async def _sum_component_values(
 
 
 async def _sum_component_values_by_org(
-    db, component_metrics: list[tuple[int, str]], period_type: str, period: str
+    db,
+    component_metrics: list[tuple[int, str]],
+    period_type: str,
+    period: str,
+    versions: dict[int, int] | None = None,
 ) -> tuple[dict[int | None, float], int]:
     """按组织合计组成指标当期「最新版本的组织合计行」。
 
@@ -2162,13 +2222,17 @@ async def _sum_component_values_by_org(
     totals: dict[int | None, float] = {}
     row_count = 0
     for component_id, code in component_metrics:
+        version = (versions or {}).get(component_id)
+        conditions = [
+            MetricValueModel.metric_id == component_id,
+            MetricValueModel.period_type == period_type,
+            MetricValueModel.period_value == period,
+        ]
+        if version is not None:
+            conditions.append(MetricValueModel.version == int(version))
         latest = (
             await db.execute(
-                select(func.max(MetricValueModel.calc_version)).where(
-                    MetricValueModel.metric_id == component_id,
-                    MetricValueModel.period_type == period_type,
-                    MetricValueModel.period_value == period,
-                )
+                select(func.max(MetricValueModel.calc_version)).where(*conditions)
             )
         ).scalars().first()
         if latest is None:
@@ -2182,6 +2246,7 @@ async def _sum_component_values_by_org(
                     MetricValueModel.period_value == period,
                     MetricValueModel.calc_version == int(latest),
                     MetricValueModel.dept_code.is_(None),
+                    *([MetricValueModel.version == int(version)] if version is not None else []),
                 )
             )
         ).all()
@@ -2464,18 +2529,26 @@ async def _aggregate_crm_person_amount(context: dict) -> dict:
 
 
 async def _load_person_metric_rows(
-    db, component_metrics: list[tuple[int, str]], period_type: str, period: str
+    db,
+    component_metrics: list[tuple[int, str]],
+    period_type: str,
+    period: str,
+    versions: dict[int, int] | None = None,
 ) -> dict[str, dict]:
     """读取若干个业务员维度指标当期「最新版本」的业务员行，合并成 ``{业务员编码: 值+主数据}``。"""
     merged: dict[str, dict] = {}
     for component_id, _code in component_metrics:
+        version = (versions or {}).get(component_id)
+        conditions = [
+            MetricValueModel.metric_id == component_id,
+            MetricValueModel.period_type == period_type,
+            MetricValueModel.period_value == period,
+        ]
+        if version is not None:
+            conditions.append(MetricValueModel.version == int(version))
         latest = (
             await db.execute(
-                select(func.max(MetricValueModel.calc_version)).where(
-                    MetricValueModel.metric_id == component_id,
-                    MetricValueModel.period_type == period_type,
-                    MetricValueModel.period_value == period,
-                )
+                select(func.max(MetricValueModel.calc_version)).where(*conditions)
             )
         ).scalars().first()
         if latest is None:
@@ -2493,6 +2566,7 @@ async def _load_person_metric_rows(
                     MetricValueModel.period_value == period,
                     MetricValueModel.calc_version == int(latest),
                     MetricValueModel.person_code.is_not(None),
+                    *([MetricValueModel.version == int(version)] if version is not None else []),
                 )
             )
         ).all()
@@ -2514,8 +2588,12 @@ async def _compute_person_ratio(
     """
     config = context["config"]
     scale = float(config.get("ratio_scale") or 1)
-    numerators = await _load_person_metric_rows(db, context["numerator_metrics"], period_type, period)
-    denominators = await _load_person_metric_rows(db, context["denominator_metrics"], period_type, period)
+    numerators = await _load_person_metric_rows(
+        db, context["numerator_metrics"], period_type, period, context["component_versions"]
+    )
+    denominators = await _load_person_metric_rows(
+        db, context["denominator_metrics"], period_type, period, context["component_versions"]
+    )
     person_meta: dict[str, dict] = {}
     persons: dict[str, dict] = {}
     total_num = 0.0
@@ -2562,8 +2640,12 @@ async def _compute_person_diff(db, context: dict, period_type: str, period: str)
     """
     config = context["config"]
     omit_zero = bool(config.get("omit_zero_persons", True))
-    addends = await _load_person_metric_rows(db, context["addend_metrics"], period_type, period)
-    subtrahends = await _load_person_metric_rows(db, context["subtrahend_metrics"], period_type, period)
+    addends = await _load_person_metric_rows(
+        db, context["addend_metrics"], period_type, period, context["component_versions"]
+    )
+    subtrahends = await _load_person_metric_rows(
+        db, context["subtrahend_metrics"], period_type, period, context["component_versions"]
+    )
     persons: dict[str, dict] = {}
     person_meta: dict[str, dict] = {}
     total = 0.0
@@ -2613,13 +2695,19 @@ async def _compute_person_alloc(db, context: dict, period_type: str, period: str
     config = context["config"]
     scale = float(config.get("scale") or 1)
     omit_zero = bool(config.get("omit_zero_persons", True))
-    share = await _load_person_metric_rows(db, context["share_metrics"], period_type, period)
+    share = await _load_person_metric_rows(
+        db, context["share_metrics"], period_type, period, context["component_versions"]
+    )
     if context["base_metrics"]:
-        base_total, _rows = await _sum_component_values(db, context["base_metrics"], period_type, period)
+        base_total, _rows = await _sum_component_values(
+            db, context["base_metrics"], period_type, period, context["component_versions"]
+        )
     else:
         base_total = round(sum(float(item.get("value") or 0) for item in share.values()), 4)
     if context["pool_metrics"]:
-        pool_total, _rows = await _sum_component_values(db, context["pool_metrics"], period_type, period)
+        pool_total, _rows = await _sum_component_values(
+            db, context["pool_metrics"], period_type, period, context["component_versions"]
+        )
     else:
         pool_total = 0.0
     persons: dict[str, dict] = {}
@@ -2663,7 +2751,9 @@ async def _compute_person_sum(db, context: dict, period_type: str, period: str) 
     config = context["config"]
     omit_zero = bool(config.get("omit_zero_persons", True))
     scale = float(config.get("scale") or 1)
-    merged = await _load_person_metric_rows(db, context["component_metrics"], period_type, period)
+    merged = await _load_person_metric_rows(
+        db, context["component_metrics"], period_type, period, context["component_versions"]
+    )
     persons: dict[str, dict] = {}
     person_meta: dict[str, dict] = {}
     total = 0.0
@@ -2755,6 +2845,7 @@ async def execute_metric_calc(
     metric_id: int,
     period_value: str | None = None,
     org_codes: list[str] | None = None,
+    rule_mode: str = HISTORICAL,
 ) -> dict:
     """计算指标并写入 ``metric_value``（带依赖环保护的外层入口）。
 
@@ -2769,7 +2860,7 @@ async def execute_metric_calc(
         raise ValueError(f"指标依赖存在环，已中止计算（调用链 {path}）")
     token = CALC_CHAIN.set((*chain, metric_id))
     try:
-        return await _execute_metric_calc_inner(metric_id, period_value, org_codes)
+        return await _execute_metric_calc_inner(metric_id, period_value, org_codes, rule_mode)
     finally:
         CALC_CHAIN.reset(token)
 
@@ -2778,6 +2869,7 @@ async def _execute_metric_calc_inner(
     metric_id: int,
     period_value: str | None = None,
     org_codes: list[str] | None = None,
+    rule_mode: str = HISTORICAL,
 ) -> dict:
     """计算指标并写入 ``metric_value``。
 
@@ -2789,12 +2881,14 @@ async def _execute_metric_calc_inner(
     返回:
     - dict: 计算摘要（期间、版本、各组织结果、跳过组织、批次ID）。
     """
-    context = await _load_metric_context(metric_id, period_value, org_codes)
+    context = await _load_metric_context(metric_id, period_value, org_codes, rule_mode)
     config = context["config"]
     kind = str(config.get("kind") or "")
     period_type = context["period_type"]
     period = context["period"]
     signature = context["signature"]
+    if org_codes and context["rule_mode"] == CURRENT:
+        raise ValueError("按当前规则重算不支持只选部分组织，请全量重算该期间")
     if not kind:
         # 未配置取数规则的指标（口径待定义/已迁移）：不写结果、不报错，只记一条警告
         logger.warning(
@@ -2806,6 +2900,8 @@ async def _execute_metric_calc_inner(
             "period_type": period_type,
             "period_value": period,
             "calc_version": context["previous_version"],
+            "def_version": context["def_version"],
+            "rule_mode": context["rule_mode"],
             "batch_id": "",
             "skipped": True,
             "reason": "未配置取数规则(measures.kind 为空)",
@@ -2896,6 +2992,7 @@ async def _execute_metric_calc_inner(
             period_type=period_type,
             period_value=period,
             version=context["metric_version"],
+            rule_mode=context["rule_mode"],
             batch_id=batch_id,
             filter_signature=signature,
             status="running",
@@ -2909,6 +3006,23 @@ async def _execute_metric_calc_inner(
         partial = bool(org_codes)
         calc_version = context["previous_version"] if partial else context["previous_version"] + 1
         calc_version = calc_version or 1
+
+        # 首次计算时钉住该期间的历史口径；active 指针跟随本次选择（historical/current）。
+        historical_version = (
+            context["def_version"]
+            if context["rule_mode"] == HISTORICAL
+            else await resolve_def_version(db, metric_id, period_type, period, HISTORICAL)
+        )
+        await pin_period_version(
+            db,
+            metric_id=metric_id,
+            period_type=period_type,
+            period_value=period,
+            pinned_version=historical_version,
+            active_version=context["metric_version"],
+            calc_version=calc_version,
+            rule_mode=context["rule_mode"],
+        )
 
         org_id_map = {
             org_code: await _resolve_org_id(db, org_code) for _, org_code, _params, _variables in context["jobs"]
@@ -2932,20 +3046,28 @@ async def _execute_metric_calc_inner(
             # 比率指标：分子合计 ÷ 分母合计 × ratio_scale（分母为 0 时取 0，避免除零）；
             # 分子/分母各自可带减项：净额 = 加项之和 − 减项之和
             numerator, _numerator_rows = await _sum_component_values(
-                db, context["numerator_metrics"], period_type, period
+                db, context["numerator_metrics"], period_type, period, context["component_versions"]
             )
             denominator, denominator_rows = await _sum_component_values(
-                db, context["denominator_metrics"], period_type, period
+                db, context["denominator_metrics"], period_type, period, context["component_versions"]
             )
             if context["numerator_subtrahend_metrics"]:
                 numerator_deduct, deduct_rows = await _sum_component_values(
-                    db, context["numerator_subtrahend_metrics"], period_type, period
+                    db,
+                    context["numerator_subtrahend_metrics"],
+                    period_type,
+                    period,
+                    context["component_versions"],
                 )
                 numerator = round(numerator - numerator_deduct, 4)
                 denominator_rows += deduct_rows
             if context["denominator_subtrahend_metrics"]:
                 denominator_deduct, deduct_rows = await _sum_component_values(
-                    db, context["denominator_subtrahend_metrics"], period_type, period
+                    db,
+                    context["denominator_subtrahend_metrics"],
+                    period_type,
+                    period,
+                    context["component_versions"],
                 )
                 denominator = round(denominator - denominator_deduct, 4)
                 denominator_rows += deduct_rows
@@ -3062,10 +3184,10 @@ async def _execute_metric_calc_inner(
         elif kind == METRIC_DIFF_KIND:
             # 差额指标：加项合计 − 减项合计（如边际贡献 = 总收益（营销结算收入）− 变动费用合计）
             addend_total, addend_rows = await _sum_component_values(
-                db, context["addend_metrics"], period_type, period
+                db, context["addend_metrics"], period_type, period, context["component_versions"]
             )
             subtrahend_total, subtrahend_rows = await _sum_component_values(
-                db, context["subtrahend_metrics"], period_type, period
+                db, context["subtrahend_metrics"], period_type, period, context["component_versions"]
             )
             total = round(addend_total - subtrahend_total, 4)
             db.add(
@@ -3097,11 +3219,26 @@ async def _execute_metric_calc_inner(
             # 默认各取 0.5（平均库存 =（期初 + 期末）÷ 2），可用 begin_weight/end_weight 调整。
             begin_weight = float(config.get("begin_weight", 0.5))
             end_weight = float(config.get("end_weight", 0.5))
+            begin_versions = (
+                context["component_versions"]
+                if (balance_begin_period or period) == period
+                else await resolve_def_versions(
+                    db,
+                    [component_id for component_id, _code in context["component_metrics"]],
+                    period_type,
+                    balance_begin_period or period,
+                    context["rule_mode"],
+                )
+            )
             begin_total, begin_rows = await _sum_component_values(
-                db, context["component_metrics"], period_type, balance_begin_period or period
+                db,
+                context["component_metrics"],
+                period_type,
+                balance_begin_period or period,
+                begin_versions,
             )
             end_total, end_rows = await _sum_component_values(
-                db, context["component_metrics"], period_type, period
+                db, context["component_metrics"], period_type, period, context["component_versions"]
             )
             total = round(begin_weight * begin_total + end_weight * end_total, 4)
             db.add(
@@ -3137,7 +3274,7 @@ async def _execute_metric_calc_inner(
             scale = float(config.get("scale") or 1) if kind == METRIC_SCALE_KIND else 1.0
             if config.get("group_by_org"):
                 per_org, component_rows = await _sum_component_values_by_org(
-                    db, context["component_metrics"], period_type, period
+                db, context["component_metrics"], period_type, period, context["component_versions"]
                 )
                 per_org = {org_id: round(value * scale, 4) for org_id, value in per_org.items()}
                 for org_id, value in sorted(per_org.items(), key=lambda item: (item[0] is None, item[0])):
@@ -3166,7 +3303,11 @@ async def _execute_metric_calc_inner(
                 total = round(sum(per_org.values()), 4)
             else:
                 total, component_rows = await _sum_component_values(
-                    db, context["component_metrics"], period_type, period
+                    db,
+                    context["component_metrics"],
+                    period_type,
+                    period,
+                    context["component_versions"],
                 )
                 total = round(total * scale, 4)
                 db.add(
@@ -3452,6 +3593,8 @@ async def _execute_metric_calc_inner(
             "period_type": period_type,
             "period_value": period,
             "calc_version": calc_version,
+            "def_version": context["def_version"],
+            "rule_mode": context["rule_mode"],
             "batch_id": batch_id,
             "partial": partial,
             "backfilled_orgs": backfilled,

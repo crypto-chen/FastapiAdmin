@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -31,7 +32,10 @@ class MetricDefCreateSchema(BaseModel):
 
 
 class MetricDefUpdateSchema(MetricDefCreateSchema):
-    pass
+    effective_from: date | None = Field(
+        default=None,
+        description="新口径生效日期；缺省从下一期间首日生效（rule_mode=current 可追溯）",
+    )
 
 
 class MetricDefOutSchema(MetricDefCreateSchema, BaseSchema, UserBySchema):
@@ -100,6 +104,10 @@ class MetricValueOutSchema(BaseSchema, UserBySchema):
 class MetricCalcRequestSchema(BaseModel):
     period_value: str | None = Field(default=None, max_length=32, description="期间值，缺省取当前期间")
     org_codes: list[str] | None = Field(default=None, description="限定组织编码，缺省为全部组织")
+    rule_mode: Literal["historical", "current"] = Field(
+        default="historical",
+        description="重算口径：historical=该期间钉住的历史规则（默认），current=当前最新规则",
+    )
 
 
 class MetricMatrixQueryParam(BaseModel):
@@ -169,6 +177,10 @@ class MetricBatchRunRequestSchema(BaseModel):
         default=False,
         description="重算前先按期间重拉取数批次（月结补算用：ERP 在期间结束后才补录凭证时，必须开这个开关）",
     )
+    rule_mode: Literal["historical", "current"] = Field(
+        default="historical",
+        description="重算口径：historical=该期间钉住的历史规则（默认），current=当前最新规则",
+    )
 
 
 class MetricBatchResultSchema(BaseModel):
@@ -192,6 +204,8 @@ class MetricCalcResultSchema(BaseModel):
     period_type: str = Field(..., description="期间类型")
     period_value: str = Field(..., description="期间值")
     calc_version: int = Field(..., description="计算版本")
+    def_version: int = Field(default=1, description="本次使用的指标定义版本")
+    rule_mode: Literal["historical", "current"] = Field(default="historical", description="本次使用的口径模式")
     batch_id: str = Field(..., description="计算批次ID")
     partial: bool = Field(default=False, description="是否按组织范围部分重算")
     backfilled_orgs: list[str] = Field(default_factory=list, description="该期间缺批次、已按期间回补取数的组织")

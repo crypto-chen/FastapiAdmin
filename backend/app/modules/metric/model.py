@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.base_model import ModelMixin, UserMixin
@@ -37,6 +37,69 @@ class MetricDefModel(ModelMixin, UserMixin):
     description: Mapped[str | None] = mapped_column(Text, default=None, nullable=True, comment="备注")
 
 
+class MetricDefVersionModel(ModelMixin, UserMixin):
+    """指标定义版本（按生效日期快照，发布后不可变）。"""
+
+    __tablename__: str = "metric_def_version"
+    __table_args__: tuple = (
+        UniqueConstraint("metric_id", "version", name="uq_metric_def_version_metric_version"),
+        Index("ix_metric_def_version_effective", "metric_id", "effective_from"),
+        {"comment": "指标定义版本表"},
+    )
+    __data_scope_exempt__: bool = True
+
+    metric_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("metric_def.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="指标定义ID",
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, comment="定义版本号")
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False, comment="生效开始日期")
+    effective_to: Mapped[date | None] = mapped_column(Date, default=None, nullable=True, comment="生效结束日期")
+    code: Mapped[str] = mapped_column(String(128), nullable=False, comment="指标编码")
+    name: Mapped[str] = mapped_column(String(255), nullable=False, comment="指标名称")
+    category: Mapped[str] = mapped_column(String(64), nullable=False, comment="指标分类")
+    excel_code: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, comment="Excel 科目编码")
+    period_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="期间类型")
+    sensitivity: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="敏感级别")
+    formula: Mapped[str | None] = mapped_column(Text, default=None, nullable=True, comment="计算公式")
+    dimensions: Mapped[dict | None] = mapped_column(JSON, default=None, nullable=True, comment="维度配置")
+    measures: Mapped[dict | None] = mapped_column(JSON, default=None, nullable=True, comment="度量配置")
+    source_entity_id: Mapped[int | None] = mapped_column(Integer, default=None, nullable=True, comment="来源标准实体ID")
+    status: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="状态(0:启用 1:停用)")
+    description: Mapped[str | None] = mapped_column(Text, default=None, nullable=True, comment="备注")
+
+
+class MetricPeriodVersionModel(ModelMixin, UserMixin):
+    """指标期间口径版本：记录某期间默认口径与当前生效口径。"""
+
+    __tablename__: str = "metric_period_version"
+    __table_args__: tuple = (
+        UniqueConstraint("period_type", "period_value", "metric_id", name="uq_metric_period_version_key"),
+        Index("ix_metric_period_version_period", "period_type", "period_value"),
+        {"comment": "指标期间口径版本表"},
+    )
+    __data_scope_exempt__: bool = True
+
+    period_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="期间类型")
+    period_value: Mapped[str] = mapped_column(String(32), nullable=False, comment="期间值")
+    metric_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("metric_def.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="指标定义ID",
+    )
+    pinned_def_version: Mapped[int] = mapped_column(Integer, nullable=False, comment="历史规则定义版本")
+    active_def_version: Mapped[int] = mapped_column(Integer, nullable=False, comment="当前生效定义版本")
+    last_calc_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment="最近计算版本")
+    last_rule_mode: Mapped[str] = mapped_column(
+        String(16), default="historical", nullable=False, comment="最近计算口径模式"
+    )
+
+
 class MetricRunModel(ModelMixin, UserMixin):
     """指标计算批次。"""
 
@@ -54,6 +117,13 @@ class MetricRunModel(ModelMixin, UserMixin):
     period_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="期间类型")
     period_value: Mapped[str] = mapped_column(String(32), nullable=False, comment="期间值")
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment="指标版本")
+    rule_mode: Mapped[str] = mapped_column(
+        String(16),
+        default="historical",
+        server_default="historical",
+        nullable=False,
+        comment="口径模式(historical/current)",
+    )
     batch_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True, index=True, comment="同步批次ID")
     filter_signature: Mapped[str | None] = mapped_column(String(255), default=None, nullable=True, comment="过滤条件签名")
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False, comment="状态(pending/running/success/failed)")
@@ -69,6 +139,14 @@ class MetricValueModel(ModelMixin, UserMixin):
         # 「指标 + 期间 + 计算版本」是最常用过滤组合（页面查询、重算前取上一版本），
         # 缺该复合索引时，百万级结果表上的 max(calc_version) 子查询会退化成全表扫描
         Index("ix_metric_value_metric_period_ver", "metric_id", "period_type", "period_value", "calc_version"),
+        Index(
+            "ix_metric_value_metric_period_def_ver",
+            "metric_id",
+            "period_type",
+            "period_value",
+            "version",
+            "calc_version",
+        ),
         {"comment": "指标结果表"},
     )
     __data_scope_exempt__: bool = True

@@ -134,7 +134,10 @@ export const MetricAPI = {
       params,
     });
   },
-  runCalc(metricId: number, body: { period_value?: string; org_codes?: string[] } = {}) {
+  runCalc(
+    metricId: number,
+    body: { period_value?: string; org_codes?: string[]; rule_mode?: "historical" | "current" } = {},
+  ) {
     // 历史期间首次重算会先按期间回补取数（每个组织一次 ERP 同步），耗时可达数分钟，
     // 因此单独放宽超时（默认全局 15s）。
     return request<ApiResponse<MetricCalcResult>>({
@@ -148,7 +151,15 @@ export const MetricAPI = {
    * 批量重算：metric_ids 为空表示重算全部启用指标（按依赖分层执行）。
    * refresh=true 时先重拉该期间的取数批次再算（月结补算用）。
    */
-  runBatch(body: { metric_ids?: number[]; codes?: string[]; period_value?: string; refresh?: boolean } = {}) {
+  runBatch(
+    body: {
+      metric_ids?: number[];
+      codes?: string[];
+      period_value?: string;
+      refresh?: boolean;
+      rule_mode?: "historical" | "current";
+    } = {},
+  ) {
     return request<ApiResponse<MetricBatchResult>>({
       url: "/metric/def/run-batch",
       method: "post",

@@ -135,11 +135,13 @@ async def refresh_metric_batches(metrics: list[dict], period_value: str | None) 
     return {"refreshed": [str(job_id) for job_id in pending], "failed": failures}
 
 
-async def _calc_one(item: dict, period_value: str | None) -> dict[str, Any]:
+async def _calc_one(item: dict, period_value: str | None, rule_mode: str = "historical") -> dict[str, Any]:
     """计算单个指标并归一结果；异常在这里兜住，避免拖垮同层其它指标。"""
     begin = time.time()
     try:
-        summary = await engine.execute_metric_calc(metric_id=item["id"], period_value=period_value)
+        summary = await engine.execute_metric_calc(
+            metric_id=item["id"], period_value=period_value, rule_mode=rule_mode
+        )
     except Exception as e:
         logger.exception(f"指标 {item['code']} 计算失败: {e}")
         return {"ok": False, "code": item["code"], "error": str(e), "seconds": round(time.time() - begin, 1)}
@@ -157,6 +159,7 @@ async def run_metric_batch(
     codes: list[str] | None = None,
     refresh: bool = False,
     label: str = "",
+    rule_mode: str = "historical",
 ) -> dict[str, Any]:
     """按依赖分层计算全部启用指标（或 ``codes`` 指定的子集）。
 
@@ -185,7 +188,9 @@ async def run_metric_batch(
     for depth, layer in enumerate(layers, start=1):
         layer_codes.append([item["code"] for item in layer])
         logger.info(f"{tag}第 {depth}/{len(layers)} 层开始，共 {len(layer)} 个指标")
-        outcomes = await asyncio.gather(*(_calc_one(item, period_value) for item in layer))
+        outcomes = await asyncio.gather(
+            *(_calc_one(item, period_value, rule_mode) for item in layer)
+        )
         for item, outcome in zip(layer, outcomes, strict=True):
             if outcome["ok"]:
                 results.append(outcome["summary"])
