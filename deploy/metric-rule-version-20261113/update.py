@@ -42,6 +42,7 @@ async def main():
         )
         ok = {"metric_def_version", "metric_period_version"} <= tables and "rule_mode" in cols
         print("SCHEMA_OK" if ok else "SCHEMA_FAIL")
+    await async_engine.dispose()
 
 asyncio.run(main())
 """
@@ -170,6 +171,18 @@ def build_frontend(apply: bool) -> None:
 
 def verify(apply: bool, env_name: str | None) -> None:
     env_extra = {"ENVIRONMENT": env_name} if env_name else None
+    probe = subprocess.run(
+        [python_bin(), "-c", "import pytest"],
+        cwd=BACKEND,
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, **(env_extra or {})},
+    )
+    if probe.returncode != 0:
+        log("pytest 未安装，跳过口径版本测试（迁移与校验已完成，不影响本次更新）")
+        return
     run(
         [python_bin(), "-m", "pytest", "tests/test_metric_rule_version.py", "-q"],
         BACKEND,
@@ -184,7 +197,7 @@ def restart(apply: bool, service: str | None) -> None:
         log("未指定 --service，跳过服务重启；新增调度任务需自行重启后端")
         return
     if os.name == "nt":
-        log("Windows 本机跳过 systemctl restart")
+        log("Windows 环境跳过 systemctl；请在运行后端的终端 Ctrl+C，再按原命令启动后端")
         return
     run(["systemctl", "restart", service], ROOT, apply, title=f"重启服务 {service}")
 
