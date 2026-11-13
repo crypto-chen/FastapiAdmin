@@ -74,5 +74,7 @@ python -m alembic downgrade wecomtoken01
 
 ```bash
 cd backend
-python ..\deploy\metric-rule-version-20261113\repair_fk.py
+python ..\deploy\metric-rule-version-20261113\repair_fk.py --env prod
 ```
+
+`--env` 必须与后端启动参数一致（`python main.py run --env=prod` 就用 prod），否则会连到另一个数据库。

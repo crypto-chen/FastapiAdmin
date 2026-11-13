@@ -10,12 +10,20 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
+
+parser = argparse.ArgumentParser(description="恢复被本地噪声迁移误删的外键")
+parser.add_argument("--env", default=None, help="ENVIRONMENT，如 dev / prod；需与后端启动参数一致")
+args = parser.parse_args()
+if args.env:
+    os.environ["ENVIRONMENT"] = args.env
 
 from sqlalchemy import inspect, text
 
