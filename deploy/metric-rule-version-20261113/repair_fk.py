@@ -47,6 +47,8 @@ async def main() -> None:
     restored = 0
     skipped = 0
     async with async_engine.begin() as conn:
+        # 元数据锁被长事务占用时最多等 30 秒，避免脚本无限卡住
+        await conn.execute(text("SET SESSION lock_wait_timeout = 30"))
         for table, column, ref_table, ref_column, ondelete in TARGETS:
             fks = await conn.run_sync(lambda c, t=table: inspect(c).get_foreign_keys(t))
             exists = any(
@@ -65,9 +67,9 @@ async def main() -> None:
             )
             await conn.execute(text(sql))
             restored += 1
-            print(f"RESTORED {name}")
+            print(f"RESTORED {name}", flush=True)
     await async_engine.dispose()
-    print(f"FK_REPAIR_OK restored={restored} skipped={skipped}")
+    print(f"FK_REPAIR_OK restored={restored} skipped={skipped}", flush=True)
 
 
 if __name__ == "__main__":
