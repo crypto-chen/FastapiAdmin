@@ -65,3 +65,14 @@ python -m alembic downgrade wecomtoken01
 
 `downgrade` 会删除 `metric_def_version`、`metric_period_version` 和 `metric_run.rule_mode`；
 如果已经产生多口径重算结果，先导出 `metric_value` 再回滚。
+
+## 服务器本地噪声迁移
+
+如果服务器上存在未跟踪的自动迁移（如 `2026_11_13_1107_29bf6c113584.py`），先
+`python -m alembic stamp metricrule01`，再把本地迁移文件移到 `backend/alembic_local_backup/`。
+该迁移先建后删外键，净效果是外键丢失；补回：
+
+```bash
+cd backend
+python ..\deploy\metric-rule-version-20261113\repair_fk.py
+```
