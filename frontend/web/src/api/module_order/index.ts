@@ -33,6 +33,12 @@ export interface OrderPageResult {
     cost_missing_count?: number;
     mo_unlinked_count?: number;
     intake_untaxed_sum?: number;
+    intake_taxed_sum?: number;
+    claim_amount_sum?: number;
+    deposit_claim_amount_sum?: number;
+    receipt_rate?: number | null;
+    receipt_order_count?: number;
+    clue_order_count?: number;
   };
 }
 

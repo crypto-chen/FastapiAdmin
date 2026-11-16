@@ -7,6 +7,10 @@
   CRM 2026-10-13 改版后内贸接单未税由 ``remove_taxes_freight`` 改名为 ``amount``，
   两者都写进候选列表即可同时兼容新旧批次。
 - 计算字段（成本、周期、净出货等）在 ``build.py`` 的 ``compute`` 分支里实现。
+
+2026-11-16 ``orderAnalyze`` 新增回款/线索字段：``claim_amount``（回款金额）、
+``deposit_claim_amount``（回款定金）、``first_receipt_date``（回款日期）、
+``clue_id``（线索ID）；同时派生回款率/定金回款率/回款周期。
 """
 
 from __future__ import annotations
@@ -61,6 +65,7 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str]] = [
     ("is_new_code", "新老客户编码", "string", "维度", False, ""),
     ("product_series", "产品线大类（产品系列）", "string", "维度", False, "ORD-09"),
     ("product_series_id", "产品系列ID", "number", "维度", False, ""),
+    ("clue_id", "线索ID", "number", "维度", False, "ORD-69"),
     ("order_date", "接单日期", "date", "节点", False, "ORD-12"),
     ("push_date", "下推日期", "date", "节点", False, "ORD-17"),
     ("push_no", "下推单号", "string", "节点", False, "ORD-18"),
@@ -71,6 +76,7 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str]] = [
     ("actual_date", "实际交期", "date", "节点", False, "ORD-41"),
     ("on_time", "是否准时", "string", "节点", False, "ORD-42"),
     ("intake_untaxed", "接单未税", "number", "金额", False, "ORD-13"),
+    ("intake_taxed", "接单含税", "number", "金额", False, "ORD-13-a"),
     ("design_fee", "设计费", "number", "金额", False, "ORD-14"),
     ("deposit", "定金", "number", "金额", False, "ORD-16"),
     ("ship_untaxed", "出货未税", "number", "金额", False, "ORD-24"),
@@ -89,8 +95,15 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str]] = [
     ("contribution_margin", "订单边际贡献", "number", "成本", True, "ORD-67"),
     ("contribution_margin_rate", "订单边际贡献率", "number", "成本", True, "ORD-68"),
     ("collect_date", "收款日期", "date", "回款", False, "ORD-15"),
-    ("payment_date", "回款日期", "date", "回款", False, "ORD-28"),
-    ("payment_amount", "回款金额", "number", "回款", True, "ORD-29"),
+    # 2026-11-16：CRM 回款字段升级，ORD-28/ORD-29 改由 first_receipt_date / claim_amount 承载；
+    # payment_date / payment_amount 保留字段编码供旧调用方兼容，但不再分配指标编码（恒为空）。
+    ("first_receipt_date", "回款日期（首次到账）", "date", "回款", False, "ORD-28"),
+    ("claim_amount", "回款金额（实际到账）", "number", "回款", True, "ORD-29"),
+    ("deposit_claim_amount", "回款定金", "number", "回款", True, "ORD-16-a"),
+    ("receipt_rate", "回款率（回款金额÷接单含税）", "number", "回款", True, "ORD-29-b"),
+    ("deposit_receipt_rate", "定金回款率（回款定金÷定金）", "number", "回款", True, "ORD-16-b"),
+    ("payment_date", "回款日期（旧字段）", "date", "回款", False, ""),
+    ("payment_amount", "回款金额（旧字段）", "number", "回款", True, ""),
     ("ar_balance", "应收余额", "number", "回款", True, "ORD-30"),
     ("overdue_days", "逾期天数", "number", "回款", False, "ORD-32"),
     ("inventory_status", "库存状态", "string", "状态", False, "ORD-33"),
@@ -98,6 +111,7 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str]] = [
     ("production_cycle", "生产周期", "number", "周期", False, "ORD-35"),
     ("ship_cycle", "出货周期", "number", "周期", False, "ORD-36"),
     ("full_cycle", "订单全周期", "number", "周期", False, "ORD-37"),
+    ("receipt_cycle", "回款周期（接单→首次回款）", "number", "周期", False, "ORD-31"),
     ("cost_source", "成本来源", "string", "质量", False, ""),
     ("data_quality_flag", "数据质量标记", "string", "质量", False, ""),
 ]
@@ -126,10 +140,15 @@ SOURCE_KEYS: dict[str, list[str]] = {
     "sku": ["product_model"],
     "is_new": ["is_new"],
     "product_series": ["product_series"],
+    "clue_id": ["clue_id"],
     "design_fee": ["design_remove_taxes_freight", "design_cost"],
     "deposit": ["deposit"],
     "collect_date": ["collectiontime"],
     "payment_date": ["final_paymenttime"],
+    # 2026-11-16 orderAnalyze 新增：实际回款金额/回款定金/首次回款时间
+    "claim_amount": ["claim_amount"],
+    "deposit_claim_amount": ["deposit_claim_amount"],
+    "first_receipt_date": ["first_receipt_date"],
     # 下推单号＝生产工单号（金蝶 PRD_MO 单据编号），由 build.py 关联生产订单时写入；
     # CRM 侧没有独立的「下推单号」字段，这里保留候选键仅为兼容将来上游补字段。
     "push_no": ["erp_push_no", "push_no"],

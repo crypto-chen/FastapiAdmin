@@ -199,11 +199,45 @@ class OrderService:
         intake = (
             await self.db.execute(select(func.sum(OrderFullChainModel.intake_untaxed)).where(*base))
         ).scalar()
+        # 回款金额/回款定金在 extra JSON 里，按 Python 汇总（避免不同数据库 JSON 转数值的方言差异）
+        extras = (
+            await self.db.execute(select(OrderFullChainModel.extra).where(*base))
+        ).scalars().all()
+        claim_sum = 0.0
+        deposit_claim_sum = 0.0
+        intake_taxed_sum = 0.0
+        receipt_orders = 0
+        clue_orders = 0
+        for extra in extras:
+            extra = extra or {}
+            intake_taxed = extra.get("intake_taxed")
+            if intake_taxed not in (None, ""):
+                intake_taxed_sum += float(intake_taxed)
+            claim = extra.get("claim_amount")
+            if claim not in (None, ""):
+                claim_value = float(claim)
+                claim_sum += claim_value
+                if claim_value > 0:
+                    receipt_orders += 1
+            deposit_claim = extra.get("deposit_claim_amount")
+            if deposit_claim not in (None, ""):
+                deposit_claim_sum += float(deposit_claim)
+            if extra.get("clue_id") not in (None, ""):
+                clue_orders += 1
+        intake_value = float(intake or 0)
+        # 回款率与订单级口径一致：含税回款 ÷ 含税接单；没有含税金额时退回未税
+        receipt_base = intake_taxed_sum or intake_value
         return {
             "order_count": int(total),
             "cost_missing_count": int(cost_missing),
             "mo_unlinked_count": int(mo_unlinked),
-            "intake_untaxed_sum": float(intake or 0),
+            "intake_untaxed_sum": intake_value,
+            "claim_amount_sum": round(claim_sum, 4),
+            "deposit_claim_amount_sum": round(deposit_claim_sum, 4),
+            "intake_taxed_sum": round(intake_taxed_sum, 4),
+            "receipt_rate": round(claim_sum / receipt_base, 6) if receipt_base else None,
+            "receipt_order_count": receipt_orders,
+            "clue_order_count": clue_orders,
         }
 
     async def detail(self, order_number: str) -> dict[str, Any]:

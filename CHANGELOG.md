@@ -11,6 +11,7 @@
 - **2026-09-03** 存储与工作流模块重构，调整目录结构与初始化逻辑
 
 ### 新增
+- **2026-11-16** CRM `orderAnalyze` 新增回款/线索字段接入订单全链路：`claim_amount`（回款金额，ORD-29）、`deposit_claim_amount`（回款定金，ORD-16-a）、`first_receipt_date`（回款日期，ORD-28）、`clue_id`（线索ID，ORD-69）；新增支持字段 `intake_taxed`（接单含税，ORD-13-a）与派生指标 `receipt_rate`（回款率，ORD-29-b）、`deposit_receipt_rate`（定金回款率，ORD-16-b）、`receipt_cycle`（回款周期，ORD-31）。`payment_amount` / `payment_date` 保留字段编码兼容但不再分配 ORD 编码；订单页汇总新增回款合计/回款率/线索单数。已重拉并重建 2026-09/10/11（2026-11 v25，1635 单：回款金额 2,856,102.50 元、回款定金 614,592.77 元、有回款 682 单、线索单 54 单；2026-10 v57，2852 单：回款金额 4,607,415.75 元、回款定金 805,275.09 元）。校验脚本 `backend/scripts/check_order_receipt_fields.py`
 - **2026-10-31** 新增 `backend/scripts/trace_person_metric_orders.py`：按指标定义（来源对象 / 行过滤 / 归期字段 / 回看期数）追溯某业务员某期间参与计算的订单明细，并与 `metric_value` 对账
 - **2026-10-31** 客户维度匹配由「客户 ID」改为「客户编码」：CRM `orderAnalyze` 新增 `customer_code`（旧批次回退 `customer_number`），客户档案 `getCusotmerList` 新增 `is_retail`（0=定制，1=零售）；定制/零售两套客户表 ID 重复，编码 `number` 唯一。订单全链路、客户分析、STF-47 总客户数量、STF-48 本月下单老客户数量全部改按编码匹配/去重，STF-47 纳入零售客户；重建 2025-07 ~ 2026-10 订单全链路与客户分析并重算 STF-40/41/47/48/49。上线脚本 `deploy/customer-code-20261031/update.py`
 - **2026-10-21** CRM `orderAnalyze` 新增 `type=3`（零售订单范围）接入：订单全链路新增零售单（`order_type=3`，贸易类型按行内 `type` 落内贸/外贸，接单未税取 `remove_taxes_freight`，剔除 `status=522` 作废单）；新增来源对象与同步任务「CRM 订单明细（零售）」，调度与回补覆盖该来源；业务员接单/订单数/新老客户/未出货库存等指标增加零售分支；重建 2024-10 ~ 2026-10 订单全链路、零售有数据期间（2025-07 ~ 2026-10）的客户/产品线宽表，并重算受影响业务员指标及下游。部署脚本见 `deploy/order-analyze-retail-20261021/`

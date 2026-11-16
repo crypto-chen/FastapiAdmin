@@ -610,6 +610,15 @@ def build_record(
     extra["shop_id"] = int(shop_id) if shop_id is not None else None
     extra["shop"] = base_names.get(int(shop_id)) if shop_id is not None else None
 
+    # 2026-11-16 CRM orderAnalyze 新增回款/线索字段：统一转数值/日期，避免把
+    # "2450.00" 这类字符串直接写进 extra（前端与开放接口都要按 number/date 消费）。
+    claim_amount = money(to_number(pick(row, SOURCE_KEYS["claim_amount"])))
+    deposit_claim_amount = money(to_number(pick(row, SOURCE_KEYS["deposit_claim_amount"])))
+    clue_id_raw = to_number(pick(row, SOURCE_KEYS["clue_id"]))
+    extra["claim_amount"] = claim_amount
+    extra["deposit_claim_amount"] = deposit_claim_amount
+    extra["clue_id"] = int(clue_id_raw) if clue_id_raw is not None else None
+
     qty = to_number(pick(row, SOURCE_KEYS["qty"]))
     if is_retail:
         intake_keys = INTAKE_KEYS_RETAIL
@@ -642,6 +651,29 @@ def build_record(
         quality.append("cost_missing")
 
     order_date = to_date(pick(row, ["createtime"]))
+    first_receipt_at = to_datetime(pick(row, SOURCE_KEYS["first_receipt_date"]))
+    first_receipt_date = first_receipt_at.date() if first_receipt_at else None
+    extra["first_receipt_date"] = first_receipt_date
+    # 回款周期 = 接单日期 → 首次回款日期（天）；回款率为小数（0.5236 = 52.36%）
+    extra["receipt_cycle"] = (
+        round((first_receipt_date - order_date).days, 4) if first_receipt_date and order_date else None
+    )
+    deposit_value = to_number(pick(row, SOURCE_KEYS["deposit"]))
+    # claim_amount 是含税实际到账，回款率分母优先取含税应收（receivable），
+    # 外贸/零售没有 receivable 时退回接单未税，避免用未税金额做出 >100% 的假高回款率。
+    taxed_intake = to_number(pick(row, ["receivable", "product_receivable"]))
+    receipt_base = taxed_intake if taxed_intake else intake
+    extra["intake_taxed"] = money(receipt_base) if receipt_base is not None else None
+    extra["receipt_rate"] = (
+        round(claim_amount / receipt_base, RATE_SCALE)
+        if claim_amount is not None and receipt_base
+        else None
+    )
+    extra["deposit_receipt_rate"] = (
+        round(deposit_claim_amount / deposit_value, RATE_SCALE)
+        if deposit_claim_amount is not None and deposit_value
+        else None
+    )
     push_date = to_datetime(pick(row, DATETIME_KEYS["push_date"]))
     finish_date = to_datetime(pick(row, DATETIME_KEYS["finish_date"]))
     ship_date = to_datetime(pick(row, DATETIME_KEYS["ship_date"]))
@@ -814,7 +846,7 @@ def build_record(
     return record, quality
 
 
-SCHEMA_VERSION = "2026-11-03"
+SCHEMA_VERSION = "2026-11-16"
 
 
 async def prune_old_versions(db: AsyncSession, period_value: str, keep: int = 3) -> int:

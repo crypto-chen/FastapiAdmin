@@ -63,6 +63,9 @@
         <span>成本缺失 {{ page.summary.cost_missing_count ?? 0 }}</span>
         <span>未关联生产订单 {{ page.summary.mo_unlinked_count ?? 0 }}</span>
         <span>接单未税合计 {{ formatNumber(page.summary.intake_untaxed_sum) }}</span>
+        <span>回款合计 {{ formatNumber(page.summary.claim_amount_sum) }}</span>
+        <span>回款率 {{ formatPercent(page.summary.receipt_rate) }}</span>
+        <span>线索单 {{ page.summary.clue_order_count ?? 0 }}</span>
         <span class="summary-extra">点行可看该订单的全部字段</span>
       </div>
 
@@ -162,6 +165,11 @@ const page = reactive({
     cost_missing_count: 0,
     mo_unlinked_count: 0,
     intake_untaxed_sum: 0,
+    claim_amount_sum: 0,
+    deposit_claim_amount_sum: 0,
+    receipt_rate: null,
+    receipt_order_count: 0,
+    clue_order_count: 0,
   } as NonNullable<OrderPageResult["summary"]>,
 });
 
@@ -206,6 +214,13 @@ function formatNumber(value: unknown) {
   const num = Number(value);
   if (Number.isNaN(num)) return "-";
   return num.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatPercent(value: unknown) {
+  if (value === undefined || value === null || value === "") return "-";
+  const num = Number(value);
+  if (Number.isNaN(num)) return "-";
+  return `${(num * 100).toFixed(2)}%`;
 }
 
 function formatCell(value: unknown, col: OrderFieldItem) {
@@ -259,6 +274,11 @@ async function loadData() {
       cost_missing_count: 0,
       mo_unlinked_count: 0,
       intake_untaxed_sum: 0,
+      claim_amount_sum: 0,
+      deposit_claim_amount_sum: 0,
+      receipt_rate: null,
+      receipt_order_count: 0,
+      clue_order_count: 0,
     };
   } catch (error) {
     // 这里吞掉异常：loadData 会被模板事件直接调用，抛出会成为「组件事件处理器未处理错误」
