@@ -230,7 +230,9 @@ METRICS = [
         "name": "营销中心业务员设计服务收入",
         "excel_code": "STF-15",
         "rule": "设计服务收入（元）= Σ(内贸 design_remove_taxes_freight + 外贸 design_cost + 零售设计服务收入)，"
-        "只统计有效订单 status=384，按订单创建月 createtime 落到当期，按业务员（下单人 create_id）分组；"
+        "只统计有效订单 status=384，按收款日期 collectiontime 所在月落到当期，"
+        "收款日期为空时按建单月 createtime 落期；订单明细按建单月回看 12 期、前看 1 期，"
+        "覆盖收款月与建单月错位的订单；按业务员（下单人 create_id）分组；"
         "当月无设计服务收入的业务员不输出行（按 0 处理）。",
         "measures": {
             "kind": "crm_person_amount",
@@ -238,6 +240,11 @@ METRICS = [
             "person_field": "create_id",
             "unit": "元",
             **VALID_ORDER,
+            "period_field": "collectiontime",
+            "period_field_fallback": "createtime",
+            "lookback_periods": 12,
+            "forward_periods": 1,
+            "backfill_lookback": True,
             "components": [
                 {
                     "label": "内贸",
@@ -379,8 +386,9 @@ METRICS = [
         "name": "营销中心业务员打样接单业绩（未税）",
         "excel_code": "STF-38",
         "rule": "打样接单业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，"
-        "取订单类型 order_type=2（打样）、有效订单 status=384，按订单创建月 createtime 落到当期，"
-        "按业务员（下单人 create_id）分组。",
+        "取订单类型 order_type=2（打样）、有效订单 status=384，按收款日期 collectiontime 所在月落到当期，"
+        "收款日期为空时按建单月 createtime 落期；订单明细按建单月回看 12 期、前看 1 期，"
+        "覆盖收款月与建单月错位的订单；按业务员（下单人 create_id）分组。",
         "measures": {
             "kind": "crm_person_amount",
             "group_by": "person",
@@ -388,6 +396,11 @@ METRICS = [
             "unit": "元",
             **VALID_ORDER,
             **SAMPLE_ORDER,
+            "period_field": "collectiontime",
+            "period_field_fallback": "createtime",
+            "lookback_periods": 12,
+            "forward_periods": 1,
+            "backfill_lookback": True,
             "components": intake_components(SAMPLE_ORDER),
         },
     },
@@ -396,8 +409,9 @@ METRICS = [
         "name": "营销中心业务员批量接单业绩（未税）",
         "excel_code": "STF-39",
         "rule": "批量接单业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，"
-        "取订单类型 order_type=1（批量）、有效订单 status=384，按订单创建月 createtime 落到当期，"
-        "按业务员（下单人 create_id）分组。",
+        "取订单类型 order_type=1（批量）、有效订单 status=384，按收款日期 collectiontime 所在月落到当期，"
+        "收款日期为空时按建单月 createtime 落期；订单明细按建单月回看 12 期、前看 1 期，"
+        "覆盖收款月与建单月错位的订单；按业务员（下单人 create_id）分组。",
         "measures": {
             "kind": "crm_person_amount",
             "group_by": "person",
@@ -405,6 +419,11 @@ METRICS = [
             "unit": "元",
             **VALID_ORDER,
             **BATCH_ORDER,
+            "period_field": "collectiontime",
+            "period_field_fallback": "createtime",
+            "lookback_periods": 12,
+            "forward_periods": 1,
+            "backfill_lookback": True,
             "components": intake_components(BATCH_ORDER),
         },
     },
@@ -413,8 +432,9 @@ METRICS = [
         "name": "营销中心业务员新客户业绩（未税）",
         "excel_code": "STF-40",
         "rule": "新客户业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，"
-        "取客户标识 is_new=1（新客户）、有效订单 status=384，按订单创建月 createtime 落到当期，"
-        "按业务员（下单人 create_id）分组。",
+        "取客户标识 is_new=1（新客户）、有效订单 status=384，按收款日期 collectiontime 所在月落到当期，"
+        "收款日期为空时按建单月 createtime 落期；订单明细按建单月回看 12 期、前看 1 期，"
+        "覆盖收款月与建单月错位的订单；按业务员（下单人 create_id）分组。",
         "measures": {
             "kind": "crm_person_amount",
             "group_by": "person",
@@ -422,6 +442,11 @@ METRICS = [
             "unit": "元",
             **VALID_ORDER,
             **NEW_CUSTOMER,
+            "period_field": "collectiontime",
+            "period_field_fallback": "createtime",
+            "lookback_periods": 12,
+            "forward_periods": 1,
+            "backfill_lookback": True,
             "components": intake_components(NEW_CUSTOMER),
         },
     },
@@ -430,8 +455,9 @@ METRICS = [
         "name": "营销中心业务员老客户业绩（未税）",
         "excel_code": "STF-41",
         "rule": "老客户业绩（未税，元）= Σ(内贸 remove_taxes_freight + 外贸 receivable_CNY)，"
-        "取客户标识 is_new=2（老客户）、有效订单 status=384，按订单创建月 createtime 落到当期，"
-        "按业务员（下单人 create_id）分组。",
+        "取客户标识 is_new=2（老客户）、有效订单 status=384，按收款日期 collectiontime 所在月落到当期，"
+        "收款日期为空时按建单月 createtime 落期；订单明细按建单月回看 12 期、前看 1 期，"
+        "覆盖收款月与建单月错位的订单；按业务员（下单人 create_id）分组。",
         "measures": {
             "kind": "crm_person_amount",
             "group_by": "person",
@@ -439,6 +465,11 @@ METRICS = [
             "unit": "元",
             **VALID_ORDER,
             **OLD_CUSTOMER,
+            "period_field": "collectiontime",
+            "period_field_fallback": "createtime",
+            "lookback_periods": 12,
+            "forward_periods": 1,
+            "backfill_lookback": True,
             "components": intake_components(OLD_CUSTOMER),
         },
     },
@@ -447,7 +478,8 @@ METRICS = [
         "name": "营销中心业务员本月下单老客户数量",
         "excel_code": "STF-48",
         "rule": "本月下单老客户数量（家）= 当期订单中 **is_new=2（老客户）** 的客户去重数，"
-        "按订单创建月 createtime 落当期，只统计有效订单 status=384，按业务员（下单人 create_id）分组；"
+        "按收款日期 collectiontime 所在月落当期，收款日期为空时按建单月 createtime 落期；"
+        "只统计有效订单 status=384，订单明细按建单月回看 12 期、前看 1 期，按业务员（下单人 create_id）分组；"
         "同一客户当月多单只算一次、跨内贸外贸也只算一次；客户按 **customer_code（客户编码）** 去重，"
         "旧批次没有编码时回退 customer_number / customer(ID)；公司合计取全部业务员的客户并集。",
         "measures": {
@@ -459,6 +491,11 @@ METRICS = [
             "unit": "家",
             **VALID_ORDER,
             **OLD_CUSTOMER,
+            "period_field": "collectiontime",
+            "period_field_fallback": "createtime",
+            "lookback_periods": 12,
+            "forward_periods": 1,
+            "backfill_lookback": True,
             "components": intake_components(OLD_CUSTOMER),
         },
     },
@@ -567,7 +604,9 @@ METRICS = [
         "name": "营销中心业务员接单量",
         "excel_code": None,
         "rule": "接单量（单）= 当期有效订单条数（status=384，剔除作废），"
-        "内贸 + 外贸 + 零售订单明细按订单创建月 createtime 落当期，按业务员（下单人 create_id）分组；"
+        "内贸 + 外贸 + 零售订单明细按收款日期 collectiontime 所在月落当期，"
+        "收款日期为空时按建单月 createtime 落期，订单明细按建单月回看 12 期、前看 1 期；"
+        "按业务员（下单人 create_id）分组；"
         "不按订单类型/是否出货过滤，也不看金额。",
         "measures": {
             "kind": "crm_person_amount",
@@ -576,6 +615,11 @@ METRICS = [
             "value_mode": "count_orders",
             "unit": "单",
             **VALID_ORDER,
+            "period_field": "collectiontime",
+            "period_field_fallback": "createtime",
+            "lookback_periods": 12,
+            "forward_periods": 1,
+            "backfill_lookback": True,
             "components": intake_components(),
         },
     },

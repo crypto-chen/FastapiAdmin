@@ -90,6 +90,7 @@ async def main() -> None:
         lookback = max(int(config.get("lookback_periods") or 1), 1)
         forward = max(int(config.get("forward_periods") or 0), 0)
         period_field = str(config.get("period_field") or "")
+        period_field_fallback = str(config.get("period_field_fallback") or "")
         person_field = str(config.get("person_field") or "create_id")
 
         raw_person, person_name = await resolve_person(db, args.person)
@@ -145,6 +146,10 @@ async def main() -> None:
                             continue
                         if period_field:
                             moment = _parse_datetime_value(_cell(row, fields, period_field))
+                            if moment is None and period_field_fallback:
+                                moment = _parse_datetime_value(
+                                    _cell(row, fields, period_field_fallback)
+                                )
                             if not _datetime_in_period(moment, period_type, period):
                                 continue
                         person = _text(_cell(row, fields, person_field))

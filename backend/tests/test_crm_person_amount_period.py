@@ -2,7 +2,6 @@
 
 from app.modules.metric.engine import extract_person_amount
 
-
 ROWS = [
     {
         "number": "A",
@@ -70,3 +69,59 @@ def test_collection_period_can_land_in_previous_month():
 
     assert result["total"] == 200.0
     assert result["persons"] == {"p1": {"value": 200.0, "rows": 1}}
+
+
+# 收款日期为空时，按建单月 createtime 兜底；createtime 用 Unix 秒，和 CRM orderAnalyze 一致。
+FALLBACK_ROWS = [
+    {
+        "number": "E",
+        "create_id": "p1",
+        "status": "384",
+        "remove_taxes_freight": "150",
+        "collectiontime": "",
+        "createtime": 1791331200,  # 2026-10-07
+    },
+    {
+        "number": "F",
+        "create_id": "p1",
+        "status": "384",
+        "remove_taxes_freight": "250",
+        "collectiontime": "2026-09-30",
+        "createtime": 1791331200,  # 收款日期已落在 9 月，不能再用建单月兜底
+    },
+    {
+        "number": "G",
+        "create_id": "p2",
+        "status": "384",
+        "remove_taxes_freight": "350",
+        "collectiontime": None,
+        "createtime": 1789430400,  # 2026-09-15
+    },
+]
+
+
+def test_missing_collectiontime_falls_back_to_createtime():
+    result = extract_person_amount(
+        FALLBACK_ROWS,
+        [],
+        {
+            **CONFIG,
+            "period_field": "collectiontime",
+            "period_field_fallback": "createtime",
+        },
+        "month",
+        "2026-10",
+    )
+
+    assert result["total"] == 150.0
+    assert result["matched_rows"] == 1
+    assert result["persons"] == {"p1": {"value": 150.0, "rows": 1}}
+
+
+def test_fallback_is_opt_in():
+    result = extract_person_amount(
+        FALLBACK_ROWS, [], {**CONFIG, "period_field": "collectiontime"}, "month", "2026-10"
+    )
+
+    assert result["total"] == 0.0
+    assert result["matched_rows"] == 0

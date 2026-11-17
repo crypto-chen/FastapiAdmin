@@ -756,12 +756,15 @@ def extract_person_amount(
       用于订单类型（``order_type=1/2``）或新老客户（``is_new=1/2``）等口径拆分。
     - ``period_field``：可选，按该日期字段归属期间（如 ``collectiontime`` 收款日期）；
       设置后只统计落在 ``period`` 的行，调用方需按 ``lookback_periods`` 加载回看批次。
+    - ``period_field_fallback``：可选，``period_field`` 为空时回退的日期字段（如 ``createtime``）；
+      只在主日期字段没有值时生效，主字段有值但不在当期时不会回退。
     - ``omit_zero_persons``：为真（默认）时丢弃合计为 0 的业务员，只保留有业绩的人。
 
     返回 ``{"persons": {业务员ID: {"value": 金额, "rows": 行数}}, "total": 合计, "matched_rows": 命中行数}``。
     """
     person_field = str(config.get("person_field") or "create_id")
     period_field = str(config.get("period_field") or "")
+    period_field_fallback = str(config.get("period_field_fallback") or "")
     terms = _amount_terms(config)
     value_mode = str(config.get("value_mode") or "amount")
     customer_field = str(config.get("customer_field") or "customer")
@@ -780,6 +783,8 @@ def extract_person_amount(
             continue
         if period_field:
             moment = _parse_datetime_value(_cell(row, fields, period_field))
+            if moment is None and period_field_fallback:
+                moment = _parse_datetime_value(_cell(row, fields, period_field_fallback))
             if not _datetime_in_period(moment, period_type or "month", period or ""):
                 continue
         person = _text(_cell(row, fields, person_field))
