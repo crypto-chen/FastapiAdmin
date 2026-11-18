@@ -127,6 +127,12 @@ async def main() -> None:
     parser.add_argument("--period", action="append", default=None, help="期间值，可重复；缺省为全部已有期间")
     parser.add_argument("--period-from", default=None, help="起始期间（含），如 2026-01")
     parser.add_argument("--period-to", default=None, help="结束期间（含），如 2026-10")
+    parser.add_argument(
+        "--rule-mode",
+        choices=["historical", "current"],
+        default="historical",
+        help="口径模式：historical=该期间钉住的历史口径（默认）；current=当前已发布口径",
+    )
     parser.add_argument("--log", default=None, help="同时写入日志文件")
     args = parser.parse_args()
 
@@ -172,7 +178,9 @@ async def main() -> None:
                     refreshed = await refresh_period_batches(metric_id, period)
                     if refreshed:
                         emit(f"{period} {code} 重新取数完成，组织={refreshed}")
-                summary = await execute_metric_calc(metric_id=metric_id, period_value=period)
+                summary = await execute_metric_calc(
+                    metric_id=metric_id, period_value=period, rule_mode=args.rule_mode
+                )
                 emit(f"{period} {code} -> {summary['total']} ({time.time() - started:.1f}s)")
             except Exception as e:  # noqa: BLE001
                 failed += 1
