@@ -23,6 +23,24 @@ def _text_or_none(value: Any) -> str | None:
     return text or None
 
 
+def _int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _like(value: str) -> str:
     return f"%{value.strip()}%"
 
@@ -127,15 +145,25 @@ def _to_item(row: OrderFullChainModel, person_names: dict[str, str]) -> dict[str
     extra = row.extra or {}
     engineer_code = _text_or_none(extra.get("engineer_code"))
     engineer_name = person_names.get(engineer_code) if engineer_code else None
+    principal_id = _int_or_none(extra.get("principal_id"))
+    # 负责人姓名优先用人员表最新姓名，人员已删除时回退构建时的姓名快照
+    principal_name = (
+        person_names.get(str(principal_id)) if principal_id is not None else None
+    ) or _text_or_none(extra.get("principal_name"))
     return {
         "crm_order_no": row.order_number,
         "customer_name": _text_or_none(extra.get("customer_name")),
         "engineer_code": engineer_code,
         "engineer_name": engineer_name or _text_or_none(extra.get("engineer_name")),
+        "principal_id": principal_id,
+        "principal_name": principal_name,
         "product_series": _text_or_none(extra.get("product_series")),
         "product_model": _text_or_none(extra.get("sku")),
         "product_size": _text_or_none(extra.get("size")),
         "quantity": float(row.qty) if row.qty is not None else None,
+        "price": _float_or_none(extra.get("price")),
+        "important": _int_or_none(extra.get("important")),
+        "is_full_inspection": _int_or_none(extra.get("is_full_inspection")),
         "trade_type": row.trade_type,
         "order_date": row.order_date,
     }

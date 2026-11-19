@@ -88,6 +88,12 @@ async def _prepare() -> None:
                 SourcePersonModel.source_code == "lishenghua",
             )
         )
+        await db.execute(
+            delete(SourcePersonModel).where(
+                SourcePersonModel.source_type == "crm",
+                SourcePersonModel.source_code == "wangmin",
+            )
+        )
         await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == APP_ID))
         await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == f"{APP_ID}_limit"))
         await db.execute(delete(OpenClientModel).where(OpenClientModel.app_id == f"{APP_ID}_log"))
@@ -167,6 +173,11 @@ async def _prepare() -> None:
                         "customer_name": "测试客户A",
                         "engineer_code": "100039",
                         "engineer_name": "旧快照",
+                        "principal_id": 100094,
+                        "principal_name": "旧负责人快照",
+                        "price": 123.45,
+                        "important": 1,
+                        "is_full_inspection": 2,
                         "product_series": "壳体",
                         "sku": "J01B",
                         "size": "100-200-300",
@@ -183,6 +194,9 @@ async def _prepare() -> None:
                     extra={
                         "customer_name": "Test Customer B",
                         "engineer_name": "刘志学",
+                        "price": 67.89,
+                        "important": 2,
+                        "is_full_inspection": 1,
                         "product_series": "机箱",
                         "sku": "H27A",
                         "size": "76-35-100",
@@ -216,6 +230,13 @@ async def _prepare() -> None:
                     source_code="lishenghua",
                     source_name="黎胜华（新）",
                     raw_json={"id": 100039, "number": "YG20039"},
+                    status=0,
+                ),
+                SourcePersonModel(
+                    source_type="crm",
+                    source_code="wangmin",
+                    source_name="王敏（销售）",
+                    raw_json={"id": 100094, "number": "YG20094"},
                     status=0,
                 ),
             ]
@@ -436,7 +457,7 @@ def test_mes_order_query(openapi_client):
     assert resp.status_code == 200, resp.text
     data = resp.json()["data"]
     assert data["total"] == 2, data
-    assert data["schema_version"] == "2026-11-03"
+    assert data["schema_version"] == "2026-11-19"
     by_order = {item["crm_order_no"]: item for item in data["items"]}
     assert set(by_order) == {"DY202611-00001", "WM202611-00002"}
 
@@ -446,14 +467,24 @@ def test_mes_order_query(openapi_client):
         "customer_name": "测试客户A",
         "engineer_code": "100039",
         "engineer_name": "黎胜华（新）",
+        "principal_id": 100094,
+        "principal_name": "王敏（销售）",
         "product_series": "壳体",
         "product_model": "J01B",
         "product_size": "100-200-300",
         "quantity": 2.0,
+        "price": 123.45,
+        "important": 1,
+        "is_full_inspection": 2,
         "trade_type": "domestic",
         "order_date": None,
     }
-    assert by_order["WM202611-00002"]["trade_type"] == "export"
+    export = by_order["WM202611-00002"]
+    assert export["trade_type"] == "export"
+    assert export["principal_id"] is None and export["principal_name"] is None
+    assert export["price"] == 67.89
+    assert export["important"] == 2
+    assert export["is_full_inspection"] == 1
 
     # 每个查询条件独立生效
     cases = {

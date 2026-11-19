@@ -55,6 +55,8 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str]] = [
     ("customer_principal_name", "客户所属业务员", "string", "基础", False, ""),
     ("salesman_code", "业务员编码", "string", "基础", False, ""),
     ("salesman_name", "业务员", "string", "基础", False, "ORD-05"),
+    ("principal_id", "负责人ID", "number", "基础", False, ""),
+    ("principal_name", "负责人（业务员）", "string", "基础", False, ""),
     ("engineer_code", "负责工程编码", "string", "基础", False, ""),
     ("engineer_name", "负责工程", "string", "基础", False, ""),
     ("platform", "平台（名称）", "string", "维度", False, "ORD-06"),
@@ -63,6 +65,8 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str]] = [
     ("shop_id", "店铺ID", "number", "维度", False, ""),
     ("is_new", "新老客户（新客户/老客户）", "string", "维度", False, "ORD-08"),
     ("is_new_code", "新老客户编码", "string", "维度", False, ""),
+    ("important", "是否重要（1=重要，2=常规）", "number", "维度", False, ""),
+    ("is_full_inspection", "是否全检（1=是，2=否）", "number", "维度", False, ""),
     ("product_series", "产品线大类（产品系列）", "string", "维度", False, "ORD-09"),
     ("product_series_id", "产品系列ID", "number", "维度", False, ""),
     ("clue_id", "线索ID", "number", "维度", False, "ORD-69"),
@@ -77,6 +81,7 @@ FIELD_DEFS: list[tuple[str, str, str, str, bool, str]] = [
     ("on_time", "是否准时", "string", "节点", False, "ORD-42"),
     ("intake_untaxed", "接单未税", "number", "金额", False, "ORD-13"),
     ("intake_taxed", "接单含税", "number", "金额", False, "ORD-13-a"),
+    ("price", "单价", "number", "金额", False, ""),
     ("design_fee", "设计费", "number", "金额", False, "ORD-14"),
     ("deposit", "定金", "number", "金额", False, "ORD-16"),
     ("ship_untaxed", "出货未税", "number", "金额", False, "ORD-24"),
@@ -130,8 +135,15 @@ SOURCE_KEYS: dict[str, list[str]] = {
     # 注意：``wangwang`` 是旺旺号/客户备注，不是客户名称，不能当客户名用。
     "customer_name": ["customer_name", "customer_name_retail"],
     "salesman_code": ["create_id"],
+    # 负责人：CRM orderAnalyze.principal_id（CRM 用户ID），build.py 再映射为业务员姓名
+    "principal_id": ["principal_id"],
     # 负责工程：CRM 订单上的 principal_engineering（CRM 用户ID），build.py 再映射为姓名
     "engineer_code": ["principal_engineering"],
+    # 单价：CRM orderAnalyze.price（字符串数值），落 extra 时统一转 number
+    "price": ["price"],
+    # 是否重要：1=重要，2=常规；是否全检：1=是，2=否
+    "important": ["important"],
+    "is_full_inspection": ["is_full_inspection"],
     "order_type": ["order_type"],
     "platform": ["source_platform"],
     # 店铺取 orderAnalyze 的 source 字段（业务口径确认）；store_name 是外贸侧的另一套编码

@@ -62,6 +62,6 @@ async def page_mes_orders(
         trade_type=trade_type,
     )
     result = await MesOrderService(db).page(search, page_no, page_size)
-    result["schema_version"] = "2026-11-03"
+    result["schema_version"] = "2026-11-19"
     result["items"] = [MesOrderItemSchema(**item).model_dump(mode="json") for item in result["items"]]
     return SuccessResponse(data=result, msg="查询 MES 订单成功")

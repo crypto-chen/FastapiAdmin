@@ -1,7 +1,7 @@
 # MES 订单信息开放接口对接说明
 
-> 版本：v1.0  
-> 日期：2026-11-03  
+> 版本：v1.1  
+> 日期：2026-11-19  
 > 接口用途：MES 只读拉取 CRM 内外贸订单信息  
 > 服务地址：`http://120.237.174.243:6479`  
 > 接口前缀：`/open/v1`
@@ -26,10 +26,15 @@ MES ──GET /open/v1/mes/orders──> 核算指标系统 ──读取──> 
 | 客户名称 | `customer_name` | CRM 客户主档名称 |
 | 负责工程ID | `engineer_code` | CRM `orderAnalyze.principal_engineering` 原值（人员ID） |
 | 负责工程 | `engineer_name` | CRM `principal_engineering` 对应人员姓名 |
+| 负责人ID | `principal_id` | CRM `orderAnalyze.principal_id` 原值（人员ID） |
+| 负责人 | `principal_name` | CRM `principal_id` 对应的业务员姓名 |
 | 产品系列 | `product_series` | CRM 产品系列字典名称 |
 | 产品型号 | `product_model` | CRM 产品型号字典名称（如 `H27A`） |
 | 产品尺寸 | `product_size` | CRM 订单行 `size` |
 | 数量 | `quantity` | CRM 订单行 `qty` |
+| 单价 | `price` | CRM 订单行 `price` |
+| 是否重要 | `important` | 1=重要，2=常规 |
+| 是否全检 | `is_full_inspection` | 1=是，2=否 |
 | 贸易类型 | `trade_type` | `domestic` 内贸 / `export` 外贸（附加字段） |
 | 接单日期 | `order_date` | CRM 接单日期（附加字段） |
 
@@ -45,7 +50,7 @@ MES ──GET /open/v1/mes/orders──> 核算指标系统 ──读取──> 
 
 - CRM 订单明细与订单宽表每天重建 **4 次**：`00:00 / 07:00 / 12:00 / 18:00`（Asia/Shanghai）；
 - 每个轮次先同步 CRM 订单，再同步 CRM 人员到 `source_person`，然后重建最近 3 个期间；
-- 「负责工程」的 CRM 人员ID → 姓名映射随人员同步刷新，人员改名/离职同样每轮更新；
+- 「负责工程」「负责人」的 CRM 人员ID → 姓名映射随人员同步刷新，人员改名/离职同样每轮更新；
 - 新订单/变更通常在 **下一个轮次完成后** 可查，最长等待约 6 小时；
 - 历史订单只有在 CRM 回补或重算后才会变化。
 
@@ -183,17 +188,22 @@ GET /open/v1/mes/orders?customer_name=SubDude&product_model=K22C
     "page_no": 1,
     "page_size": 200,
     "has_more": true,
-    "schema_version": "2026-11-03",
+    "schema_version": "2026-11-19",
     "items": [
       {
         "crm_order_no": "PL202610-02941",
         "customer_name": "埃尔利德（广东）智能科技有限公司",
         "engineer_code": "100039",
         "engineer_name": "胡嘉怡",
+        "principal_id": 100094,
+        "principal_name": "王敏",
         "product_series": "H系列",
         "product_model": "H30A",
         "product_size": "147-41-100",
         "quantity": 100.0,
+        "price": 34.0,
+        "important": 2,
+        "is_full_inspection": 2,
         "trade_type": "domestic",
         "order_date": "2026-10-31"
       }
@@ -219,10 +229,15 @@ GET /open/v1/mes/orders?customer_name=SubDude&product_model=K22C
 | `items[].customer_name` | string | 是 | 客户名称 |
 | `items[].engineer_code` | string | 是 | 负责工程人员ID（CRM `principal_engineering`） |
 | `items[].engineer_name` | string | 是 | 负责工程姓名 |
+| `items[].principal_id` | int | 是 | 负责人ID（CRM `principal_id`） |
+| `items[].principal_name` | string | 是 | 负责人（业务员）姓名 |
 | `items[].product_series` | string | 是 | 产品系列 |
 | `items[].product_model` | string | 是 | 产品型号 |
 | `items[].product_size` | string | 是 | 产品尺寸 |
 | `items[].quantity` | number | 是 | 数量 |
+| `items[].price` | number | 是 | 单价 |
+| `items[].important` | int | 是 | 是否重要：1=重要，2=常规 |
+| `items[].is_full_inspection` | int | 是 | 是否全检：1=是，2=否 |
 | `items[].trade_type` | string | 是 | `domestic` / `export` |
 | `items[].order_date` | date | 是 | 接单日期 `YYYY-MM-DD` |
 
@@ -242,10 +257,15 @@ GET /open/v1/mes/orders?customer_name=SubDude&product_model=K22C
 | `crm_order_no` | `orderAnalyze.number` | 原样返回 |
 | `customer_name` | `orderAnalyze.customer` → `getCusotmerList.name` | 客户主档优先，订单自带名称兜底 |
 | `engineer_name` | `orderAnalyze.principal_engineering` → `source_person.raw_json.id` → `source_name` | 订单只存人员ID；查询时实时映射最新 CRM 人员姓名，人员同步每 4 小时一次 |
+| `principal_id` | `orderAnalyze.principal_id` | 原样返回（整数人员ID） |
+| `principal_name` | `orderAnalyze.principal_id` → `source_person.raw_json.id` → `source_name` | 查询时实时映射最新 CRM 人员姓名；人员表无记录时回退构建时的姓名快照 |
 | `product_series` | `orderAnalyze.product_series` → 产品系列字典 | 返回字典名称，不返回编码 |
 | `product_model` | `orderAnalyze.product_model` → 产品型号字典 | 返回型号名称（如 `H27A`） |
 | `product_size` | `orderAnalyze.size` | 原样返回 |
 | `quantity` | `orderAnalyze.qty` | 数值型 |
+| `price` | `orderAnalyze.price` | 数值型，保留 4 位小数 |
+| `important` | `orderAnalyze.important` | 整数：1=重要，2=常规 |
+| `is_full_inspection` | `orderAnalyze.is_full_inspection` | 整数：1=是，2=否 |
 | `trade_type` | `orderAnalyze` 来源类型 | `domestic` / `export` |
 | `order_date` | `orderAnalyze.createtime` | 接单日期 |
 
@@ -253,6 +273,8 @@ GET /open/v1/mes/orders?customer_name=SubDude&product_model=K22C
 
 - CRM 本身没有维护时，字段返回 `null`；
 - 负责工程为空时，先确认该订单 CRM 是否填写 `principal_engineering`，再确认 CRM 人员已同步（`source_person` 是否有对应 ID）；
+- 负责人为空时，先确认该订单 CRM 是否填写 `principal_id`，再确认 CRM 人员已同步；
+- `important` / `is_full_inspection` 为空时，确认该期间订单批次是否为完整字段批次；
 - 产品型号为空时，确认 CRM 型号字典是否匹配；
 - 接口不会用业务员、客户负责人等字段替代负责工程。
 
@@ -389,7 +411,24 @@ python scripts/backfill_order_engineer.py --apply
 
 > 新构建的订单会自动写入负责工程，无需每天执行回填。
 
-### 7.4 创建 MES 接入应用
+### 7.4 回填负责人 / 单价 / 重要 / 全检
+
+首次上线执行一次；预演确认数量后再写库：
+
+```bash
+python scripts/backfill_order_mes_fields.py
+python scripts/backfill_order_mes_fields.py --apply
+```
+
+预期输出示例：
+
+```
+完成：写入 57123 行，负责人姓名缺失 0 行
+```
+
+> 新构建的订单会自动写入上述字段；只回填指定期间时追加 `--period 2026-10`。
+
+### 7.5 创建 MES 接入应用
 
 ```bash
 python scripts/seed_mes_open_client.py \
@@ -401,7 +440,7 @@ python scripts/seed_mes_open_client.py \
 
 保存输出的 `app_secret`，只显示一次。
 
-### 7.5 验证
+### 7.6 验证
 
 ```bash
 curl "http://120.237.174.243:6479/open/v1/mes/orders?page_no=1&page_size=1" \
@@ -413,7 +452,9 @@ curl "http://120.237.174.243:6479/open/v1/mes/orders?page_no=1&page_size=1" \
 - HTTP 200；
 - `code=0`；
 - `data.items` 有数据；
-- `engineer_name` 不为空（抽查有负责工程的订单）。
+- `engineer_name` 不为空（抽查有负责工程的订单）；
+- `principal_id` / `principal_name` 不为空（抽查有负责人的订单）；
+- `price`、`important`、`is_full_inspection` 有值。
 
 ---
 
@@ -423,7 +464,7 @@ curl "http://120.237.174.243:6479/open/v1/mes/orders?page_no=1&page_size=1" \
 2. 生产环境建议通过 HTTPS/专线访问，避免明文传输密钥；
 3. `app_secret` 放配置中心，定期轮换；
 4. MES 侧只读，不要复用管理端账号；
-5. 接口不返回金额、成本、毛利等敏感字段；
+5. 接口只返回单价，不返回订单金额、成本、毛利等敏感字段；
 6. 调用日志可在核算系统管理端「开放接口-调用日志」查看；
 7. 如出口 IP 变化，先更新白名单再切换流量。
 
@@ -435,7 +476,7 @@ curl "http://120.237.174.243:6479/open/v1/mes/orders?page_no=1&page_size=1" \
 
 1. 回滚代码到上一版本并重启；
 2. MES 停止调用；
-3. `extra.engineer_code` / `extra.engineer_name` 是新增 JSON 字段，保留不影响旧功能；
+3. `extra.engineer_code` / `extra.engineer_name`、`extra.principal_id` / `extra.principal_name`、`extra.price`、`extra.important`、`extra.is_full_inspection` 是新增 JSON 字段，保留不影响旧功能；
 4. 如需完全清理回填字段，可按期间重新构建订单宽表覆盖最新版本；
 5. 回滚不涉及删表、删数据。
 

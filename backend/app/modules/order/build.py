@@ -105,6 +105,12 @@ def to_number(value: Any) -> float | None:
         return None
 
 
+def to_int(value: Any) -> int | None:
+    """CRM 的 1/2 编码、人员ID 等字段统一转 int，空值返回 None。"""
+    number = to_number(value)
+    return int(number) if number is not None else None
+
+
 def to_id_list(value: Any) -> list[int]:
     """CRM 多型号/多系列编码（``486,486``、``12,13``）→ 去重后的整数列表。"""
     if _is_empty(value):
@@ -818,6 +824,17 @@ def build_record(
     extra["engineer_name"] = (
         (person_index.get(str(engineer_raw)) or {}).get("person_name") if engineer_raw is not None else None
     )
+    # 负责人：CRM orderAnalyze.principal_id 是 CRM 用户ID，落表时同时保存ID与当时姓名快照。
+    # MES 查询时会用 source_person 的最新姓名覆盖快照，人员改名/离职无需等订单重算。
+    principal_raw = pick(row, SOURCE_KEYS["principal_id"])
+    extra["principal_id"] = to_int(principal_raw)
+    extra["principal_name"] = (
+        (person_index.get(str(principal_raw)) or {}).get("person_name") if principal_raw is not None else None
+    )
+    # 单价 / 是否重要（1=重要，2=常规）/ 是否全检（1=是，2=否）
+    extra["price"] = money(to_number(pick(row, SOURCE_KEYS["price"])))
+    extra["important"] = to_int(pick(row, SOURCE_KEYS["important"]))
+    extra["is_full_inspection"] = to_int(pick(row, SOURCE_KEYS["is_full_inspection"]))
     extra["data_quality_flag"] = quality_flag
     extra["schema_version"] = SCHEMA_VERSION
     extra = jsonable(extra)
@@ -846,7 +863,7 @@ def build_record(
     return record, quality
 
 
-SCHEMA_VERSION = "2026-11-16"
+SCHEMA_VERSION = "2026-11-19"
 
 
 async def prune_old_versions(db: AsyncSession, period_value: str, keep: int = 3) -> int:
